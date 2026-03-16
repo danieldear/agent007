@@ -15,8 +15,8 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 lancedb = "0.19"
-arrow-array = "52"
-arrow-schema = "52"
+arrow-array = "54"
+arrow-schema = "54"
 
 [dev-dependencies]
 tempfile = { workspace = true }

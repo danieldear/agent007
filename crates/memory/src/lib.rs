@@ -6,4 +6,4 @@ pub mod retriever;
 
 pub use error::MemoryError;
 pub use store::{MemoryStore, ScopedMemoryStore};
-// VectorDB, SearchResult, Indexer, Retriever re-exported in later tasks
+pub use vectordb::{VectorDB, SearchResult};
