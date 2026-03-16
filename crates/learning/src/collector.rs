@@ -8,6 +8,7 @@ pub struct FeedbackCollector {
     dispatcher: Arc<dyn Dispatcher>,
     store: crate::store::LearningStore,
     scorer: crate::scorer::RewardScorer,
+    learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
 }
 
 impl FeedbackCollector {
@@ -15,8 +16,9 @@ impl FeedbackCollector {
         dispatcher: Arc<dyn Dispatcher>,
         store: crate::store::LearningStore,
         scorer: crate::scorer::RewardScorer,
+        learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
     ) -> Self {
-        Self { dispatcher, store, scorer }
+        Self { dispatcher, store, scorer, learning_dispatcher }
     }
 
     /// Subscribe to the core Dispatcher and process AgentEvents in a loop.
@@ -57,20 +59,22 @@ impl FeedbackCollector {
                     tracing::debug!(?entry, "recording feedback for TaskCompleted");
                     if let Err(e) = self.store.record_feedback(&entry) {
                         tracing::warn!(error = %e, "failed to record feedback entry");
+                    } else {
+                        let _ = self.learning_dispatcher.publish(crate::types::LearningEvent::FeedbackRecorded {
+                            agent_id: entry.agent_id.clone(),
+                            reward: entry.reward.unwrap_or(0.0),
+                        });
                     }
                 }
-                AgentEvent::ToolCall { agent_id, tool } => {
-                    // Determine if the tool call resulted in an error by checking args for an "error" key.
-                    let is_error = tool.args.get("error").is_some();
-                    let outcome = if is_error {
-                        crate::types::Outcome::ToolError { tool: tool.name.clone() }
-                    } else {
-                        crate::types::Outcome::Success
-                    };
+                AgentEvent::ToolCall { agent_id, tool: _ } => {
+                    // TODO: AgentEvent::ToolCall carries no result field. Record as Success until a
+                    // ToolCallResult variant is added to the event schema. At that point, check the
+                    // result and emit Outcome::ToolError when the tool reports failure.
+                    let outcome = crate::types::Outcome::Success;
                     let scoring_ctx = crate::scorer::ScoringContext {
                         outcome: outcome.clone(),
                         user_rating: None,
-                        tool_error_count: if is_error { Some(1) } else { Some(0) },
+                        tool_error_count: Some(0),
                         total_tool_calls: Some(1),
                         retry_count: None,
                         max_retries: None,
@@ -89,6 +93,11 @@ impl FeedbackCollector {
                     tracing::debug!(?entry, "recording feedback for ToolCall");
                     if let Err(e) = self.store.record_feedback(&entry) {
                         tracing::warn!(error = %e, "failed to record feedback entry");
+                    } else {
+                        let _ = self.learning_dispatcher.publish(crate::types::LearningEvent::FeedbackRecorded {
+                            agent_id: entry.agent_id.clone(),
+                            reward: entry.reward.unwrap_or(0.0),
+                        });
                     }
                 }
                 // All other events (e.g., HookFired, ModelRequest, MemoryWrite, TaskAssigned) are silently ignored.
@@ -151,6 +160,10 @@ mod tests {
         (crate::store::LearningStore::new(scoped), ms, dir)
     }
 
+    fn make_learning_dispatcher() -> Arc<crate::dispatcher::LearningDispatcher> {
+        Arc::new(crate::dispatcher::LearningDispatcher::new(64))
+    }
+
     async fn run_with_events(events: Vec<AgentEvent>) -> (Arc<MemoryStore>, TempDir) {
         let (store, ms, dir) = make_store_and_ms();
         let dispatcher: Arc<dyn Dispatcher> = MockDispatcher::with_events(events);
@@ -158,6 +171,7 @@ mod tests {
             dispatcher,
             store,
             crate::scorer::RewardScorer::default(),
+            make_learning_dispatcher(),
         );
         collector.run().await.unwrap();
         (ms, dir)
@@ -176,6 +190,7 @@ mod tests {
             dispatcher,
             store,
             crate::scorer::RewardScorer::default(),
+            make_learning_dispatcher(),
         );
         // If this compiles and runs, the constructor works.
     }
@@ -233,10 +248,10 @@ mod tests {
         assert!(entry.reward.is_some());
     }
 
-    /// On receiving AgentEvent::ToolCall with args containing "error", collector creates a
-    /// FeedbackEntry with Outcome::ToolError.
+    /// On receiving AgentEvent::ToolCall, collector always records Outcome::Success
+    /// regardless of args content, since AgentEvent::ToolCall carries no result field.
     #[tokio::test]
-    async fn tool_call_with_error_args_records_tool_error_outcome() {
+    async fn tool_call_always_records_success_outcome() {
         let agent_id = AgentId::new();
         let tool = ToolCall {
             name: "bash".to_string(),
@@ -256,8 +271,8 @@ mod tests {
             .unwrap();
         let entry: crate::types::FeedbackEntry = serde_json::from_str(&entry_json).unwrap();
         assert!(
-            matches!(&entry.outcome, crate::types::Outcome::ToolError { tool } if tool == "bash"),
-            "expected ToolError outcome, got {:?}",
+            matches!(entry.outcome, crate::types::Outcome::Success),
+            "expected Success outcome, got {:?}",
             entry.outcome
         );
     }
@@ -287,6 +302,36 @@ mod tests {
             matches!(entry.outcome, crate::types::Outcome::Success),
             "expected Success outcome, got {:?}",
             entry.outcome
+        );
+    }
+
+    /// After recording feedback, FeedbackRecorded LearningEvent is emitted via LearningDispatcher.
+    #[tokio::test]
+    async fn task_completed_emits_feedback_recorded_learning_event() {
+        use futures::StreamExt as FuturesStreamExt;
+
+        let agent_id = AgentId::new();
+        let result = TaskResult::success(Uuid::new_v4(), "done".to_string());
+        let events = vec![AgentEvent::TaskCompleted { agent_id: agent_id.clone(), result }];
+
+        let (store, _ms, _dir) = make_store_and_ms();
+        let dispatcher: Arc<dyn Dispatcher> = MockDispatcher::with_events(events);
+        let learning_dispatcher = make_learning_dispatcher();
+        let mut learning_stream = learning_dispatcher.subscribe();
+
+        let collector = FeedbackCollector::new(
+            dispatcher,
+            store,
+            crate::scorer::RewardScorer::default(),
+            learning_dispatcher,
+        );
+        collector.run().await.unwrap();
+
+        let received = FuturesStreamExt::next(&mut learning_stream).await;
+        assert!(received.is_some(), "expected a LearningEvent to be published");
+        assert!(
+            matches!(received.unwrap(), crate::types::LearningEvent::FeedbackRecorded { .. }),
+            "expected FeedbackRecorded event"
         );
     }
 
