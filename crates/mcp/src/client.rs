@@ -6,7 +6,6 @@ use rmcp::{
     transport::TokioChildProcess,
 };
 use serde_json::Value;
-use tokio::process::Command;
 
 use crate::{config::McpServerConfig, error::McpError};
 
@@ -45,21 +44,16 @@ impl McpClient {
 
     /// Start all configured server subprocesses and connect via the MCP SDK.
     pub async fn connect(&mut self) -> Result<(), McpError> {
+        self.handles.clear();
+        self.tool_index.clear();
+
         for config in &self.servers {
             tracing::info!(server = %config.name, command = %config.command, "connecting to MCP server");
 
-            // Split the command string into program + args.
-            let mut parts = config.command.split_whitespace();
-            let program = parts
-                .next()
-                .ok_or_else(|| McpError::ServerStartFailed {
-                    name: config.name.clone(),
-                    source: std::io::Error::other("empty command"),
-                })?;
-            let args: Vec<&str> = parts.collect();
-
-            let mut cmd = Command::new(program);
-            cmd.args(&args);
+            // Spawn via `sh -c` so that quoted paths and shell metacharacters
+            // in the command string are handled correctly.
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.arg("-c").arg(&config.command);
 
             let transport = TokioChildProcess::new(cmd).map_err(|e| McpError::ServerStartFailed {
                 name: config.name.clone(),
