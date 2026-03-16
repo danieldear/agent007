@@ -1,3 +1,5 @@
+mod config;
+
 use agent007_core::{
     dispatcher::{Dispatcher, LocalDispatcher},
     orchestrator::OrchestratorAgent,
