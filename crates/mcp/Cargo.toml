@@ -9,7 +9,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-rmcp = "1.2.0"
+rmcp = { version = "1.2.0", features = ["client", "transport-child-process"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
