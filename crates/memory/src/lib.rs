@@ -7,3 +7,4 @@ pub mod retriever;
 pub use error::MemoryError;
 pub use store::{MemoryStore, ScopedMemoryStore};
 pub use vectordb::{VectorDB, SearchResult};
+pub use indexer::Indexer;
