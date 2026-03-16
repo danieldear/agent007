@@ -68,6 +68,12 @@ impl PromptOptimizer {
             return Ok(());
         }
 
+        // TODO(P3-T10): The plan requires LanceDB RAG similarity search here to find
+        // semantically similar failed entries (not just recent ones). Currently using
+        // a simple linear scan of recent entries as a v0.1 placeholder. When the
+        // LanceDB vector store is wired into LearningStore, replace this with a
+        // similarity query filtered to Failure/ToolError outcomes.
+
         // Build failure examples string
         let failure_examples: String = entries
             .iter()
@@ -83,16 +89,16 @@ impl PromptOptimizer {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let meta_prompt = format!(
-            "You are a prompt engineer. The following skill prompt has been producing\n\
-            poor results (average reward: {avg_reward:.2}). Here are examples of its\n\
-            failures:\n\
-            \n\
-            {failure_examples}\n\
-            \n\
+        let system_instruction = format!(
+            "You are a prompt engineer. The following skill prompt has been producing \
+            poor results (average reward: {avg_reward:.2})."
+        );
+
+        let user_message = format!(
+            "Here are examples of its failures:\n\n\
+            {failure_examples}\n\n\
             Rewrite the prompt to fix these failure patterns. Keep the same goal.\n\
-            Return only the improved prompt text.\n\
-            \n\
+            Return only the improved prompt text.\n\n\
             Original prompt:\n{skill_prompt}"
         );
 
@@ -101,11 +107,11 @@ impl PromptOptimizer {
             model: self.config.optimizer_model.clone(),
             messages: vec![Message {
                 role: Role::User,
-                content: meta_prompt,
+                content: user_message,
             }],
             max_tokens: None,
             temperature: None,
-            system: None,
+            system: Some(system_instruction),
         };
 
         let response = self.provider.complete(request).await?;

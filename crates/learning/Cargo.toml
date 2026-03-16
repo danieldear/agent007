@@ -7,7 +7,6 @@ edition = "2021"
 agent007-core    = { path = "../core" }
 agent007-memory  = { path = "../memory" }
 agent007-models  = { path = "../models" }
-agent007-skills  = { path = "../skills" }
 async-trait = { workspace = true }
 futures     = { workspace = true }
 serde       = { workspace = true }

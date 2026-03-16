@@ -34,6 +34,10 @@ impl LearningStore {
     }
 
     /// Persist a FeedbackEntry (serialized as JSON) under key "feedback/<entry.id>".
+    // NOTE: The data write and index write are not atomic. If a panic occurs
+    // between the two, the entry will exist in storage but not in the index
+    // (orphaned record). A future repair path would scan all "feedback/<uuid>"
+    // keys and rebuild the index if it detects inconsistencies.
     pub fn record_feedback(
         &self,
         entry: &crate::types::FeedbackEntry,
@@ -101,6 +105,10 @@ impl LearningStore {
     }
 
     /// Save an improved prompt as a new version for the given skill.
+    // NOTE: The data write and index write are not atomic. If a panic occurs
+    // between the two, the entry will exist in storage but not in the index
+    // (orphaned record). A future repair path would scan all "versions/<skill>/<version>"
+    // keys and rebuild the index if it detects inconsistencies.
     pub fn save_prompt_version(
         &self,
         version: PromptVersion,
