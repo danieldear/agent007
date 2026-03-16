@@ -15,10 +15,16 @@ impl MockProvider {
 
 #[async_trait]
 impl ModelProvider for MockProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
         Ok(CompletionResponse {
             content: self.response.clone(),
             model: request.model,
+            input_tokens: None,
+            output_tokens: None,
         })
     }
 }

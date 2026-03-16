@@ -35,10 +35,19 @@ impl Default for ModelRouter {
 
 #[async_trait]
 impl ModelProvider for ModelRouter {
+    fn name(&self) -> &str {
+        "router"
+    }
+
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
-        let key = self.default.as_deref().unwrap_or(&request.model);
+        // Route by request.model first; fall back to default provider name.
+        let key = if self.providers.contains_key(&request.model) {
+            request.model.as_str()
+        } else {
+            self.default.as_deref().unwrap_or(&request.model)
+        };
         let provider = self.providers.get(key).ok_or_else(|| {
-            ModelError::Unknown(format!("no provider registered for '{key}'"))
+            ModelError::NotConfigured(format!("no provider registered for '{key}'"))
         })?;
         provider.complete(request).await
     }
