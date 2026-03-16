@@ -21,7 +21,7 @@ impl std::fmt::Display for AgentId {
 }
 
 /// Opaque ref to a prompt stored in PromptStore. Never put raw prompts on the event bus.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PromptRef(pub Uuid);
 
 impl PromptRef {
