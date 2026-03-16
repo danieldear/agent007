@@ -1,11 +1,18 @@
 use agent007_memory::store::ScopedMemoryStore;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use uuid::Uuid;
 
+/// Sentinel value used as the index key for feedback entries with no associated skill.
+const NO_SKILL_SENTINEL: &str = "__none__";
+
+/// Thread-safe wrapper around a scoped key-value store for learning data.
 pub struct LearningStore {
     /// Uses MemoryStore::scoped("learning") — all keys prefixed with "learning/"
     scoped: ScopedMemoryStore,
+    /// Serializes index read-modify-write operations to prevent lost updates under concurrency.
+    index_lock: Mutex<()>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +27,10 @@ pub struct PromptVersion {
 impl LearningStore {
     /// Construct from a ScopedMemoryStore already scoped to "learning".
     pub fn new(scoped: ScopedMemoryStore) -> Self {
-        Self { scoped }
+        Self {
+            scoped,
+            index_lock: Mutex::new(()),
+        }
     }
 
     /// Persist a FeedbackEntry (serialized as JSON) under key "feedback/<entry.id>".
@@ -34,8 +44,9 @@ impl LearningStore {
 
         // Update the per-skill index so we can list by skill later.
         // Index key: "feedback/index/<skill_name>" -> JSON array of uuid strings
-        let skill = entry.skill_name.as_deref().unwrap_or("__none__");
+        let skill = entry.skill_name.as_deref().unwrap_or(NO_SKILL_SENTINEL);
         let index_key = format!("feedback/index/{}", skill);
+        let _guard = self.index_lock.lock().unwrap();
         let mut ids: Vec<String> = self
             .scoped
             .read(&index_key)?
@@ -100,6 +111,7 @@ impl LearningStore {
 
         // Update version-number index: "versions/<skill>/index" -> JSON array of u32
         let index_key = format!("versions/{}/index", version.skill_name);
+        let _guard = self.index_lock.lock().unwrap();
         let mut versions: Vec<u32> = self
             .scoped
             .read(&index_key)?

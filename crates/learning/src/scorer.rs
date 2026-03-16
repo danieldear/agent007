@@ -31,13 +31,15 @@ pub struct RewardScorer {
     weights: RewardWeights,
 }
 
+impl Default for RewardScorer {
+    fn default() -> Self {
+        Self::new(RewardWeights::default())
+    }
+}
+
 impl RewardScorer {
     pub fn new(weights: RewardWeights) -> Self {
         Self { weights }
-    }
-
-    pub fn default() -> Self {
-        Self::new(RewardWeights::default())
     }
 
     /// Compute a scalar reward in [-1.0, +1.0] from the scoring context.

@@ -30,3 +30,4 @@ serde_yaml = "0.9"
 tera = "1"
 tempfile = "3"
 toml = "0.8"
+rmcp = { version = "1.2.0", features = ["client", "transport-child-process"] }
