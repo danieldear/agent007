@@ -4,7 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+agent007-core = { path = "../core" }
+agent007-models = { path = "../models" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
