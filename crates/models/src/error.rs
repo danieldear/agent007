@@ -13,3 +13,14 @@ pub enum ModelError {
     #[error("dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_error_displays() {
+        let e = ModelError::NotConfigured("claude".to_string());
+        assert!(e.to_string().contains("claude"));
+    }
+}
