@@ -45,7 +45,7 @@ impl HookExecutor {
             .wait()
             .map_err(|e| {
                 tracing::warn!(command = %command, error = %e, "failed to wait for hook command");
-                HookError::SpawnFailed { command: command.clone(), source: e }
+                HookError::WaitFailed { command: command.clone(), source: e }
             })?;
 
         if !status.success() {

@@ -13,5 +13,8 @@ pub enum HookError {
     CommandFailed { command: String, code: i32 },
 
     #[error("failed to spawn hook command '{command}': {source}")]
-    SpawnFailed { command: String, source: std::io::Error },
+    SpawnFailed { command: String, #[source] source: std::io::Error },
+
+    #[error("failed to wait for hook command '{command}': {source}")]
+    WaitFailed { command: String, #[source] source: std::io::Error },
 }
