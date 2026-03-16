@@ -28,6 +28,10 @@ impl ModelRouter {
         self.rules.insert(task_type.to_string(), provider_name.to_string());
     }
 
+    /// Route a task type to the appropriate provider.
+    ///
+    /// The default provider **must** be registered via `register()` before calling this method.
+    /// Panics if neither the rule-matched provider nor the default provider is registered.
     pub fn route(&self, task_type: &str) -> Arc<dyn ModelProvider> {
         // Check rules first
         let provider_name = if let Some(name) = self.rules.get(task_type) {
@@ -44,7 +48,10 @@ impl ModelRouter {
                 self.providers
                     .get(self.default.as_str())
                     .cloned()
-                    .expect("default provider must be registered")
+                    .unwrap_or_else(|| panic!(
+                        "default provider '{}' is not registered — call register() before route()",
+                        self.default
+                    ))
             })
     }
 }

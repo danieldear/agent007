@@ -55,7 +55,7 @@ impl TaskQueue {
     }
 
     pub async fn send(&self, task: Task) -> Result<(), CoreError> {
-        self.sender.send(task).await.map_err(|_| CoreError::TaskQueueFull)
+        self.sender.send(task).await.map_err(|_| CoreError::Disconnected)
     }
 
     pub fn try_send(&self, task: Task) -> Result<(), CoreError> {

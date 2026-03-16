@@ -8,6 +8,9 @@ pub enum CoreError {
     #[error("Task queue full — backpressure limit reached")]
     TaskQueueFull,
 
+    #[error("Channel disconnected — receiver dropped")]
+    Disconnected,
+
     #[error("Dispatcher publish failed: {0}")]
     DispatchFailed(String),
 
