@@ -111,6 +111,16 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         }
     });
 
+    // When AGENT007_DRY_RUN=1, skip the TUI and just return Ok
+    if std::env::var("AGENT007_DRY_RUN").is_ok() {
+        stack.cancel.cancel();
+        stack.tracker.close();
+        // Do not await tracker.wait() in dry-run: the feedback-collector task holds a
+        // broadcast stream that never ends, so waiting would block forever. The process
+        // (or test) will clean up background tasks on drop.
+        return Ok(());
+    }
+
     // Construct App and EventLoop
     let mut app = App::default();
     app.push_log(format!("Starting task: {}", task));
@@ -120,14 +130,6 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         stack.learning_dispatcher.clone(),
     )
     .await?;
-
-    // When AGENT007_DRY_RUN=1, skip the TUI and just return Ok
-    if std::env::var("AGENT007_DRY_RUN").is_ok() {
-        stack.cancel.cancel();
-        stack.tracker.close();
-        stack.tracker.wait().await;
-        return Ok(());
-    }
 
     event_loop.run(&mut app, stack.cancel.clone()).await?;
     stack.tracker.close();
@@ -142,11 +144,18 @@ mod tests {
 
     #[tokio::test]
     async fn run_command_builds_stack_without_panic() {
-        std::env::set_var("AGENT007_DRY_RUN", "1");
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
         // Verify stack was constructed (just check fields exist)
         assert!(stack.cancel.is_cancelled() == false);
+    }
+
+    #[tokio::test]
+    async fn e2e_smoke_run_with_dry_run() {
+        std::env::set_var("AGENT007_DRY_RUN", "1");
+        let config = Arc::new(Config::default());
+        let result = execute(config, "say hello".to_string()).await;
         std::env::remove_var("AGENT007_DRY_RUN");
+        assert!(result.is_ok(), "run command failed: {:?}", result.err());
     }
 }
