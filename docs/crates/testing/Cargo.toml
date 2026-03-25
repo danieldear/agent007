@@ -1,0 +1,20 @@
+[package]
+name = "agent007-testing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent007-core   = { path = "../core" }
+agent007-memory = { path = "../memory" }
+agent007-models = { path = "../models" }
+thiserror   = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tokio       = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+tracing     = { workspace = true }
+toml        = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

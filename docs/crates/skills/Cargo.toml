@@ -1,0 +1,21 @@
+[package]
+name = "agent007-skills"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent007-models = { path = "../models" }
+agent007-memory = { path = "../memory" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tera = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

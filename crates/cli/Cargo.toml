@@ -1,0 +1,40 @@
+[package]
+name = "agent007"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent007-core       = { path = "../core" }
+agent007-ide-bridge = { path = "../ide-bridge" }
+agent007-simulation = { path = "../simulation" }
+agent007-zones    = { path = "../zones" }
+agent007-testing  = { path = "../testing" }
+agent007-models   = { path = "../models" }
+agent007-git-agent = { path = "../git-agent" }
+agent007-memory   = { path = "../memory" }
+agent007-skills   = { path = "../skills" }
+agent007-hooks    = { path = "../hooks" }
+agent007-mcp      = { path = "../mcp" }
+agent007-learning = { path = "../learning" }
+agent007-tui      = { path = "../tui" }
+agent007-personas = { path = "../personas" }
+agent007-workflows = { path = "../workflows" }
+agent007-web = { path = "../web" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+rmcp = { workspace = true }
+chrono = { workspace = true }
+globset = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+tempfile = { workspace = true }

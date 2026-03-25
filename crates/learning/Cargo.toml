@@ -1,0 +1,23 @@
+[package]
+name = "agent007-learning"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent007-core    = { path = "../core" }
+agent007-memory  = { path = "../memory" }
+agent007-models  = { path = "../models" }
+async-trait = { workspace = true }
+futures     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+tokio       = { workspace = true }
+tokio-stream = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }

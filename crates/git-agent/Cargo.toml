@@ -1,0 +1,21 @@
+[package]
+name = "agent007-git-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent007-core = { path = "../core" }
+agent007-models = { path = "../models" }
+git2 = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+wiremock = "0.6"

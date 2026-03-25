@@ -1,0 +1,52 @@
+[workspace]
+members = [
+    "crates/cli",
+    "crates/models",
+    "crates/core",
+    "crates/memory",
+    "crates/skills",
+    "crates/hooks",
+    "crates/mcp",
+    "crates/learning",
+    "crates/tui",
+    "crates/ide-bridge",
+    "crates/zones",
+    "crates/web",
+    "crates/personas",
+    "crates/custom-agents",
+    "crates/testing",
+    "crates/git-agent",
+    "crates/simulation",
+    "crates/workflows",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-trait = "0.1"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde_yaml = "0.9"
+tera = "1"
+tempfile = "3"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+rmcp = { version = "1.2.0", features = ["client", "server", "transport-child-process", "transport-io", "macros"] }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+git2 = "0.19"
+tower-lsp = "0.20"
+globset = "0.4"
+axum  = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
+petgraph = "0.6"
