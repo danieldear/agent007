@@ -14,9 +14,9 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
-lancedb = "0.19"
-arrow-array = "54"
-arrow-schema = "54"
+lancedb = "=0.27.1"
+arrow-array = "57.2"
+arrow-schema = "57.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

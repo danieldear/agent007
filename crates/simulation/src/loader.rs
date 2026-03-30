@@ -23,7 +23,7 @@ pub struct TemplateLoader {
     /// Optional override directory for built-in templates (useful in tests).
     pub builtin_dir: Option<PathBuf>,
     /// Directory for user-provided custom templates.
-    /// Defaults to `~/.agent007/simulations/custom/` when `None`.
+    /// Defaults to project-local or global `.agent007/simulations/custom/` when `None`.
     pub custom_dir: Option<PathBuf>,
 }
 
@@ -48,7 +48,7 @@ impl TemplateLoader {
     ///
     /// Resolution order:
     /// 1. Built-in embedded templates (case-insensitive name match).
-    /// 2. `custom/` prefix → look up in `custom_dir` (or `~/.agent007/simulations/custom/`).
+    /// 2. `custom/` prefix → look up in `custom_dir` (or default project-local/global custom dir).
     /// 3. Plain name → try `custom_dir` directly.
     pub fn load(&self, name: &str) -> Result<SimulationTemplate, SimulationError> {
         // 1. Built-in
@@ -120,11 +120,28 @@ impl TemplateLoader {
     }
 }
 
-fn default_custom_dir() -> PathBuf {
+fn agent007_home() -> PathBuf {
+    if let Ok(p) = std::env::var("AGENT007_HOME") {
+        return PathBuf::from(p);
+    }
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    loop {
+        let candidate = dir.join(".agent007");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(".agent007")
+}
+
+fn default_custom_dir() -> PathBuf {
+    agent007_home()
         .join("simulations")
         .join("custom")
 }

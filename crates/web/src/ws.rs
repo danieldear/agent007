@@ -7,8 +7,10 @@ use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 
+use agent007_core::paths::agent007_home;
 use agent007_core::dispatcher::Dispatcher;
 use crate::server::AppState;
+use crate::metrics::DashboardMetrics;
 
 /// Messages broadcast to WebSocket clients.
 #[derive(Debug, Clone, Serialize)]
@@ -23,9 +25,7 @@ pub enum WsMessage {
         payload: Value,
     },
     StatusUpdate {
-        agents: Vec<Value>,
-        tasks: Vec<Value>,
-        avg_reward: f64,
+        metrics: DashboardMetrics,
     },
 }
 
@@ -41,7 +41,6 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Subscribe to both event streams.
     let mut agent_stream: agent007_core::dispatcher::EventStream =
         match state.dispatcher.subscribe().await {
             Ok(s) => s,
@@ -54,7 +53,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         Box<dyn futures::Stream<Item = agent007_learning::LearningEvent> + Send>,
     > = state.learning_dispatcher.subscribe();
 
-    // Spawn a task that forwards events to the WebSocket client.
+    let metrics = state.metrics.clone();
+    let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+
     let send_task = tokio::spawn(async move {
         loop {
             let msg: Option<WsMessage> = tokio::select! {
@@ -80,6 +81,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         None => break,
                     }
                 }
+                _ = stats_interval.tick() => {
+                    let snapshot = crate::metrics::snapshot_with_shared_state(
+                        metrics.lock().await.clone(),
+                        agent007_home(),
+                    );
+                    Some(WsMessage::StatusUpdate { metrics: snapshot })
+                }
             };
 
             if let Some(m) = msg {
@@ -88,14 +96,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Err(_) => continue,
                 };
                 if sender.send(Message::Text(text.into())).await.is_err() {
-                    // Client disconnected.
                     break;
                 }
             }
         }
     });
 
-    // Drain inbound messages (browser may send pings or close frames).
     while let Some(Ok(msg)) = receiver.next().await {
         if matches!(msg, Message::Close(_)) {
             break;
@@ -108,6 +114,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::DashboardMetrics;
 
     #[test]
     fn ws_message_agent_event_serializes() {
@@ -132,9 +139,7 @@ mod tests {
     #[test]
     fn ws_message_status_update_serializes() {
         let msg = WsMessage::StatusUpdate {
-            agents: vec![],
-            tasks: vec![],
-            avg_reward: 0.5,
+            metrics: DashboardMetrics::new(),
         };
         let s = serde_json::to_string(&msg).unwrap();
         assert!(s.contains("StatusUpdate"));

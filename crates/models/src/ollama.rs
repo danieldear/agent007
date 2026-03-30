@@ -50,6 +50,11 @@ impl ModelProvider for OllamaProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
         let mut messages = request.messages;
+        let model = if request.model.is_empty() || request.model == self.name() || request.model == "ollama" {
+            self.model.as_str()
+        } else {
+            request.model.as_str()
+        };
 
         // Prepend system message if provided
         if let Some(system_content) = request.system {
@@ -59,7 +64,7 @@ impl ModelProvider for OllamaProvider {
             });
         }
 
-        let body = self.build_body(&request.model, &messages, request.max_tokens, request.temperature);
+        let body = self.build_body(model, &messages, request.max_tokens, request.temperature);
 
         let client = reqwest::Client::new();
         let url = format!("{}/api/chat", self.base_url);
@@ -90,7 +95,7 @@ impl ModelProvider for OllamaProvider {
 
         Ok(CompletionResponse {
             content,
-            model: request.model,
+            model: model.to_string(),
             input_tokens: None,
             output_tokens: None,
         })

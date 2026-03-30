@@ -35,6 +35,7 @@ impl SkillExecutor {
         // 3. Build Tera context
         let mut ctx = tera::Context::new();
         ctx.insert("args", args);
+        ctx.insert("task", args);
         ctx.insert("rag_context", &rag_context);
         ctx.insert("memory", &serde_json::json!({
             "user": memory_user,
@@ -130,6 +131,7 @@ mod tests {
                 description: "test".to_string(),
                 trigger: "/test".to_string(),
                 model: model.to_string(),
+                category: "custom".to_string(),
             },
             template: template.to_string(),
         }

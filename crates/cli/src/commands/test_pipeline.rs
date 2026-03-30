@@ -9,6 +9,7 @@ use agent007_memory::MemoryStore;
 use agent007_models::MockProvider;
 use agent007_testing::{TestPipeline, TestingConfig};
 
+use super::run::agent007_home;
 use crate::config::Config;
 
 #[derive(Parser, Debug)]
@@ -44,7 +45,7 @@ pub async fn execute(_config: Arc<Config>, args: TestArgs) -> Result<()> {
         TestAction::Run { dir, no_fix } => {
             let working_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap());
 
-            let memory_dir = dirs_home().join(".agent007").join("memory");
+            let memory_dir = agent007_home().join("memory");
             let memory = Arc::new(MemoryStore::new(&memory_dir));
             let dispatcher = LocalDispatcher::new(64);
 
@@ -92,7 +93,7 @@ pub async fn execute(_config: Arc<Config>, args: TestArgs) -> Result<()> {
         }
 
         TestAction::Report { regressions, .. } => {
-            let memory_dir = dirs_home().join(".agent007").join("memory");
+            let memory_dir = agent007_home().join("memory");
             let memory = Arc::new(MemoryStore::new(&memory_dir));
 
             match memory.read("test_run/latest")? {
@@ -116,12 +117,6 @@ pub async fn execute(_config: Arc<Config>, args: TestArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 #[cfg(test)]

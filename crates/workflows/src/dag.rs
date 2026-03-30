@@ -2,10 +2,28 @@ use std::collections::HashMap;
 use petgraph::graph::DiGraph;
 use petgraph::algo::toposort;
 use crate::error::WorkflowError;
-use crate::types::WorkflowDef;
+use crate::types::{WorkflowDef, StepType, RouteConfig};
 
-/// Validates a WorkflowDef DAG and returns topologically sorted batches of step IDs.
-/// Steps in the same batch have no inter-dependency and can execute concurrently.
+#[derive(Debug)]
+pub struct ValidatedDag {
+    pub batches: Vec<Vec<String>>,
+    pub back_edges: Vec<BackEdge>,
+    pub router_branches: Vec<RouterBranch>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackEdge {
+    pub evaluator_step: String,
+    pub on_fail_target: String,
+    pub max_retries: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RouterBranch {
+    pub router_step: String,
+    pub routes: Vec<RouteConfig>,
+}
+
 pub struct DagValidator<'a> {
     def: &'a WorkflowDef,
 }
@@ -15,11 +33,66 @@ impl<'a> DagValidator<'a> {
         Self { def }
     }
 
-    /// Returns `Ok(batches)` where each inner `Vec<String>` is a set of step IDs
-    /// that can execute concurrently. Batches are ordered: batch[0] has no deps,
-    /// batch[1] depends only on batch[0], etc.
-    pub fn validate(&self) -> Result<Vec<Vec<String>>, WorkflowError> {
-        // Build a map: output_name → step_id that produces it
+    pub fn validate(&self) -> Result<ValidatedDag, WorkflowError> {
+        let step_ids: Vec<&str> = self.def.steps.iter().map(|s| s.id.as_str()).collect();
+
+        let mut back_edges = Vec::new();
+        let mut evaluator_back_edge_set: HashMap<(&str, &str), ()> = HashMap::new();
+
+        for step in &self.def.steps {
+            if step.r#type == StepType::Evaluator {
+                let eval = step.evaluate.as_ref().ok_or_else(|| WorkflowError::InvalidEvaluator {
+                    id: step.id.clone(),
+                    reason: "evaluator step must have an 'evaluate' config".to_string(),
+                })?;
+
+                if !step_ids.contains(&eval.on_pass.as_str()) {
+                    return Err(WorkflowError::InvalidEvaluator {
+                        id: step.id.clone(),
+                        reason: format!("on_pass target '{}' not found", eval.on_pass),
+                    });
+                }
+                if !step_ids.contains(&eval.on_fail.as_str()) {
+                    return Err(WorkflowError::InvalidEvaluator {
+                        id: step.id.clone(),
+                        reason: format!("on_fail target '{}' not found", eval.on_fail),
+                    });
+                }
+
+                let max_retries = eval.max_retries.unwrap_or(3);
+                back_edges.push(BackEdge {
+                    evaluator_step: step.id.clone(),
+                    on_fail_target: eval.on_fail.clone(),
+                    max_retries,
+                });
+                evaluator_back_edge_set.insert((step.id.as_str(), eval.on_fail.as_str()), ());
+            }
+        }
+
+        let mut router_branches = Vec::new();
+        for step in &self.def.steps {
+            if step.r#type == StepType::Router {
+                let routes = step.routes.as_ref().ok_or_else(|| WorkflowError::InvalidRouter {
+                    id: step.id.clone(),
+                    reason: "router step must have 'routes' config".to_string(),
+                })?;
+
+                for route in routes {
+                    if !step_ids.contains(&route.goto.as_str()) {
+                        return Err(WorkflowError::InvalidRouter {
+                            id: step.id.clone(),
+                            reason: format!("route goto target '{}' not found", route.goto),
+                        });
+                    }
+                }
+
+                router_branches.push(RouterBranch {
+                    router_step: step.id.clone(),
+                    routes: routes.clone(),
+                });
+            }
+        }
+
         let mut output_to_step: HashMap<String, String> = HashMap::new();
         for step in &self.def.steps {
             if let Some(out) = &step.output {
@@ -27,7 +100,6 @@ impl<'a> DagValidator<'a> {
             }
         }
 
-        // Build petgraph DiGraph: node = step index (in def.steps order)
         let mut graph: DiGraph<String, ()> = DiGraph::new();
         let node_indices: Vec<_> = self.def.steps.iter()
             .map(|s| graph.add_node(s.id.clone()))
@@ -40,7 +112,6 @@ impl<'a> DagValidator<'a> {
         for step in &self.def.steps {
             let to_node = id_to_node[&step.id];
 
-            // Edges from artifact inputs
             for inp in step.inputs.iter().flatten() {
                 let producer = output_to_step.get(inp).ok_or_else(|| {
                     WorkflowError::UnknownInput {
@@ -48,11 +119,15 @@ impl<'a> DagValidator<'a> {
                         input: inp.clone(),
                     }
                 })?;
+
+                if evaluator_back_edge_set.contains_key(&(step.id.as_str(), producer.as_str())) {
+                    continue;
+                }
+
                 let from_node = id_to_node[producer];
                 graph.add_edge(from_node, to_node, ());
             }
 
-            // Edges from explicit depends_on (ordering only)
             for dep in step.depends_on.iter().flatten() {
                 let from_node = id_to_node.get(dep).ok_or_else(|| {
                     WorkflowError::UnknownInput {
@@ -60,16 +135,18 @@ impl<'a> DagValidator<'a> {
                         input: dep.clone(),
                     }
                 })?;
+
+                if evaluator_back_edge_set.contains_key(&(step.id.as_str(), dep.as_str())) {
+                    continue;
+                }
+
                 graph.add_edge(*from_node, to_node, ());
             }
         }
 
-        // Detect cycles via petgraph toposort
         let topo_order = toposort(&graph, None)
             .map_err(|_| WorkflowError::CycleDetected)?;
 
-        // Build batches: assign each node a "level" = 1 + max(level of predecessors)
-        // Nodes with no predecessors have level 0.
         let mut level: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
         for &node in &topo_order {
             let max_pred_level = graph
@@ -86,14 +163,18 @@ impl<'a> DagValidator<'a> {
             batches[lvl].push(graph[node].clone());
         }
 
-        Ok(batches)
+        Ok(ValidatedDag {
+            batches,
+            back_edges,
+            router_branches,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{StepDef, WorkflowDef};
+    use crate::types::{StepDef, WorkflowDef, StepType, EvaluateConfig, RouteConfig};
 
     fn make_step(id: &str, inputs: &[&str], depends_on: &[&str], output: Option<&str>) -> StepDef {
         StepDef {
@@ -102,9 +183,13 @@ mod tests {
             model: None,
             inputs: if inputs.is_empty() { None } else { Some(inputs.iter().map(|s| s.to_string()).collect()) },
             depends_on: if depends_on.is_empty() { None } else { Some(depends_on.iter().map(|s| s.to_string()).collect()) },
-            prompt: "do {{task}}".to_string(),
+            prompt: Some("do {{task}}".to_string()),
+            skill: None,
             output: output.map(|s| s.to_string()),
             requires_approval: None,
+            r#type: StepType::Execute,
+            evaluate: None,
+            routes: None,
         }
     }
 
@@ -119,11 +204,13 @@ mod tests {
             make_step("b", &["out_a"], &[], Some("out_b")),
             make_step("c", &["out_b"], &[], None),
         ]);
-        let batches = DagValidator::new(&def).validate().unwrap();
-        assert_eq!(batches.len(), 3);
-        assert_eq!(batches[0], vec!["a"]);
-        assert_eq!(batches[1], vec!["b"]);
-        assert_eq!(batches[2], vec!["c"]);
+        let dag = DagValidator::new(&def).validate().unwrap();
+        assert_eq!(dag.batches.len(), 3);
+        assert_eq!(dag.batches[0], vec!["a"]);
+        assert_eq!(dag.batches[1], vec!["b"]);
+        assert_eq!(dag.batches[2], vec!["c"]);
+        assert!(dag.back_edges.is_empty());
+        assert!(dag.router_branches.is_empty());
     }
 
     #[test]
@@ -133,13 +220,12 @@ mod tests {
             make_step("b", &[], &[], Some("out_b")),
             make_step("c", &["out_a", "out_b"], &[], None),
         ]);
-        let batches = DagValidator::new(&def).validate().unwrap();
-        // "a" and "b" can run concurrently in batch 0; "c" in batch 1
-        assert_eq!(batches.len(), 2);
-        let mut first = batches[0].clone();
+        let dag = DagValidator::new(&def).validate().unwrap();
+        assert_eq!(dag.batches.len(), 2);
+        let mut first = dag.batches[0].clone();
         first.sort();
         assert_eq!(first, vec!["a", "b"]);
-        assert_eq!(batches[1], vec!["c"]);
+        assert_eq!(dag.batches[1], vec!["c"]);
     }
 
     #[test]
@@ -165,18 +251,87 @@ mod tests {
     fn explicit_depends_on_respected() {
         let def = make_def(vec![
             make_step("a", &[], &[], None),
-            make_step("b", &[], &["a"], None), // no artifact dep, just ordering
+            make_step("b", &[], &["a"], None),
         ]);
-        let batches = DagValidator::new(&def).validate().unwrap();
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0], vec!["a"]);
-        assert_eq!(batches[1], vec!["b"]);
+        let dag = DagValidator::new(&def).validate().unwrap();
+        assert_eq!(dag.batches.len(), 2);
+        assert_eq!(dag.batches[0], vec!["a"]);
+        assert_eq!(dag.batches[1], vec!["b"]);
     }
 
     #[test]
     fn single_step_workflow_is_valid() {
         let def = make_def(vec![make_step("only", &[], &[], None)]);
-        let batches = DagValidator::new(&def).validate().unwrap();
-        assert_eq!(batches, vec![vec!["only".to_string()]]);
+        let dag = DagValidator::new(&def).validate().unwrap();
+        assert_eq!(dag.batches, vec![vec!["only".to_string()]]);
+    }
+
+    #[test]
+    fn evaluator_back_edge_is_not_a_cycle() {
+        let mut eval_step = make_step("review", &[], &["impl"], None);
+        eval_step.r#type = StepType::Evaluator;
+        eval_step.evaluate = Some(EvaluateConfig {
+            condition: None,
+            decision_field: Some("verdict".to_string()),
+            on_pass: "done".to_string(),
+            on_fail: "impl".to_string(),
+            max_retries: Some(3),
+        });
+
+        let def = make_def(vec![
+            make_step("impl", &[], &[], Some("code")),
+            eval_step,
+            make_step("done", &[], &["review"], None),
+        ]);
+        let result = DagValidator::new(&def).validate();
+        assert!(result.is_ok(), "evaluator back-edge should not be detected as a cycle");
+        let dag = result.unwrap();
+        assert_eq!(dag.back_edges.len(), 1);
+        assert_eq!(dag.back_edges[0].evaluator_step, "review");
+        assert_eq!(dag.back_edges[0].on_fail_target, "impl");
+    }
+
+    #[test]
+    fn router_branches_are_extracted() {
+        let mut router_step = make_step("classify", &[], &[], Some("classification"));
+        router_step.r#type = StepType::Router;
+        router_step.routes = Some(vec![
+            RouteConfig { when: Some("frontend".to_string()), goto: "ui".to_string(), default: false },
+            RouteConfig { when: None, goto: "api".to_string(), default: true },
+        ]);
+
+        let def = make_def(vec![
+            router_step,
+            make_step("ui", &[], &["classify"], None),
+            make_step("api", &[], &["classify"], None),
+        ]);
+        let result = DagValidator::new(&def).validate();
+        assert!(result.is_ok());
+        let dag = result.unwrap();
+        assert_eq!(dag.router_branches.len(), 1);
+        assert_eq!(dag.router_branches[0].router_step, "classify");
+    }
+
+    #[test]
+    fn router_with_invalid_goto_fails() {
+        let mut router_step = make_step("classify", &[], &[], None);
+        router_step.r#type = StepType::Router;
+        router_step.routes = Some(vec![
+            RouteConfig { when: Some("x".to_string()), goto: "nonexistent".to_string(), default: false },
+        ]);
+
+        let def = make_def(vec![router_step]);
+        let result = DagValidator::new(&def).validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn real_cycle_still_detected_even_with_evaluator_present() {
+        let def = make_def(vec![
+            make_step("a", &["out_b"], &[], Some("out_a")),
+            make_step("b", &["out_a"], &[], Some("out_b")),
+        ]);
+        let err = DagValidator::new(&def).validate().unwrap_err();
+        assert!(matches!(err, crate::error::WorkflowError::CycleDetected));
     }
 }

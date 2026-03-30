@@ -1,5 +1,20 @@
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use crate::error::WorkflowError;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalDecisionKind {
+    Approve,
+    Deny,
+    Edit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalDecision {
+    pub decision: ApprovalDecisionKind,
+    pub content: Option<String>,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum ApprovalResponse {
@@ -23,8 +38,8 @@ pub struct ApprovalGate;
 
 impl ApprovalGate {
     /// Present the approval gate to the user via stderr/stdin.
-    /// Returns the (possibly edited) content on approval, or `WorkflowError::ApprovalDenied`.
-    pub async fn prompt(step_id: &str, content: &str) -> Result<String, WorkflowError> {
+    /// Returns a structured approval decision, including optional edited content.
+    pub async fn prompt(step_id: &str, content: &str) -> Result<ApprovalDecision, WorkflowError> {
         eprintln!("\n[APPROVAL REQUIRED] Step: {}", step_id);
         eprintln!("Output:\n{}\n", content);
         eprint!("Approve? [y/n/edit]: ");
@@ -35,15 +50,25 @@ impl ApprovalGate {
             .map_err(WorkflowError::Io)?;
 
         match ApprovalResponse::parse(&input) {
-            ApprovalResponse::Approve => Ok(content.to_string()),
-            ApprovalResponse::Deny => Err(WorkflowError::ApprovalDenied(step_id.to_string())),
+            ApprovalResponse::Approve => Ok(ApprovalDecision {
+                decision: ApprovalDecisionKind::Approve,
+                content: Some(content.to_string()),
+            }),
+            ApprovalResponse::Deny => Ok(ApprovalDecision {
+                decision: ApprovalDecisionKind::Deny,
+                content: None,
+            }),
             ApprovalResponse::Edit => {
                 let editor = std::env::var("EDITOR").ok();
-                open_in_editor(content, editor.as_deref()).await.map_err(|e| {
+                let edited = open_in_editor(content, editor.as_deref()).await.map_err(|e| {
                     WorkflowError::StepFailed {
                         id: step_id.to_string(),
                         reason: format!("editor failed: {}", e),
                     }
+                })?;
+                Ok(ApprovalDecision {
+                    decision: ApprovalDecisionKind::Edit,
+                    content: Some(edited),
                 })
             }
         }

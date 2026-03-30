@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use anyhow::Result;
 
@@ -35,15 +36,125 @@ fn default_ollama_url() -> String { "http://localhost:11434".to_string() }
 fn default_ollama_model() -> String { "llama3".to_string() }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClaudeModelConfig {
+    #[serde(default = "default_claude_model")]
+    pub default_model: String,
+}
+fn default_claude_model() -> String { "claude-sonnet-4-6".to_string() }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CodexModelConfig {
+    #[serde(default = "default_codex_model")]
+    pub default_model: String,
+}
+fn default_codex_model() -> String { "gpt-5.3-codex".to_string() }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelsConfig {
     #[serde(default = "default_model")]
     pub default: String,
     pub routing: Option<RoutingConfig>,
+    pub claude: Option<ClaudeModelConfig>,
+    pub codex: Option<CodexModelConfig>,
     pub ollama: Option<OllamaModelConfig>,
 }
 fn default_model() -> String { "claude".to_string() }
 impl Default for ModelsConfig {
-    fn default() -> Self { Self { default: default_model(), routing: None, ollama: None } }
+    fn default() -> Self {
+        Self {
+            default: default_model(),
+            routing: None,
+            claude: Some(ClaudeModelConfig { default_model: default_claude_model() }),
+            codex: Some(CodexModelConfig { default_model: default_codex_model() }),
+            ollama: None,
+        }
+    }
+}
+
+impl ModelsConfig {
+    pub fn normalize_provider_name(target: &str) -> Option<&'static str> {
+        let target = target.trim();
+        if target.is_empty() {
+            return None;
+        }
+        if target == "claude" || target.starts_with("claude-") {
+            return Some("claude");
+        }
+        if target == "codex"
+            || target.starts_with("codex")
+            || target.starts_with("gpt-")
+            || target.starts_with("o1")
+            || target.starts_with("o3")
+            || target.starts_with("o4")
+            || target.starts_with("o5")
+        {
+            return Some("codex");
+        }
+        if target == "ollama" || target.starts_with("ollama/") {
+            return Some("ollama");
+        }
+        if target == "mock" {
+            return Some("mock");
+        }
+        None
+    }
+
+    pub fn default_provider(&self) -> String {
+        Self::normalize_provider_name(&self.default)
+            .unwrap_or("claude")
+            .to_string()
+    }
+
+    pub fn default_model_for_provider(&self, provider: &str) -> String {
+        match provider {
+            "claude" => self
+                .claude
+                .as_ref()
+                .map(|c| c.default_model.clone())
+                .unwrap_or_else(default_claude_model),
+            "codex" => self
+                .codex
+                .as_ref()
+                .map(|c| c.default_model.clone())
+                .unwrap_or_else(default_codex_model),
+            "ollama" => self
+                .ollama
+                .as_ref()
+                .map(|c| c.default_model.clone())
+                .unwrap_or_else(default_ollama_model),
+            "mock" => "mock".to_string(),
+            _ => self.default_model_for_provider("claude"),
+        }
+    }
+
+    pub fn resolve_provider_and_model(&self, requested: Option<&str>) -> (String, String) {
+        let target = requested.unwrap_or(self.default.as_str()).trim();
+        if target.is_empty() || target == "default" {
+            let provider = self.default_provider();
+            let model = self.default_model_for_provider(&provider);
+            return (provider, model);
+        }
+
+        if let Some(model) = target.strip_prefix("ollama/") {
+            return ("ollama".to_string(), model.to_string());
+        }
+
+        if let Some(provider) = Self::normalize_provider_name(target) {
+            let model = if target == provider {
+                self.default_model_for_provider(provider)
+            } else {
+                target.to_string()
+            };
+            return (provider.to_string(), model);
+        }
+
+        if self.ollama.is_some() {
+            return ("ollama".to_string(), target.to_string());
+        }
+
+        let provider = self.default_provider();
+        (provider, target.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -61,10 +172,48 @@ pub struct MemoryConfig {
     pub rag: Option<RagConfig>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpServerCommandConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum McpServerEntry {
+    Command(String),
+    Config(McpServerCommandConfig),
+}
+
+impl McpServerEntry {
+    pub fn to_server_config(&self, name: &str) -> agent007_mcp::McpServerConfig {
+        match self {
+            Self::Command(command) => agent007_mcp::McpServerConfig {
+                name: name.to_string(),
+                command: command.clone(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                cwd: None,
+            },
+            Self::Config(config) => agent007_mcp::McpServerConfig {
+                name: name.to_string(),
+                command: config.command.clone(),
+                args: config.args.clone(),
+                env: config.env.clone(),
+                cwd: config.cwd.clone(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct McpConfig {
     #[serde(default)]
-    pub servers: std::collections::HashMap<String, String>,
+    pub servers: HashMap<String, McpServerEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -150,21 +299,51 @@ impl Config {
         Ok(toml::from_str(s)?)
     }
 
+    /// Load config with layered resolution:
+    /// 1. AGENT007_CONFIG env var (explicit override)
+    /// 2. Project-local .agent007/config.toml (walk up from CWD)
+    /// 3. Global ~/.agent007/config.toml
+    /// 4. Built-in defaults
     pub fn load() -> Result<Self> {
-        let path = if let Ok(p) = std::env::var("AGENT007_CONFIG") {
-            PathBuf::from(p)
-        } else {
-            Self::default_path()
-        };
-        if path.exists() {
-            let s = std::fs::read_to_string(&path)?;
-            Self::from_str(&s)
-        } else {
-            Ok(Self::default())
+        if let Ok(p) = std::env::var("AGENT007_CONFIG") {
+            let path = PathBuf::from(p);
+            if path.exists() {
+                let s = std::fs::read_to_string(&path)?;
+                return Self::from_str(&s);
+            }
+        }
+
+        if let Some(project) = Self::project_config_path() {
+            if project.exists() {
+                let s = std::fs::read_to_string(&project)?;
+                return Self::from_str(&s);
+            }
+        }
+
+        let global = Self::global_config_path();
+        if global.exists() {
+            let s = std::fs::read_to_string(&global)?;
+            return Self::from_str(&s);
+        }
+
+        Ok(Self::default())
+    }
+
+    /// Walk up from CWD looking for `.agent007/config.toml`.
+    fn project_config_path() -> Option<PathBuf> {
+        let mut dir = std::env::current_dir().ok()?;
+        loop {
+            let candidate = dir.join(".agent007").join("config.toml");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if !dir.pop() {
+                return None;
+            }
         }
     }
 
-    fn default_path() -> PathBuf {
+    fn global_config_path() -> PathBuf {
         std::env::var("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -172,21 +351,9 @@ impl Config {
             .join("config.toml")
     }
 
-    /// Path to `~/.agent007/`
-    pub fn agent007_home(&self) -> PathBuf {
-        std::env::var("AGENT007_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(".agent007")
-            })
-    }
-
-    /// Path to simulation templates directory (built-in + user).
+    /// Path to simulation templates directory.
     pub fn simulation_templates_dir(&self) -> PathBuf {
-        self.agent007_home().join("simulation-templates")
+        crate::commands::run::agent007_home().join("simulation-templates")
     }
 }
 
@@ -262,6 +429,8 @@ retries = 0.1
         assert_eq!(config.models.default, "claude");
         assert_eq!(config.models.routing.as_ref().unwrap().code_completion.as_deref(), Some("codex"));
         assert_eq!(config.models.ollama.as_ref().unwrap().base_url, "http://localhost:11434");
+        assert_eq!(config.models.default_model_for_provider("claude"), "claude-sonnet-4-6");
+        assert_eq!(config.models.default_model_for_provider("codex"), "gpt-5.3-codex");
         assert_eq!(config.memory.as_ref().unwrap().rag.as_ref().unwrap().enabled, true);
         assert_eq!(config.memory.as_ref().unwrap().rag.as_ref().unwrap().vector_db, "lancedb");
         assert_eq!(config.ide.port, 7007);
@@ -275,6 +444,57 @@ retries = 0.1
         assert_eq!(config.models.default, "claude");
         assert_eq!(config.ide.port, 7007);
         assert_eq!(config.learning.enabled, false);
+    }
+
+    #[test]
+    fn models_config_resolves_provider_and_model() {
+        let config = Config::default();
+        assert_eq!(
+            config.models.resolve_provider_and_model(Some("codex")),
+            ("codex".to_string(), "gpt-5.3-codex".to_string())
+        );
+        assert_eq!(
+            config.models.resolve_provider_and_model(Some("claude-sonnet-4-6")),
+            ("claude".to_string(), "claude-sonnet-4-6".to_string())
+        );
+        assert_eq!(
+            config.models.resolve_provider_and_model(Some("gpt-5.4")),
+            ("codex".to_string(), "gpt-5.4".to_string())
+        );
+        assert_eq!(
+            config.models.resolve_provider_and_model(Some("ollama/phi4")),
+            ("ollama".to_string(), "phi4".to_string())
+        );
+    }
+
+    #[test]
+    fn structured_mcp_server_entries_parse() {
+        let config = Config::from_str(
+            r#"
+[mcp.servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+cwd = "/tmp"
+
+[mcp.servers.filesystem.env]
+NODE_ENV = "production"
+"#,
+        )
+        .unwrap();
+
+        let entry = config
+            .mcp
+            .as_ref()
+            .unwrap()
+            .servers
+            .get("filesystem")
+            .unwrap()
+            .to_server_config("filesystem");
+
+        assert_eq!(entry.command, "npx");
+        assert_eq!(entry.args[0], "-y");
+        assert_eq!(entry.cwd.as_deref(), Some("/tmp"));
+        assert_eq!(entry.env.get("NODE_ENV").map(String::as_str), Some("production"));
     }
 
     #[test]

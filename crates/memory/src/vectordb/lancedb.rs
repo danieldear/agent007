@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use arrow_array::{
-    FixedSizeListArray, RecordBatch, RecordBatchIterator, StringArray,
+    FixedSizeListArray, RecordBatch, StringArray,
     Float32Array, Array,
 };
 use arrow_schema::{DataType, Field, Schema};
@@ -93,11 +93,7 @@ impl VectorDB for LanceDBStore {
             vec![id_array, vector_array, payload_array],
         ).map_err(|e| MemoryError::VectorDb(e.to_string()))?;
 
-        let reader = RecordBatchIterator::new(
-            vec![Ok(batch)].into_iter(),
-            schema,
-        );
-        table.add(reader).execute().await
+        table.add(vec![batch]).execute().await
             .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
 
         Ok(())

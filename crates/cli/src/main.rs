@@ -1,9 +1,12 @@
 mod config;
 pub mod commands;
+mod built_in_skills;
+#[cfg(test)]
+mod test_support;
 
 use clap::{Parser, Subcommand};
-use commands::git::{GitArgs, GitAction};
-use commands::checkpoint::{CheckpointArgs, CheckpointAction};
+use commands::git::GitArgs;
+use commands::checkpoint::CheckpointArgs;
 
 pub use commands::workflow::WorkflowAction;
 
@@ -30,10 +33,32 @@ pub enum Commands {
         /// Use this if you want agent007 available in every project.
         #[arg(long, default_value_t = false)]
         global: bool,
+        /// Set up Claude Code integration (.claude/settings.json, commands, agents).
+        /// If neither --claude nor --cursor is specified, both are set up.
+        #[arg(long, default_value_t = false)]
+        claude: bool,
+        /// Set up Cursor integration (.cursor/mcp.json).
+        /// If no IDE flags are specified, Claude Code, Cursor, and Codex are all set up.
+        #[arg(long, default_value_t = false)]
+        cursor: bool,
+        /// Set up Codex integration (.codex/config.toml or ~/.codex/config.toml).
+        /// If no IDE flags are specified, Claude Code, Cursor, and Codex are all set up.
+        #[arg(long, default_value_t = false)]
+        codex: bool,
+        /// Skip all IDE integration — only create .agent007/ directory structure.
+        #[arg(long, default_value_t = false, conflicts_with_all = &["claude", "cursor", "codex"])]
+        no_ide: bool,
     },
-    /// Start as an MCP server (stdio transport)
+    /// Start as an MCP server (stdio transport) + web dashboard on --port (default 8007).
     /// Register with: claude mcp add agent007 /path/to/agent007 serve
-    Serve,
+    Serve {
+        /// Port for the web dashboard (default: 8007).
+        #[arg(long, default_value_t = 8007)]
+        port: u16,
+        /// Disable the web dashboard (MCP-only mode).
+        #[arg(long, default_value_t = false)]
+        no_dashboard: bool,
+    },
     /// Manage skills
     Skill(SkillArgs),
     /// Run simulation templates
@@ -169,9 +194,20 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = std::sync::Arc::new(crate::config::Config::load()?);
     match cli.command {
-        Commands::Init { force, global } => commands::init::execute(config, force, global).await,
+        Commands::Init { force, global, claude, cursor, codex, no_ide } => {
+            let (do_claude, do_cursor, do_codex) = if no_ide {
+                (false, false, false)
+            } else if !claude && !cursor && !codex {
+                (true, true, true)
+            } else {
+                (claude, cursor, codex)
+            };
+            commands::init::execute(config, force, global, do_claude, do_cursor, do_codex).await
+        }
         Commands::Run { task } => commands::run::execute(config, task).await,
-        Commands::Serve => commands::serve::execute(config).await,
+        Commands::Serve { port, no_dashboard } => {
+            commands::serve::execute(config, port, no_dashboard).await
+        }
         Commands::Skill(s) => commands::skill::execute(config, s.action).await,
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,
         Commands::Test(args) => commands::test_pipeline::execute(config, args).await,
@@ -186,8 +222,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Replay { session, model } => {
-            println!("session replay not yet implemented (session={}, model={})", session, model);
-            Ok(())
+            commands::replay::execute(config, session, model).await
         }
         Commands::Debug { max_iter, model } => {
             let stack = commands::run::build_stack(&config).await?;
@@ -256,6 +291,8 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use crate::commands::checkpoint::CheckpointAction;
+    use crate::commands::git::GitAction;
 
     #[test]
     fn parse_run_subcommand() {
@@ -278,7 +315,13 @@ mod tests {
     #[test]
     fn parse_serve_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "serve"]).unwrap();
-        assert!(matches!(cli.command, Commands::Serve));
+        assert!(matches!(cli.command, Commands::Serve { port: 8007, no_dashboard: false }));
+    }
+
+    #[test]
+    fn parse_serve_with_port_and_no_dashboard() {
+        let cli = Cli::try_parse_from(["agent007", "serve", "--port", "9000", "--no-dashboard"]).unwrap();
+        assert!(matches!(cli.command, Commands::Serve { port: 9000, no_dashboard: true }));
     }
 
     #[test]

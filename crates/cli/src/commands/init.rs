@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config::Config;
+use super::run::{selected_runtime_model, selected_runtime_provider, standalone_mode_available};
 
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
@@ -45,29 +46,60 @@ fn write_if_missing(path: &Path, content: &str, label: &str) -> Result<bool> {
     }
 }
 
-pub async fn execute(_config: std::sync::Arc<Config>, force: bool, global: bool) -> Result<()> {
-    let home = super::run::agent007_home();
-
-    // Determine the .claude/ directory to write MCP registration and commands into.
-    // Default: current project's .claude/ (project-scoped, doesn't affect other projects).
-    // --global: ~/.claude/ (available in every Claude Code project).
-    let claude_scope_dir = if global {
-        dirs_home().join(".claude")
+pub async fn execute(
+    config: std::sync::Arc<Config>,
+    force: bool,
+    global: bool,
+    do_claude: bool,
+    do_cursor: bool,
+    do_codex: bool,
+) -> Result<()> {
+    let home = if global {
+        super::run::agent007_global_home()
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| dirs_home())
-            .join(".claude")
+            .join(".agent007")
     };
-    let scope_label = if global { "~/.claude/ (global)" } else { ".claude/ (project)" };
+
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| dirs_home());
+    let claude_scope_dir = if global {
+        dirs_home().join(".claude")
+    } else {
+        project_dir.join(".claude")
+    };
+    let cursor_scope_dir = project_dir.join(".cursor");
+    let codex_scope_dir = if global {
+        dirs_home().join(".codex")
+    } else {
+        project_dir.join(".codex")
+    };
+    let scope_label = if global { "~/.agent007/ (global)" } else { ".agent007/ (project-local)" };
+    let mut ide_targets = Vec::new();
+    if do_claude {
+        ide_targets.push("Claude Code");
+    }
+    if do_cursor {
+        ide_targets.push("Cursor");
+    }
+    if do_codex {
+        ide_targets.push("Codex");
+    }
+    let ide_label = if ide_targets.is_empty() {
+        "none (--no-ide)".to_string()
+    } else {
+        ide_targets.join(" + ")
+    };
 
     println!();
     println!("{BOLD}{CYAN}agent007{RESET} — initializing your workspace");
     println!("{DIM}home: {}{RESET}", home.display());
     println!("{DIM}scope: {scope_label}{RESET}");
+    println!("{DIM}IDE:   {ide_label}{RESET}");
 
     // ── 1. Directory structure ──────────────────────────────────────────────
     section("1. Creating directory structure");
-    ensure_dir(&home, "~/.agent007/")?;
+    ensure_dir(&home, ".agent007/")?;
     ensure_dir(&home.join("skills"), "skills/")?;
     ensure_dir(&home.join("personas"), "personas/")?;
     ensure_dir(&home.join("workflows"), "workflows/")?;
@@ -88,6 +120,19 @@ pub async fn execute(_config: std::sync::Arc<Config>, force: bool, global: bool)
     let hooks_path = home.join("hooks").join("hooks.toml");
     write_if_missing(&hooks_path, DEFAULT_HOOKS, "hooks/hooks.toml")?;
 
+    // ── 3b. Seed built-in skills ─────────────────────────────────────────────
+    section("3b. Seeding built-in skills");
+    let skills_dir_seed = home.join("skills");
+    let mut built_in_skill_count = 0usize;
+    for (filename, content) in crate::built_in_skills::ALL_SKILLS {
+        if write_if_missing(&skills_dir_seed.join(filename), content, &format!("skills/{filename}"))? {
+            built_in_skill_count += 1;
+        }
+    }
+    if built_in_skill_count > 0 {
+        ok(&format!("{built_in_skill_count} built-in skills seeded"));
+    }
+
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
     let wf_dir = home.join("workflows");
@@ -96,89 +141,156 @@ pub async fn execute(_config: std::sync::Arc<Config>, force: bool, global: bool)
     write_if_missing(&wf_dir.join("sparc.yaml"),         WORKFLOW_SPARC,         "workflows/sparc.yaml")?;
     write_if_missing(&wf_dir.join("tdd.yaml"),           WORKFLOW_TDD,           "workflows/tdd.yaml")?;
 
-    // ── 5. Example custom agent ─────────────────────────────────────────────
-    section("5. Writing example custom agent");
-    let agent_path = home.join("personas").join("my-agent.toml");
-    write_if_missing(&agent_path, EXAMPLE_AGENT, "personas/my-agent.toml")?;
-
-    // ── 6. Claude Code MCP registration ────────────────────────────────────
-    // Write directly to <scope>/settings.json — no `claude` CLI required.
-    // Claude Code reads mcpServers on startup and auto-launches the server.
-    section("6. Registering MCP server with Claude Code");
-    let binary = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("agent007"));
-    register_mcp_in_settings(&binary, &claude_scope_dir, force)?;
-
-    // ── 7. Claude Code command files ───────────────────────────────────────
-    section("7. Installing slash commands for Claude Code");
-    let commands_dir = claude_scope_dir.join("commands");
-    if !commands_dir.exists() {
-        std::fs::create_dir_all(&commands_dir)?;
-        ok(&format!("{}/commands/ created", scope_label));
-    }
-
-    let skills_dir = home.join("skills");
-    let mut installed = 0usize;
-    if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let stem = path.file_stem().unwrap().to_string_lossy();
-            let cmd_file = commands_dir.join(format!("agent007-{stem}.md"));
-            if !cmd_file.exists() || force {
-                // Parse description from frontmatter
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                let description = content
-                    .lines()
-                    .find(|l| l.starts_with("description:"))
-                    .map(|l| l.trim_start_matches("description:").trim().to_string())
-                    .unwrap_or_else(|| format!("Run /agent007/{stem} skill"));
-                let trigger = format!("/agent007/{stem}");
-                let cmd_content = format!(
-                    "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
-                );
-                std::fs::write(&cmd_file, cmd_content)?;
-                installed += 1;
-            }
+    // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
+    section("5. Seeding built-in personas");
+    let personas_dir = home.join("personas");
+    let registry = agent007_personas::PersonaRegistry::built_in();
+    let personas = {
+        use agent007_core::PersonaProvider;
+        registry.list()
+    };
+    let mut persona_count = 0usize;
+    for spec in &personas {
+        let filename = spec.name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect::<String>()
+            .to_lowercase();
+        let path = personas_dir.join(format!("{filename}.toml"));
+        let tools_str = spec.allowed_tools.iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let content = format!(
+            "name            = \"{}\"\n\
+             description     = \"{}\"\n\
+             preferred_model = \"{}\"\n\
+             allowed_tools   = [{}]\n\
+             \n\
+             system_prompt   = \"\"\"\n\
+             {}\n\
+             \"\"\"\n",
+            spec.name,
+            spec.description.replace('"', "\\\""),
+            spec.preferred_model,
+            tools_str,
+            spec.system_prompt,
+        );
+        if write_if_missing(&path, &content, &format!("personas/{filename}.toml"))? {
+            persona_count += 1;
         }
     }
-    if installed > 0 {
-        ok(&format!("{installed} slash commands installed → {}/commands/", scope_label));
-    } else {
-        ok("All slash commands already installed");
+    if persona_count > 0 {
+        ok(&format!("{persona_count} persona files seeded"));
     }
 
-    // ── 8. Install Claude Code sub-agents ──────────────────────────────────
-    // These go in <scope>/.claude/agents/ so Claude Code can spawn them autonomously.
-    // The architect agent is the key one: it receives a natural-language instruction,
-    // picks the right workflow or composes one dynamically, runs it via MCP, and
-    // returns a synthesized report. It persists across sessions via the MCP server.
-    section("8. Installing Claude Code sub-agents");
-    let agents_dir = claude_scope_dir.join("agents");
-    if !agents_dir.exists() {
-        std::fs::create_dir_all(&agents_dir)?;
-        ok(&format!("{}/agents/ created", scope_label));
+    // ── 6. IDE integrations ─────────────────────────────────────────────────
+    let mut step = 6;
+
+    if do_claude {
+        section(&format!("{step}. Registering MCP server with Claude Code"));
+        register_mcp_in_settings("agent007", &claude_scope_dir, force)?;
+        step += 1;
+
+        section(&format!("{step}. Installing slash commands for Claude Code"));
+        let commands_dir = claude_scope_dir.join("commands");
+        if !commands_dir.exists() {
+            std::fs::create_dir_all(&commands_dir)?;
+            ok("commands/ created");
+        }
+
+        let skills_dir = home.join("skills");
+        let mut installed = 0usize;
+        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                let cmd_file = commands_dir.join(format!("agent007-{stem}.md"));
+                if !cmd_file.exists() || force {
+                    let content = std::fs::read_to_string(&path).unwrap_or_default();
+                    let description = content
+                        .lines()
+                        .find(|l| l.starts_with("description:"))
+                        .map(|l| l.trim_start_matches("description:").trim().to_string())
+                        .unwrap_or_else(|| format!("Run /{stem} skill"));
+                    let trigger = content
+                        .lines()
+                        .find(|l| l.starts_with("trigger:"))
+                        .map(|l| l.trim_start_matches("trigger:").trim().to_string())
+                        .unwrap_or_else(|| format!("/{stem}"));
+                    let cmd_content = format!(
+                        "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
+                    );
+                    std::fs::write(&cmd_file, cmd_content)?;
+                    installed += 1;
+                }
+            }
+        }
+        if installed > 0 {
+            ok(&format!("{installed} slash commands installed"));
+        } else {
+            ok("All slash commands already installed");
+        }
+        step += 1;
+
+        section(&format!("{step}. Installing Claude Code sub-agents"));
+        let agents_dir = claude_scope_dir.join("agents");
+        if !agents_dir.exists() {
+            std::fs::create_dir_all(&agents_dir)?;
+            ok("agents/ created");
+        }
+        write_if_missing(&agents_dir.join("agent007-architect.md"), CLAUDE_AGENT_ARCHITECT, "agents/agent007-architect.md")?;
+        write_if_missing(&agents_dir.join("agent007-analyst.md"),   CLAUDE_AGENT_ANALYST,   "agents/agent007-analyst.md")?;
+        step += 1;
     }
-    write_if_missing(&agents_dir.join("agent007-architect.md"), CLAUDE_AGENT_ARCHITECT, "agents/agent007-architect.md")?;
-    write_if_missing(&agents_dir.join("agent007-analyst.md"),   CLAUDE_AGENT_ANALYST,   "agents/agent007-analyst.md")?;
+
+    if do_cursor {
+        section(&format!("{step}. Registering MCP server with Cursor"));
+        register_cursor_mcp(&cursor_scope_dir, force)?;
+        step += 1;
+    }
+
+    if do_codex {
+        section(&format!("{step}. Registering MCP server with Codex"));
+        register_codex_mcp(&codex_scope_dir, force)?;
+        step += 1;
+    }
+
+    let _ = step;
 
     // ── 9. Environment check ───────────────────────────────────────────────
     section("9. Environment check");
 
-    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    if api_key.is_empty() {
-        warn("ANTHROPIC_API_KEY not set — skills will return placeholder responses");
-        info("Add to ~/.zshrc:  export ANTHROPIC_API_KEY=sk-ant-...");
-        info("Then restart Claude Code to pick it up");
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    if anthropic_key.is_empty() {
+        info("ANTHROPIC_API_KEY not set");
     } else {
-        ok(&format!("ANTHROPIC_API_KEY set ({} chars)", api_key.len()));
+        ok(&format!("ANTHROPIC_API_KEY set ({} chars)", anthropic_key.len()));
+    }
+    if openai_key.is_empty() {
+        info("OPENAI_API_KEY not set");
+    } else {
+        ok(&format!("OPENAI_API_KEY set ({} chars)", openai_key.len()));
+    }
+    if standalone_mode_available(&config) {
+        let provider = selected_runtime_provider(&config)
+            .unwrap_or_else(|| "unknown".to_string());
+        let model = selected_runtime_model(&config)
+            .unwrap_or_else(|| "unknown".to_string());
+        ok(&format!("standalone mode available via {provider} ({model})"));
+    } else {
+        info("No standalone provider configured — hosted MCP mode active (host LLM handles reasoning via MCP)");
+        info("Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or [models.ollama] for standalone mode");
     }
 
     let git_ok = std::process::Command::new("git").arg("--version").output().is_ok();
     if git_ok { ok("git available") } else { warn("git not found in PATH") }
 
-    // ── 9. Summary ─────────────────────────────────────────────────────────
+    // ── 10. Summary ────────────────────────────────────────────────────────
     let skill_count = std::fs::read_dir(&home.join("skills"))
         .map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md")).count())
         .unwrap_or(0);
@@ -189,36 +301,33 @@ pub async fn execute(_config: std::sync::Arc<Config>, force: bool, global: bool)
     println!("{BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
     println!();
     println!("  Home:        {DIM}{}{RESET}", home.display());
+    println!("  Personas:    {GREEN}{}{RESET} available", personas.len());
     println!("  Skills:      {GREEN}{skill_count}{RESET} loaded");
+    println!("  Workflows:   {GREEN}4{RESET} built-in (log-analysis, code-review, sparc, tdd)");
     println!("  MCP server:  {GREEN}agent007 serve{RESET}");
-    println!("  Dashboard:   {CYAN}agent007 dashboard{RESET}");
+    println!("  Dashboard:   {CYAN}http://localhost:8007{RESET} (auto-starts with serve)");
+    println!("  IDE:         {GREEN}{ide_label}{RESET}");
     println!();
-    println!("{DIM}Quick start:{RESET}");
-    println!("  agent007 run \"explain the main function in this project\"");
-    println!("  agent007 dashboard");
-    println!("  /agent007-explain <code>  (in Claude Code)");
-    println!();
-
-    if api_key.is_empty() {
-        println!("{YELLOW}Next step: set ANTHROPIC_API_KEY to enable real model execution{RESET}");
-        println!();
+    if !standalone_mode_available(&config) {
+        println!("{DIM}Mode: hosted-mcp (host LLM handles reasoning via MCP){RESET}");
+    } else {
+        println!("{DIM}Mode: standalone (agent007 makes its own API calls){RESET}");
     }
+    println!();
+    println!("{DIM}Quick start (from Claude Code / Cursor / Codex):{RESET}");
+    println!("  Use agent007 tools via MCP for hosted mode");
+    println!("  Or configure Ollama / OPENAI_API_KEY / ANTHROPIC_API_KEY for standalone execution");
+    println!("  Codex uses mcp_servers.agent007 from .codex/config.toml");
+    println!();
 
     Ok(())
 }
 
 /// Write (or merge) the agent007 MCP server entry into <claude_dir>/settings.json.
-/// `claude_dir` is either the project's `.claude/` or the global `~/.claude/`.
-fn register_mcp_in_settings(binary: &Path, claude_dir: &Path, force: bool) -> Result<()> {
+/// Uses `cmd` as the command name (typically `"agent007"` from PATH).
+fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result<()> {
     let settings_path = claude_dir.join("settings.json");
 
-    // Canonicalize the binary path so it has no `../` segments — Claude Code
-    // needs a clean absolute path regardless of where `agent007 init` was run.
-    let canonical = binary
-        .canonicalize()
-        .unwrap_or_else(|_| binary.to_path_buf());
-
-    // Read existing JSON or start with empty object
     let mut root: serde_json::Value = if settings_path.exists() {
         let raw = std::fs::read_to_string(&settings_path)?;
         serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
@@ -234,35 +343,114 @@ fn register_mcp_in_settings(binary: &Path, claude_dir: &Path, force: bool) -> Re
         .as_object_mut()
         .unwrap();
 
-    // Always update the path if force, or if the path changed (e.g. binary moved)
-    let existing_cmd = servers
-        .get("agent007")
-        .and_then(|v| v.get("command"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let new_cmd = canonical.to_string_lossy();
-
-    if servers.contains_key("agent007") && !force && existing_cmd == new_cmd.as_ref() {
-        ok(&format!("agent007 already registered → {}", new_cmd));
+    if servers.contains_key("agent007") && !force {
+        ok(&format!("agent007 already registered in {}", settings_path.display()));
         return Ok(());
     }
 
     let entry = serde_json::json!({
-        "command": new_cmd,
+        "command": cmd,
         "args": ["serve"]
     });
     servers.insert("agent007".to_string(), entry);
 
-    // Ensure parent dir exists
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-    ok(&format!("Wrote mcpServers.agent007 → {}", new_cmd));
+    ok(&format!("Wrote mcpServers.agent007 → {cmd}"));
     ok(&format!("  config: {}", settings_path.display()));
     println!();
-    warn("Restart Claude Code to activate the MCP server in existing sessions");
+    warn("Restart Claude Code to activate the MCP server");
     info("New Claude Code windows will pick it up automatically");
+    Ok(())
+}
+
+/// Write the agent007 MCP server entry into <cursor_dir>/mcp.json.
+fn register_cursor_mcp(cursor_dir: &Path, force: bool) -> Result<()> {
+    let mcp_path = cursor_dir.join("mcp.json");
+
+    let mut root: serde_json::Value = if mcp_path.exists() {
+        let raw = std::fs::read_to_string(&mcp_path)?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+    } else {
+        serde_json::Value::Object(serde_json::Map::new())
+    };
+
+    let servers = root
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    if servers.contains_key("agent007") && !force {
+        ok(&format!("agent007 already registered in {}", mcp_path.display()));
+        return Ok(());
+    }
+
+    let entry = serde_json::json!({
+        "command": "agent007",
+        "args": ["serve"]
+    });
+    servers.insert("agent007".to_string(), entry);
+
+    if let Some(parent) = mcp_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&mcp_path, serde_json::to_string_pretty(&root)?)?;
+    ok(&format!("Wrote mcpServers.agent007 → agent007"));
+    ok(&format!("  config: {}", mcp_path.display()));
+    println!();
+    info("Restart Cursor to activate the MCP server");
+    Ok(())
+}
+
+/// Write the agent007 MCP server entry into <codex_dir>/config.toml.
+fn register_codex_mcp(codex_dir: &Path, force: bool) -> Result<()> {
+    let config_path = codex_dir.join("config.toml");
+
+    let mut root: toml::Value = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        toml::from_str(&raw).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let servers = root
+        .as_table_mut()
+        .unwrap()
+        .entry("mcp_servers")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .unwrap();
+
+    if servers.contains_key("agent007") && !force {
+        ok(&format!("agent007 already registered in {}", config_path.display()));
+        return Ok(());
+    }
+
+    let mut entry = toml::map::Map::new();
+    entry.insert("command".to_string(), toml::Value::String("agent007".to_string()));
+    entry.insert(
+        "args".to_string(),
+        toml::Value::Array(vec![
+            toml::Value::String("serve".to_string()),
+            toml::Value::String("--no-dashboard".to_string()),
+        ]),
+    );
+    servers.insert("agent007".to_string(), toml::Value::Table(entry));
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&config_path, toml::to_string_pretty(&root)?)?;
+    ok("Wrote mcp_servers.agent007 → agent007");
+    ok(&format!("  config: {}", config_path.display()));
+    println!();
+    warn("Restart Codex to activate the MCP server");
+    info("Codex uses `serve --no-dashboard` by default for stdio MCP mode");
     Ok(())
 }
 
@@ -282,9 +470,24 @@ max_agents = 8
 task_queue_capacity = 256
 
 [models]
-default = "claude-sonnet-4-6"
-# To use a different model, change the above.
-# Available: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001
+default = "codex"
+
+[models.routing]
+code_completion = "codex"
+reasoning = "codex"
+sensitive = "claude"
+fast_local = "ollama"
+
+[models.codex]
+default_model = "gpt-5.3-codex"
+
+[models.claude]
+default_model = "claude-sonnet-4-6"
+
+# Uncomment to enable local standalone execution via Ollama.
+# [models.ollama]
+# base_url = "http://localhost:11434"
+# default_model = "llama3"
 
 [learning]
 [learning.reward_weights]
@@ -323,6 +526,7 @@ command  = "echo 'agent007: tool blocked by zone policy'"
 enabled  = false
 "#;
 
+#[allow(dead_code)]
 const EXAMPLE_WORKFLOW: &str = r#"# Example multi-agent workflow
 name: code-review-workflow
 description: Full code review — research, review, test suggestions
@@ -644,12 +848,13 @@ When given logs, code, or a system description to analyze:
 Be direct and actionable. Focus on what matters most.
 "#;
 
+#[allow(dead_code)]
 const EXAMPLE_AGENT: &str = r#"# Example custom agent persona
 # Save to ~/.agent007/personas/<name>.toml
 
 name            = "MyAgent"
 description     = "A custom agent for my specific workflow"
-preferred_model = "claude-sonnet-4-6"
+preferred_model = "codex"
 allowed_tools   = ["read_file", "write_file", "run_command"]
 
 system_prompt   = """

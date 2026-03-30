@@ -111,29 +111,8 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
             copy_skill_to_dir(std::path::Path::new(&path), &skills_dir)
         }
         SkillAction::Run { trigger, args } => {
-            // Build a minimal stack and call run_skill()
-            let is_dry_run = std::env::var("AGENT007_DRY_RUN").is_ok();
-
-            // ModelRouter: real ClaudeProvider if ANTHROPIC_API_KEY is set, else MockProvider
-            let router = Arc::new({
-                let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-                if is_dry_run || api_key.is_empty() {
-                    if !is_dry_run && api_key.is_empty() {
-                        eprintln!("warning: ANTHROPIC_API_KEY not set — using mock provider");
-                    }
-                    let mock = Arc::new(agent007_models::MockProvider::new("dry-run response", "mock"));
-                    let mut r = agent007_models::ModelRouter::new("mock");
-                    r.register("mock", mock as Arc<dyn agent007_models::ModelProvider>);
-                    r
-                } else {
-                    let model = config.models.default.as_str();
-                    let model = if model.is_empty() || model == "mock" { "claude-sonnet-4-6" } else { model };
-                    let claude = Arc::new(agent007_models::ClaudeProvider::new(&api_key, model));
-                    let mut r = agent007_models::ModelRouter::new("claude");
-                    r.register("claude", claude as Arc<dyn agent007_models::ModelProvider>);
-                    r
-                }
-            });
+            let is_dry_run = crate::commands::run::is_dry_run();
+            let router = Arc::new(crate::commands::run::build_model_router(&config, is_dry_run));
 
             // Embedding provider + VectorDB for the Retriever
             let embedder = Arc::new(agent007_models::MockProvider::with_embedding_dim(
@@ -177,11 +156,7 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
 }
 
 fn default_skills_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".agent007")
-        .join("skills")
+    crate::commands::run::agent007_home().join("skills")
 }
 
 #[cfg(test)]

@@ -9,8 +9,11 @@ agent007-learning = { path = "../learning" }
 agent007-skills   = { path = "../skills" }
 agent007-models   = { path = "../models" }
 agent007-memory   = { path = "../memory" }
+agent007-personas = { path = "../personas" }
+agent007-workflows = { path = "../workflows" }
 axum              = { workspace = true }
 tower             = { workspace = true }
+tower-http        = { version = "0.6", features = ["fs"] }
 tokio             = { workspace = true }
 tokio-util        = { workspace = true }
 tokio-stream      = { workspace = true }
@@ -22,6 +25,8 @@ tracing           = { workspace = true }
 async-trait       = { workspace = true }
 futures           = { workspace = true }
 tempfile          = { workspace = true }
+chrono            = { workspace = true }
+reqwest           = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 [dev-dependencies]
 tokio        = { workspace = true }

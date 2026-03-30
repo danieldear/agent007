@@ -1,0 +1,32 @@
+<script setup>
+import { ref, computed } from 'vue'
+import { useWebSocket } from './composables/useWebSocket.js'
+import Sidebar from './components/Sidebar.vue'
+import DashboardView from './views/DashboardView.vue'
+import AgentsView from './views/AgentsView.vue'
+import SkillsView from './views/SkillsView.vue'
+import WorkflowsView from './views/WorkflowsView.vue'
+import MemoryView from './views/MemoryView.vue'
+
+const currentView = ref('dashboard')
+const { connected, events, stats } = useWebSocket()
+
+const views = {
+  dashboard: DashboardView,
+  agents: AgentsView,
+  skills: SkillsView,
+  workflows: WorkflowsView,
+  memory: MemoryView,
+}
+
+const ActiveView = computed(() => views[currentView.value] || DashboardView)
+</script>
+
+<template>
+  <div class="flex h-screen bg-base-300 text-base-content">
+    <Sidebar :current="currentView" :connected="connected" @navigate="currentView = $event" />
+    <main class="flex-1 overflow-hidden flex flex-col">
+      <component :is="ActiveView" :events="events" :connected="connected" :stats="stats" />
+    </main>
+  </div>
+</template>

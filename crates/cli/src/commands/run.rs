@@ -1,11 +1,13 @@
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::Config;
 use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::orchestrator::OrchestratorAgent;
+use agent007_core::run_store::RunStore;
 use agent007_core::task::Task;
 use agent007_core::types::PromptStore;
 use agent007_memory::store::MemoryStore;
@@ -16,31 +18,21 @@ use agent007_mcp::{McpClient, McpServerConfig};
 use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
 use agent007_learning::scorer::RewardWeights;
 use agent007_learning::store::LearningStore;
-use agent007_models::{MockProvider, ModelProvider, ModelRouter};
+use agent007_models::{ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter, OllamaProvider};
 use agent007_skills::SkillExecutor;
 use agent007_tui::{App, EventLoop};
 use agent007_personas::PersonaRegistry;
 use agent007_zones::{AuditLogger, ZoneChecker, ZoneConfig};
 use agent007_core::tool_executor::ToolExecutor;
 
-/// Return the agent007 home directory.
-/// Checks AGENT007_HOME first, then falls back to $HOME/.agent007.
-pub fn agent007_home() -> std::path::PathBuf {
-    std::env::var("AGENT007_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".agent007")
-        })
-}
+pub use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home};
 
 pub struct Stack {
     pub dispatcher: Arc<LocalDispatcher>,
+    pub run_store: Arc<RunStore>,
     pub memory_store: Arc<MemoryStore>,
     pub hook_executor: Arc<HookExecutor>,
-    pub mcp_client: Arc<McpClient>,
+    pub mcp_client: Arc<AsyncMutex<McpClient>>,
     pub feedback_collector: Arc<FeedbackCollector>,
     pub learning_dispatcher: Arc<LearningDispatcher>,
     pub model_router: Arc<ModelRouter>,
@@ -53,6 +45,198 @@ pub struct Stack {
     pub workflow_runner: Arc<agent007_workflows::WorkflowRunner>,
     pub cancel: CancellationToken,
     pub tracker: TaskTracker,
+}
+
+pub fn is_dry_run() -> bool {
+    std::env::var("AGENT007_DRY_RUN").is_ok()
+}
+
+pub fn has_anthropic_api_key() -> bool {
+    std::env::var("ANTHROPIC_API_KEY")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn has_openai_api_key() -> bool {
+    std::env::var("OPENAI_API_KEY")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn standalone_mode_available(config: &Config) -> bool {
+    is_dry_run() || has_anthropic_api_key() || has_openai_api_key() || config.models.ollama.is_some()
+}
+
+pub fn runtime_mode_label(config: &Config) -> &'static str {
+    if is_dry_run() {
+        "dry-run"
+    } else if selected_runtime_provider(config).as_deref() == Some("ollama") {
+        "local-ollama"
+    } else if standalone_mode_available(config) {
+        "standalone"
+    } else {
+        "hosted-mcp"
+    }
+}
+
+pub fn available_runtime_providers(config: &Config) -> Vec<String> {
+    if is_dry_run() {
+        return vec!["mock".to_string()];
+    }
+
+    let mut providers = Vec::new();
+    if has_anthropic_api_key() {
+        providers.push("claude".to_string());
+    }
+    if has_openai_api_key() {
+        providers.push("codex".to_string());
+    }
+    if config.models.ollama.is_some() {
+        providers.push("ollama".to_string());
+    }
+    providers
+}
+
+pub fn selected_runtime_provider(config: &Config) -> Option<String> {
+    let available = available_runtime_providers(config);
+    if available.is_empty() {
+        return None;
+    }
+
+    let requested = config.models.default_provider();
+    if available.iter().any(|provider| provider == &requested) {
+        Some(requested)
+    } else {
+        Some(available[0].clone())
+    }
+}
+
+pub fn selected_runtime_model(config: &Config) -> Option<String> {
+    selected_runtime_provider(config)
+        .map(|provider| config.models.default_model_for_provider(&provider))
+}
+
+pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
+    if is_dry_run {
+        let mock = Arc::new(MockProvider::new("dry-run response", "mock"));
+        let mut router = ModelRouter::new("mock");
+        router.register("mock", mock as Arc<dyn ModelProvider>);
+        return router;
+    }
+
+    let mut router = ModelRouter::new("mock");
+    let mut available = Vec::new();
+
+    if has_anthropic_api_key() {
+        let model = config.models.default_model_for_provider("claude");
+        let claude = Arc::new(ClaudeProvider::new(
+            &std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+            &model,
+        ));
+        router.register("claude", claude as Arc<dyn ModelProvider>);
+        router.alias(&model, "claude");
+        available.push("claude".to_string());
+    }
+
+    if has_openai_api_key() {
+        let model = config.models.default_model_for_provider("codex");
+        let codex = Arc::new(CodexProvider::new(
+            &std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            &model,
+        ));
+        router.register("codex", codex as Arc<dyn ModelProvider>);
+        router.alias(&model, "codex");
+        available.push("codex".to_string());
+    }
+
+    if let Some(ollama) = &config.models.ollama {
+        let model = ollama.default_model.clone();
+        let provider = Arc::new(OllamaProvider::new(&ollama.base_url, &model));
+        router.register("ollama", provider.clone() as Arc<dyn ModelProvider>);
+        router.alias(&model, "ollama");
+        router.alias(&format!("ollama/{model}"), "ollama");
+        available.push("ollama".to_string());
+    }
+
+    if available.is_empty() {
+        tracing::warn!(
+            "no real model providers configured — falling back to mock responses (set ANTHROPIC_API_KEY, OPENAI_API_KEY, or [models.ollama])"
+        );
+        let mock = Arc::new(MockProvider::new(
+            "[configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or [models.ollama] to enable real responses]",
+            "mock",
+        ));
+        router.register("mock", mock as Arc<dyn ModelProvider>);
+        return router;
+    }
+
+    let requested_default = config.models.default_provider();
+    let default_provider = if available.iter().any(|provider| provider == &requested_default) {
+        requested_default
+    } else {
+        let fallback = available[0].clone();
+        tracing::warn!(
+            requested = %config.models.default,
+            fallback = %fallback,
+            "configured default provider is unavailable; falling back to first available provider"
+        );
+        fallback
+    };
+    router = ModelRouter::new(&default_provider);
+
+    if has_anthropic_api_key() {
+        let model = config.models.default_model_for_provider("claude");
+        let claude = Arc::new(ClaudeProvider::new(
+            &std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+            &model,
+        ));
+        router.register("claude", claude as Arc<dyn ModelProvider>);
+        router.alias(&model, "claude");
+    }
+
+    if has_openai_api_key() {
+        let model = config.models.default_model_for_provider("codex");
+        let codex = Arc::new(CodexProvider::new(
+            &std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            &model,
+        ));
+        router.register("codex", codex as Arc<dyn ModelProvider>);
+        router.alias(&model, "codex");
+    }
+
+    if let Some(ollama) = &config.models.ollama {
+        let model = ollama.default_model.clone();
+        let provider = Arc::new(OllamaProvider::new(&ollama.base_url, &model));
+        router.register("ollama", provider.clone() as Arc<dyn ModelProvider>);
+        router.alias(&model, "ollama");
+        router.alias(&format!("ollama/{model}"), "ollama");
+    }
+
+    if let Some(routing) = &config.models.routing {
+        for (task_type, provider) in [
+            ("code_completion", routing.code_completion.as_deref()),
+            ("reasoning", routing.reasoning.as_deref()),
+            ("fast_local", routing.fast_local.as_deref()),
+            ("sensitive", routing.sensitive.as_deref()),
+            ("default", routing.default.as_deref()),
+        ] {
+            if let Some(provider) = provider {
+                let (provider_name, model_name) = config.models.resolve_provider_and_model(Some(provider));
+                router.add_rule(task_type, &provider_name);
+                if model_name != provider_name {
+                    router.alias(&model_name, &provider_name);
+                }
+            }
+        }
+    }
+
+    let (default_provider_name, default_model_name) =
+        config.models.resolve_provider_and_model(Some(&config.models.default));
+    if default_model_name != default_provider_name {
+        router.alias(&default_model_name, &default_provider_name);
+    }
+
+    router
 }
 
 pub async fn build_stack(config: &Config) -> Result<Stack> {
@@ -68,6 +252,11 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     let memory_dir = home.join("memory");
     let memory_store = Arc::new(MemoryStore::new(memory_dir));
 
+    // 2b. Durable run/session store
+    let sessions_dir = home.join("sessions");
+    std::fs::create_dir_all(&sessions_dir)?;
+    let run_store = Arc::new(RunStore::new(sessions_dir));
+
     // 3. Hook executor — load from file or use defaults
     let hooks_path = home.join("hooks").join("hooks.toml");
     let hook_config = HookConfig::load(&hooks_path).unwrap_or_default();
@@ -80,14 +269,15 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         .map(|m| {
             m.servers
                 .iter()
-                .map(|(name, cmd)| McpServerConfig {
-                    name: name.clone(),
-                    command: cmd.clone(),
-                })
+                .map(|(name, entry)| entry.to_server_config(name))
                 .collect()
         })
         .unwrap_or_default();
-    let mcp_client = Arc::new(McpClient::new(mcp_servers));
+    let mut mcp_client = McpClient::new(mcp_servers);
+    if let Err(error) = mcp_client.connect().await {
+        tracing::warn!("failed to connect configured MCP servers: {error}");
+    }
+    let mcp_client = Arc::new(AsyncMutex::new(mcp_client));
 
     // 5. Learning dispatcher — new() returns Self, wrap in Arc
     let learning_dispatcher = Arc::new(LearningDispatcher::new(512));
@@ -113,33 +303,8 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     ));
 
     // 9. ModelRouter — use MockProvider if AGENT007_DRY_RUN=1, else real ClaudeProvider
-    let is_dry_run = std::env::var("AGENT007_DRY_RUN").is_ok();
-    let model_router = if is_dry_run {
-        let mock = Arc::new(MockProvider::new("dry-run response", "mock"));
-        let mut router = ModelRouter::new("mock");
-        router.register("mock", mock as Arc<dyn ModelProvider>);
-        router
-    } else {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-        let cfg_model = config.models.default.as_str();
-        let model = if cfg_model.is_empty() || cfg_model == "mock" {
-            "claude-sonnet-4-6"
-        } else {
-            cfg_model
-        };
-        if api_key.is_empty() {
-            tracing::warn!("ANTHROPIC_API_KEY not set — skills will return placeholder responses");
-            let mock = Arc::new(MockProvider::new("[set ANTHROPIC_API_KEY to enable real responses]", "mock"));
-            let mut router = ModelRouter::new("mock");
-            router.register("mock", mock as Arc<dyn ModelProvider>);
-            router
-        } else {
-            let claude = Arc::new(agent007_models::ClaudeProvider::new(&api_key, model));
-            let mut router = ModelRouter::new("claude");
-            router.register("claude", claude as Arc<dyn ModelProvider>);
-            router
-        }
-    };
+    let is_dry_run = is_dry_run();
+    let model_router = build_model_router(config, is_dry_run);
     let model_router = Arc::new(model_router);
 
     // 10. SkillExecutor — needs Retriever (EmbeddingProvider + VectorDB) + ScopedMemoryStore
@@ -191,7 +356,9 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     let tool_executor = Arc::new(
         ToolExecutor::new("OrchestratorAgent")
             .with_zone_checker(zone_checker.clone())
-            .with_audit_logger(audit_logger.clone()),
+            .with_audit_logger(audit_logger.clone())
+            .with_dispatcher(dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>)
+            .with_mcp_client(mcp_client.clone()),
     );
 
     // 13. OrchestratorAgent
@@ -215,6 +382,7 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
 
     Ok(Stack {
         dispatcher,
+        run_store,
         memory_store,
         hook_executor,
         mcp_client,
@@ -285,6 +453,19 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
 
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
+    let mode = runtime_mode_label(&config);
+    let provider = selected_runtime_provider(&config)
+        .unwrap_or_else(|| "hosted-mcp".to_string());
+    let run = stack
+        .run_store
+        .create_run("task", &task, mode, Some(provider.as_str()))?;
+    let _trace = stack
+        .run_store
+        .spawn_dispatcher_trace(
+            run.id.clone(),
+            stack.dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
+        )
+        .await?;
 
     // Spawn feedback collector
     let collector = stack.feedback_collector.clone();
@@ -294,34 +475,48 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         }
     });
 
+    // When AGENT007_DRY_RUN=1, skip the TUI and execute synchronously so the
+    // run trace is fully persisted before returning.
+    if std::env::var("AGENT007_DRY_RUN").is_ok() {
+        let agent_task = Task::new(&task);
+        match stack.orchestrator.run(agent_task).await {
+            Ok(result) => {
+                let _ = stack.run_store.finish_run(&run.id, true, &result.output);
+                tracing::info!("task completed: {}", result.output);
+            }
+            Err(error) => {
+                let _ = stack.run_store.finish_run(&run.id, false, error.to_string());
+                return Err(error.into());
+            }
+        }
+        stack.cancel.cancel();
+        stack.tracker.close();
+        return Ok(());
+    }
+
     // Submit the task to the orchestrator
     let orchestrator = stack.orchestrator.clone();
+    let run_store = stack.run_store.clone();
+    let run_id = run.id.clone();
     let task_desc = task.clone();
     stack.tracker.spawn(async move {
         let agent_task = Task::new(&task_desc);
         match orchestrator.run(agent_task).await {
             Ok(result) => {
+                let _ = run_store.finish_run(&run_id, true, &result.output);
                 tracing::info!("task completed: {}", result.output);
             }
             Err(e) => {
+                let _ = run_store.finish_run(&run_id, false, e.to_string());
                 tracing::warn!("task failed: {}", e);
             }
         }
     });
 
-    // When AGENT007_DRY_RUN=1, skip the TUI and just return Ok
-    if std::env::var("AGENT007_DRY_RUN").is_ok() {
-        stack.cancel.cancel();
-        stack.tracker.close();
-        // Do not await tracker.wait() in dry-run: the feedback-collector task holds a
-        // broadcast stream that never ends, so waiting would block forever. The process
-        // (or test) will clean up background tasks on drop.
-        return Ok(());
-    }
-
     // Construct App and EventLoop
     let mut app = App::default();
     app.push_log(format!("Starting task: {}", task));
+    app.push_log(format!("Run ID: {}", run.id));
 
     let event_loop = EventLoop::new(
         stack.dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
@@ -339,12 +534,11 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::Config;
-
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::test_support::env_lock;
 
     #[tokio::test]
     async fn run_command_builds_stack_without_panic() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
@@ -355,19 +549,18 @@ mod tests {
 
     #[tokio::test]
     async fn build_stack_contains_persona_registry_with_builtins() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
-        // PersonaRegistry must expose at least 10 built-in personas
         use agent007_core::PersonaProvider;
-        assert!(stack.persona_registry.list().len() >= 10);
+        assert!(stack.persona_registry.list().len() >= 15);
         std::env::remove_var("AGENT007_DRY_RUN");
     }
 
     #[tokio::test]
     async fn e2e_smoke_run_with_dry_run() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
         let config = Arc::new(Config::default());
         let result = execute(config, "say hello".to_string()).await;
@@ -377,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn stack_contains_workflow_runner() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
@@ -392,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_stack_creates_workflows_dir() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());

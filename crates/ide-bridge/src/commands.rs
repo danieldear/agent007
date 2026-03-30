@@ -179,14 +179,23 @@ pub(crate) async fn handle_skill_run(
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn agent007_home() -> std::path::PathBuf {
-    std::env::var("AGENT007_HOME")
+    if let Ok(p) = std::env::var("AGENT007_HOME") {
+        return std::path::PathBuf::from(p);
+    }
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    loop {
+        let candidate = dir.join(".agent007");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    std::env::var("HOME")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".agent007")
-        })
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".agent007")
 }
 
 /// Parse YAML frontmatter from a skill `.md` file into a JSON object with

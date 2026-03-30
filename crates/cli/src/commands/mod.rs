@@ -9,5 +9,6 @@ pub mod test_pipeline;
 pub mod persona;
 pub mod git;
 pub mod checkpoint;
+pub mod replay;
 pub mod workflow;
 pub mod audit;

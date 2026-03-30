@@ -2,13 +2,23 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
+
+use agent007_mcp::{McpClient, ToolDef};
 use agent007_zones::{AuditEntry, AuditLogger, FileOp, ZoneChecker, ZoneViolation};
 
-/// Stub ToolExecutor — enforces zone rules on every file operation.
-/// Future phases will add actual tool dispatch logic here.
+use crate::dispatcher::Dispatcher;
+use crate::error::CoreError;
+use crate::events::{AgentEvent, ToolCall};
+use crate::types::AgentId;
+
+/// ToolExecutor enforces zone rules and brokers downstream tool calls.
 pub struct ToolExecutor {
     zone_checker: Option<Arc<ZoneChecker>>,
     audit_logger: Option<Arc<AuditLogger>>,
+    dispatcher: Option<Arc<dyn Dispatcher>>,
+    mcp_client: Option<Arc<AsyncMutex<McpClient>>>,
     agent_name: String,
 }
 
@@ -17,6 +27,8 @@ impl ToolExecutor {
         Self {
             zone_checker: None,
             audit_logger: None,
+            dispatcher: None,
+            mcp_client: None,
             agent_name: agent_name.into(),
         }
     }
@@ -28,6 +40,16 @@ impl ToolExecutor {
 
     pub fn with_audit_logger(mut self, logger: Arc<AuditLogger>) -> Self {
         self.audit_logger = Some(logger);
+        self
+    }
+
+    pub fn with_dispatcher(mut self, dispatcher: Arc<dyn Dispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
+    }
+
+    pub fn with_mcp_client(mut self, client: Arc<AsyncMutex<McpClient>>) -> Self {
+        self.mcp_client = Some(client);
         self
     }
 
@@ -57,6 +79,41 @@ impl ToolExecutor {
         }
 
         result
+    }
+
+    pub async fn list_mcp_tools(&self) -> Result<Vec<ToolDef>, CoreError> {
+        let client = self
+            .mcp_client
+            .as_ref()
+            .ok_or_else(|| CoreError::NotConfigured("MCP client not configured".to_string()))?;
+        let locked = client.lock().await;
+        locked.list_tools().await.map_err(CoreError::from)
+    }
+
+    pub async fn call_mcp_tool(
+        &self,
+        agent_id: &AgentId,
+        tool_name: &str,
+        args: Value,
+    ) -> Result<Value, CoreError> {
+        if let Some(dispatcher) = &self.dispatcher {
+            dispatcher
+                .publish(AgentEvent::ToolCall {
+                    agent_id: agent_id.clone(),
+                    tool: ToolCall {
+                        name: tool_name.to_string(),
+                        args: args.clone(),
+                    },
+                })
+                .await?;
+        }
+
+        let client = self
+            .mcp_client
+            .as_ref()
+            .ok_or_else(|| CoreError::NotConfigured("MCP client not configured".to_string()))?;
+        let locked = client.lock().await;
+        locked.call_tool(tool_name, args).await.map_err(CoreError::from)
     }
 }
 
@@ -142,5 +199,12 @@ mod tests {
         let ex = ToolExecutor::new("Bare");
         // No checker attached — all ops pass
         assert!(ex.check_zone(Path::new("secrets/very_sensitive"), FileOp::Delete).is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_mcp_tools_without_client_returns_error() {
+        let ex = ToolExecutor::new("Bare");
+        let result = ex.list_mcp_tools().await;
+        assert!(matches!(result, Err(CoreError::NotConfigured(_))));
     }
 }

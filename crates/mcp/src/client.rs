@@ -50,10 +50,7 @@ impl McpClient {
         for config in &self.servers {
             tracing::info!(server = %config.name, command = %config.command, "connecting to MCP server");
 
-            // Spawn via `sh -c` so that quoted paths and shell metacharacters
-            // in the command string are handled correctly.
-            let mut cmd = tokio::process::Command::new("sh");
-            cmd.arg("-c").arg(&config.command);
+            let cmd = build_command(config);
 
             let transport = TokioChildProcess::new(cmd).map_err(|e| McpError::ServerStartFailed {
                 name: config.name.clone(),
@@ -183,6 +180,27 @@ impl McpClient {
     }
 }
 
+fn build_command(config: &McpServerConfig) -> tokio::process::Command {
+    let uses_shell = config.args.is_empty() && config.command.split_whitespace().count() > 1;
+    let mut cmd = if uses_shell {
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(&config.command);
+        command
+    } else {
+        let mut command = tokio::process::Command::new(&config.command);
+        command.args(&config.args);
+        command
+    };
+
+    if let Some(cwd) = &config.cwd {
+        cmd.current_dir(cwd);
+    }
+    if !config.env.is_empty() {
+        cmd.envs(&config.env);
+    }
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     // NOTE: per spec, test against a local rmcp test server — do NOT use npx subprocess in CI.
@@ -236,5 +254,21 @@ mod tests {
         assert_eq!(def.name, "my_tool");
         assert_eq!(def.description.as_deref(), Some("does something"));
         assert_eq!(def.input_schema["type"], "object");
+    }
+
+    #[test]
+    fn build_command_uses_structured_args_without_shell() {
+        let config = McpServerConfig {
+            name: "filesystem".to_string(),
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "server".to_string()],
+            env: HashMap::new(),
+            cwd: Some("/tmp".to_string()),
+        };
+        let command = build_command(&config);
+        let debug = format!("{command:?}");
+        assert!(debug.contains("\"npx\""));
+        assert!(debug.contains("\"-y\""));
+        assert!(debug.contains("/tmp"));
     }
 }

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 agent007-core     = { path = "../core" }
 agent007-models   = { path = "../models" }
+agent007-skills   = { path = "../skills" }
 thiserror         = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }

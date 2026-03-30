@@ -4,10 +4,11 @@ use anyhow::Result;
 use agent007_core::PersonaProvider;
 use agent007_personas::PersonaRegistry;
 use crate::PersonaAction;
+use super::run::agent007_home;
 
 /// Top-level dispatch for `agent007 persona <action>`.
 pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction) -> Result<()> {
-    let personas_dir = crate::commands::run::agent007_home().join("personas");
+    let personas_dir = agent007_home().join("personas");
     let registry = PersonaRegistry::load(&personas_dir).unwrap_or_else(|e| {
         tracing::warn!("failed to load persona overrides: {}", e);
         PersonaRegistry::built_in()
@@ -53,16 +54,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn list_output_covers_all_ten_builtins() {
-        // We test the data layer directly — formatting is handled separately.
+    fn list_output_covers_all_builtins() {
         let registry = PersonaRegistry::built_in();
         let personas = registry.list();
-        assert_eq!(personas.len(), 10);
+        assert_eq!(personas.len(), 15);
         let names: Vec<&str> = personas.iter().map(|p| p.name.as_str()).collect();
         for expected in &[
             "Researcher", "Architect", "Coder", "TestDesigner",
             "SecurityReviewer", "PerformanceEngineer", "DocumentationWriter",
             "DependencyManager", "DebugAgent", "CodeReviewer",
+            "ExpertCoder", "UIUXDesigner", "DocsManager",
+            "DevOpsEngineer", "DataEngineer",
         ] {
             assert!(names.contains(expected), "missing persona in list: {}", expected);
         }

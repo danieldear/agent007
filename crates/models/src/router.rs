@@ -8,6 +8,7 @@ use crate::types::{CompletionRequest, CompletionResponse};
 pub struct ModelRouter {
     providers: HashMap<String, Arc<dyn ModelProvider>>,
     rules: HashMap<String, String>,
+    aliases: HashMap<String, String>,
     default: String,
 }
 
@@ -16,16 +17,29 @@ impl ModelRouter {
         Self {
             providers: HashMap::new(),
             rules: HashMap::new(),
+            aliases: HashMap::new(),
             default: default_provider.to_string(),
         }
     }
 
     pub fn register(&mut self, name: &str, provider: Arc<dyn ModelProvider>) {
         self.providers.insert(name.to_string(), provider);
+        self.aliases.insert(name.to_string(), name.to_string());
     }
 
     pub fn add_rule(&mut self, task_type: &str, provider_name: &str) {
         self.rules.insert(task_type.to_string(), provider_name.to_string());
+    }
+
+    pub fn alias(&mut self, alias: &str, provider_name: &str) {
+        self.aliases.insert(alias.to_string(), provider_name.to_string());
+    }
+
+    fn resolve_provider_name<'a>(&'a self, key: &'a str) -> &'a str {
+        self.aliases
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or(key)
     }
 
     /// Route a task type to the appropriate provider.
@@ -35,7 +49,7 @@ impl ModelRouter {
     pub fn route(&self, task_type: &str) -> Arc<dyn ModelProvider> {
         // Check rules first
         let provider_name = if let Some(name) = self.rules.get(task_type) {
-            name.as_str()
+            self.resolve_provider_name(name)
         } else {
             self.default.as_str()
         };
@@ -69,9 +83,11 @@ impl ModelProvider for ModelRouter {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
-        // Route by request.model first; fall back to default provider name.
-        let key = if self.providers.contains_key(&request.model) {
-            request.model.as_str()
+        let requested = self.resolve_provider_name(&request.model);
+        let key = if self.providers.contains_key(requested) {
+            requested
+        } else if let Some(rule) = self.rules.get(&request.model) {
+            self.resolve_provider_name(rule)
         } else {
             self.default.as_str()
         };
@@ -120,6 +136,24 @@ mod tests {
             messages: vec![Message { role: Role::User, content: "write code".into() }],
             max_tokens: None, temperature: None, system: None,
         }).await.unwrap();
+        assert_eq!(resp.content, "codex-resp");
+    }
+
+    #[tokio::test]
+    async fn router_resolves_model_aliases() {
+        use crate::types::{CompletionRequest, Message, Role};
+        let mut r = make_router();
+        r.alias("claude-sonnet-4-6", "claude");
+        r.alias("gpt-5.3-codex", "codex");
+
+        let resp = r.complete(CompletionRequest {
+            model: "gpt-5.3-codex".into(),
+            messages: vec![Message { role: Role::User, content: "write code".into() }],
+            max_tokens: None,
+            temperature: None,
+            system: None,
+        }).await.unwrap();
+
         assert_eq!(resp.content, "codex-resp");
     }
 }

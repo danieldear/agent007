@@ -50,8 +50,13 @@ impl ModelProvider for ClaudeProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
+        let model = if request.model.is_empty() || request.model == self.name() {
+            self.model.as_str()
+        } else {
+            request.model.as_str()
+        };
         let body = self.build_body(
-            &request.model,
+            model,
             &request.messages,
             request.max_tokens,
             request.temperature,
@@ -89,7 +94,7 @@ impl ModelProvider for ClaudeProvider {
 
         Ok(CompletionResponse {
             content,
-            model: request.model,
+            model: model.to_string(),
             input_tokens: json["usage"]["input_tokens"].as_u64().map(|x| x as u32),
             output_tokens: json["usage"]["output_tokens"].as_u64().map(|x| x as u32),
         })

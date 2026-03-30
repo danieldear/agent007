@@ -1,0 +1,490 @@
+<script setup>
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useApi } from '../composables/useApi.js'
+
+const props = defineProps({ events: Array, connected: Boolean, stats: Object })
+const { api } = useApi()
+
+const health = ref(null)
+const metrics = ref(null)
+const taskInput = ref('')
+const taskStatus = ref('')
+const runs = ref([])
+const selectedRun = ref(null)
+const selectedRunId = ref(null)
+const approvalStatus = ref('')
+const approvalEditContent = ref('')
+const resumeStatus = ref('')
+let refreshTimer = null
+
+onMounted(async () => {
+  health.value = await api.health()
+  metrics.value = await api.getStats() || null
+  await refreshRuns()
+  refreshTimer = setInterval(async () => {
+    try {
+      metrics.value = await api.getStats() || metrics.value
+      await refreshRuns()
+      if (selectedRunId.value) {
+        selectedRun.value = await api.getRunDetail(selectedRunId.value)
+      }
+    } catch {
+      // Keep the last successful snapshot when background refresh fails.
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
+
+watch(() => props.stats, (v) => {
+  if (v) metrics.value = v
+})
+
+const m = computed(() => metrics.value || {
+  active_agents: 0, running_tasks: 0, completed_tasks: 0, failed_tasks: 0,
+  total_tokens: 0, estimated_usd: 0, avg_reward: 0, session_requests: 0,
+  feedback_count: 0, prompt_improvements: 0,
+  skills_count: 0, workflows_count: 0, personas_count: 0, memory_keys: 0,
+  started_at: null, local_execution_available: false, runtime_mode: 'hosted-mcp', model_provider: 'unknown',
+  recent_tasks: [],
+})
+
+const uptime = computed(() => {
+  if (!m.value.started_at) return '—'
+  const diff = Math.floor((Date.now() - new Date(m.value.started_at).getTime()) / 1000)
+  if (diff < 60) return `${diff}s`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
+  return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`
+})
+
+function fmtTokens(n) {
+  if (!n) return '0'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
+  return String(n)
+}
+
+const recentEvents = computed(() => [...(props.events || [])].reverse().slice(0, 50))
+const selectedWorkflowState = computed(() => selectedRun.value?.workflow_state || null)
+const pendingApproval = computed(() => selectedWorkflowState.value?.pending_approval || null)
+const canResumeSelectedRun = computed(() => {
+  const run = selectedRun.value?.run?.metadata
+  if (!run || !selectedWorkflowState.value || pendingApproval.value) return false
+  return run.status === 'awaiting-approval' || selectedWorkflowState.value.status === 'running'
+})
+
+async function refreshRuns() {
+  runs.value = await api.listRuns() || []
+  if (!selectedRunId.value && runs.value.length) {
+    await selectRun(runs.value[0].id)
+  } else if (selectedRunId.value && !runs.value.find((run) => run.id === selectedRunId.value)) {
+    selectedRunId.value = null
+    selectedRun.value = null
+  }
+}
+
+async function selectRun(id) {
+  selectedRunId.value = id
+  selectedRun.value = await api.getRunDetail(id)
+  approvalEditContent.value = selectedRun.value?.workflow_state?.pending_approval?.content || ''
+  resumeStatus.value = ''
+}
+
+async function recordApproval(decision) {
+  if (!selectedRunId.value || !pendingApproval.value) return
+  approvalStatus.value = 'Saving approval...'
+  try {
+    await api.approveRunStep(selectedRunId.value, {
+      step: pendingApproval.value.step_id,
+      decision,
+      content: decision === 'edit' ? approvalEditContent.value : undefined,
+    })
+    approvalStatus.value = `Recorded ${decision}. Resume the workflow to continue.`
+    await selectRun(selectedRunId.value)
+    await refreshRuns()
+  } catch (e) {
+    approvalStatus.value = `Error: ${e.message}`
+  }
+}
+
+async function resumeSelectedRun() {
+  if (!selectedRunId.value || !canResumeSelectedRun.value) return
+  resumeStatus.value = 'Resuming workflow...'
+  try {
+    const response = await api.resumeRun(selectedRunId.value)
+    approvalStatus.value = ''
+    await refreshRuns()
+    if (response?.session) {
+      await selectRun(response.session)
+    } else {
+      await selectRun(selectedRunId.value)
+    }
+    if (response?.status === 'awaiting-approval') {
+      resumeStatus.value = `Workflow resumed and paused again for approval on step ${response.step}.`
+    } else {
+      resumeStatus.value = 'Workflow resumed successfully.'
+    }
+  } catch (e) {
+    resumeStatus.value = `Error: ${e.message}`
+  }
+}
+
+async function submitTask() {
+  if (!taskInput.value.trim()) return
+  taskStatus.value = 'Submitting...'
+  try {
+    const response = await api.runTask(taskInput.value.trim())
+    taskStatus.value = response?.session ? `Submitted as ${response.session}` : 'Submitted'
+    taskInput.value = ''
+    setTimeout(async () => {
+      await refreshRuns()
+      if (response?.session) {
+        await selectRun(response.session)
+      }
+    }, 800)
+  } catch (e) {
+    taskStatus.value = `Error: ${e.message}`
+  }
+  setTimeout(() => { taskStatus.value = '' }, 4000)
+}
+</script>
+
+<template>
+  <div class="flex flex-col h-full">
+    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
+      <h2 class="text-lg font-bold">Dashboard</h2>
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full" :class="connected ? 'bg-success' : 'bg-error'"></span>
+        <span class="text-xs text-base-content/60">{{ connected ? 'Live' : 'Offline' }}</span>
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-auto p-4 space-y-4">
+
+      <!-- Stats Row 1: Runtime -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Active Agents</div>
+          <div class="text-2xl font-bold text-primary">{{ m.active_agents }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Running Tasks</div>
+          <div class="text-2xl font-bold text-info">{{ m.running_tasks }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Completed</div>
+          <div class="text-2xl font-bold text-success">{{ m.completed_tasks }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Failed</div>
+          <div class="text-2xl font-bold text-error">{{ m.failed_tasks }}</div>
+        </div>
+      </div>
+
+      <!-- Stats Row 2: Tokens, Cost, Reward, Uptime -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Total Tokens</div>
+          <div class="text-2xl font-bold text-secondary">{{ fmtTokens(m.total_tokens) }}</div>
+          <div class="text-xs text-base-content/40 mt-1">{{ m.session_requests }} requests</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Est. Cost</div>
+          <div class="text-2xl font-bold text-warning">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Avg Reward</div>
+          <div class="text-2xl font-bold text-accent">{{ (m.avg_reward || 0).toFixed(3) }}</div>
+          <div class="text-xs text-base-content/40 mt-1">{{ m.feedback_count }} feedback · {{ m.prompt_improvements }} improvements</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4">
+          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Uptime</div>
+          <div class="text-2xl font-bold text-base-content">{{ uptime }}</div>
+        </div>
+      </div>
+
+      <!-- System Status -->
+      <div class="bg-base-200 rounded-lg p-4">
+        <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-3">System Status</div>
+        <div class="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Execution:</span>
+            <span class="badge badge-sm" :class="{
+              'badge-warning': m.runtime_mode === 'hosted-mcp',
+              'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
+              'badge-info': m.runtime_mode === 'dry-run',
+            }">
+              {{ m.runtime_mode || 'hosted-mcp' }}
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Model:</span>
+            <span class="font-mono text-xs">{{ m.model_provider || '—' }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">WebSocket:</span>
+            <span class="badge badge-sm" :class="connected ? 'badge-success' : 'badge-error'">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+          </div>
+        </div>
+        <div class="divider my-2"></div>
+        <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Skills:</span>
+            <span class="badge badge-sm badge-primary badge-outline">{{ m.skills_count }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Workflows:</span>
+            <span class="badge badge-sm badge-secondary badge-outline">{{ m.workflows_count }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Personas:</span>
+            <span class="badge badge-sm badge-accent badge-outline">{{ m.personas_count }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-base-content/50">Memory Keys:</span>
+            <span class="badge badge-sm badge-info badge-outline">{{ m.memory_keys }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Tasks -->
+      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 30vh">
+        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
+          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Recent Tasks</span>
+          <span class="badge badge-sm badge-ghost">{{ m.recent_tasks?.length || 0 }} entries</span>
+        </div>
+        <div class="overflow-auto flex-1">
+          <table class="table table-xs w-full" v-if="m.recent_tasks?.length">
+            <thead>
+              <tr class="text-xs text-base-content/50">
+                <th>Task</th>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Tokens</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30">
+                <td class="max-w-[200px] truncate font-mono text-xs">{{ t.task }}</td>
+                <td class="text-xs text-base-content/60">{{ t.agent?.slice(0, 8) || '—' }}</td>
+                <td>
+                  <span class="badge badge-xs"
+                    :class="{
+                      'badge-info': t.status === 'running',
+                      'badge-success': t.status === 'completed',
+                      'badge-error': t.status === 'failed',
+                    }"
+                  >{{ t.status }}</span>
+                </td>
+                <td class="text-xs font-mono">{{ fmtTokens(t.tokens) }}</td>
+                <td class="text-xs text-base-content/60">{{ t.started_at }}{{ t.finished_at ? ' → ' + t.finished_at : '' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="p-6 text-center text-base-content/40 text-sm">No tasks yet this session</div>
+        </div>
+      </div>
+
+      <!-- Persisted Runs -->
+      <div class="bg-base-200 rounded-lg overflow-hidden">
+        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
+          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Persisted Runs</span>
+          <div class="flex items-center gap-2">
+            <span class="badge badge-sm badge-ghost">{{ runs.length }} runs</span>
+            <button class="btn btn-ghost btn-xs" @click="refreshRuns">Refresh</button>
+          </div>
+        </div>
+        <div class="grid grid-cols-[320px_1fr] min-h-[16rem]">
+          <div class="border-r border-base-300 overflow-auto max-h-[24rem]">
+            <button
+              v-for="run in runs"
+              :key="run.id"
+              class="w-full text-left px-4 py-3 border-b border-base-300/40 hover:bg-base-300/30"
+              :class="{ 'bg-base-300/50': selectedRunId === run.id }"
+              @click="selectRun(run.id)"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-mono text-[11px] truncate">{{ run.kind }}</span>
+                <span
+                  class="badge badge-xs"
+                  :class="{
+                    'badge-info': run.status === 'running',
+                    'badge-warning': run.status === 'awaiting-approval',
+                    'badge-success': run.status === 'succeeded',
+                    'badge-error': run.status === 'failed',
+                  }"
+                >{{ run.status }}</span>
+              </div>
+              <div class="text-xs text-base-content/70 mt-1 truncate">{{ run.task }}</div>
+              <div class="text-[11px] text-base-content/40 mt-1">
+                {{ run.mode }} · {{ run.provider || 'hosted-mcp' }}
+              </div>
+            </button>
+            <div v-if="!runs.length" class="p-6 text-center text-base-content/40 text-sm">No persisted runs yet</div>
+          </div>
+
+          <div class="p-4 overflow-auto max-h-[24rem]">
+            <template v-if="selectedRun?.run">
+              <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                <div><span class="text-base-content/50">ID:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.id }}</span></div>
+                <div><span class="text-base-content/50">Kind:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.kind }}</span></div>
+                <div><span class="text-base-content/50">Status:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.status }}</span></div>
+                <div><span class="text-base-content/50">Started:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.started_at }}</span></div>
+              </div>
+
+              <div class="mt-4">
+                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Task</div>
+                <div class="bg-base-300/40 rounded p-3 font-mono text-xs whitespace-pre-wrap">{{ selectedRun.run.metadata.task }}</div>
+              </div>
+
+              <div class="mt-4" v-if="selectedWorkflowState">
+                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Workflow State</div>
+                <div class="grid grid-cols-4 gap-3 mb-3 text-sm">
+                  <div class="bg-base-300/30 rounded p-3">
+                    <div class="text-[11px] text-base-content/50 uppercase">Workflow</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.workflow }}</div>
+                  </div>
+                  <div class="bg-base-300/30 rounded p-3">
+                    <div class="text-[11px] text-base-content/50 uppercase">Progress</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}</div>
+                  </div>
+                  <div class="bg-base-300/30 rounded p-3">
+                    <div class="text-[11px] text-base-content/50 uppercase">Budget</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.budget_used?.tokens || 0 }} tokens</div>
+                  </div>
+                  <div class="bg-base-300/30 rounded p-3">
+                    <div class="text-[11px] text-base-content/50 uppercase">Artifacts</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedRun.run.artifacts?.join(', ') || '—' }}</div>
+                  </div>
+                </div>
+                <div v-if="pendingApproval" class="rounded border border-warning/40 bg-warning/10 p-4 mb-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider text-warning">Approval Pending</div>
+                      <div class="font-mono text-xs mt-1">{{ pendingApproval.step_id }} · {{ pendingApproval.agent }}</div>
+                    </div>
+                    <span class="badge badge-sm badge-warning">awaiting approval</span>
+                  </div>
+                  <div class="font-mono text-xs whitespace-pre-wrap mt-3">{{ pendingApproval.content_preview }}</div>
+                  <textarea
+                    v-model="approvalEditContent"
+                    class="textarea textarea-bordered w-full mt-3 font-mono text-xs"
+                    rows="6"
+                    placeholder="Edited approval content"
+                  />
+                  <div class="flex items-center gap-2 mt-3">
+                    <button class="btn btn-xs btn-success" @click="recordApproval('approve')">Approve</button>
+                    <button class="btn btn-xs btn-warning" @click="recordApproval('edit')">Approve Edit</button>
+                    <button class="btn btn-xs btn-error" @click="recordApproval('deny')">Deny</button>
+                    <span v-if="approvalStatus" class="text-xs text-base-content/70">{{ approvalStatus }}</span>
+                  </div>
+                </div>
+                <div v-else-if="canResumeSelectedRun" class="rounded border border-info/40 bg-info/10 p-4 mb-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider text-info">Resume Ready</div>
+                      <div class="text-xs text-base-content/70 mt-1">
+                        Approval has been recorded for this paused workflow. Resume it to continue execution.
+                      </div>
+                    </div>
+                    <button class="btn btn-xs btn-info" @click="resumeSelectedRun">Resume Workflow</button>
+                  </div>
+                  <div v-if="resumeStatus" class="text-xs text-base-content/70 mt-3">{{ resumeStatus }}</div>
+                </div>
+                <div class="space-y-2">
+                  <div
+                    v-for="step in selectedWorkflowState.steps || []"
+                    :key="step.id"
+                    class="rounded border border-base-300/60 p-3"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-mono text-xs">{{ step.id }}</span>
+                      <span
+                        class="badge badge-xs"
+                        :class="{
+                          'badge-ghost': step.status === 'pending',
+                          'badge-info': step.status === 'running',
+                          'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
+                          'badge-success': step.status === 'completed',
+                          'badge-error': step.status === 'failed',
+                        }"
+                      >{{ step.status }}</span>
+                    </div>
+                    <div class="text-[11px] text-base-content/50 mt-1">{{ step.agent }} · attempts {{ step.attempts }}</div>
+                    <div v-if="step.output_preview" class="font-mono text-xs mt-2 whitespace-pre-wrap">{{ step.output_preview }}</div>
+                    <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-4" v-if="selectedRun.run.entries?.length">
+                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Recent Trace</div>
+                <div class="space-y-2">
+                  <div
+                    v-for="entry in selectedRun.run.entries.slice(-10).reverse()"
+                    :key="`${entry.timestamp}-${entry.kind}`"
+                    class="bg-base-300/30 rounded p-3"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-mono text-xs">{{ entry.kind }}</span>
+                      <span class="text-[11px] text-base-content/40">{{ entry.timestamp }}</span>
+                    </div>
+                    <div class="font-mono text-[11px] text-base-content/70 mt-2 whitespace-pre-wrap">{{ JSON.stringify(entry.payload, null, 2) }}</div>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-else class="h-full flex items-center justify-center text-base-content/40 text-sm">
+              Select a run to inspect its persisted state
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event Log -->
+      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 35vh">
+        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
+          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Event Log</span>
+          <span class="badge badge-sm badge-ghost">{{ events?.length || 0 }} events</span>
+        </div>
+        <div class="overflow-auto flex-1 font-mono text-xs">
+          <div
+            v-for="(evt, i) in recentEvents"
+            :key="i"
+            class="px-4 py-1.5 border-b border-base-300/30 flex gap-3 hover:bg-base-300/30"
+          >
+            <span class="text-base-content/40 shrink-0 w-20">{{ evt._ts?.slice(11, 19) || '' }}</span>
+            <span
+              class="badge badge-xs shrink-0"
+              :class="{
+                'badge-info': evt.type === 'AgentEvent',
+                'badge-success': evt.type === 'LearningEvent',
+                'badge-warning': evt.type === 'StatusUpdate',
+              }"
+            >{{ evt.type || 'event' }}</span>
+            <span class="truncate text-base-content/70">{{ JSON.stringify(evt.payload || evt).slice(0, 120) }}</span>
+          </div>
+          <div v-if="!recentEvents.length" class="p-8 text-center text-base-content/40">
+            Waiting for events...
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task input bar -->
+    <div class="p-3 border-t border-base-300 bg-base-200 flex items-center gap-3">
+      <span class="text-primary font-bold">&gt;_</span>
+      <input
+        v-model="taskInput"
+        class="input input-sm input-bordered flex-1 font-mono text-sm"
+        placeholder="Describe a task for agent007..."
+        @keydown.enter="submitTask"
+      />
+      <button class="btn btn-sm btn-success" @click="submitTask">Run</button>
+      <span v-if="taskStatus" class="text-xs text-base-content/60">{{ taskStatus }}</span>
+    </div>
+  </div>
+</template>

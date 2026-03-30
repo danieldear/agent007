@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+agent007-mcp    = { path = "../mcp" }
 agent007-models = { path = "../models" }
 agent007-zones  = { path = "../zones" }
 async-trait = { workspace = true }

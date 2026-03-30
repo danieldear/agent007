@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
-use agent007_simulation::{TemplateLoader, SimulationPipeline};
+use agent007_simulation::{SimulationPipeline, TemplateLoader};
+
+use super::run::agent007_home;
 use crate::config::Config;
 
 #[derive(Parser, Debug)]
@@ -27,8 +29,8 @@ pub enum SimulateAction {
     },
 }
 
-pub async fn execute(config: Arc<Config>, args: SimulateArgs) -> Result<()> {
-    let custom_dir = config.agent007_home().join("simulations").join("custom");
+pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
+    let custom_dir = agent007_home().join("simulations").join("custom");
     let loader = TemplateLoader::with_custom_dir(custom_dir);
 
     match args.action {
@@ -48,7 +50,7 @@ pub async fn execute(config: Arc<Config>, args: SimulateArgs) -> Result<()> {
             let tmpl = loader.load(&template)?;
             println!("Running simulation: {}", tmpl.name);
 
-            let memory_dir = config.agent007_home().join("memory");
+            let memory_dir = agent007_home().join("memory");
             let memory = Arc::new(agent007_memory::store::MemoryStore::new(&memory_dir));
 
             let mock = Arc::new(agent007_models::MockProvider::new(
