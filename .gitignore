@@ -1,2 +1,11 @@
-./Cargo.lock
-./target
+/target/
+
+# macOS noise
+.DS_Store
+
+# Local agent / assistant state
+/.agent007/
+/.claude/
+/.claude-flow/
+/.codex/
+/.swarm/
