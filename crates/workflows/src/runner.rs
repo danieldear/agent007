@@ -4,7 +4,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use agent007_core::dispatcher::Dispatcher;
+use agent007_core::events::AgentEvent;
 use agent007_core::persona::PersonaProvider;
+use agent007_core::types::PromptRef;
 use agent007_core::RunStore;
 use agent007_models::{ModelRouter, ModelProvider, CompletionRequest, Message, Role};
 
@@ -205,10 +207,53 @@ impl WorkflowRunner {
                     let ctx_outputs = snapshot.clone();
                     let router = self.model_router.clone();
                     let persona_provider = self.persona_provider.clone();
+                    let sub_dispatcher = self.dispatcher.clone();
 
                     if let Some(existing_content) = pending_approval_content {
                         step_futures.push(tokio::spawn(async move {
-                            Ok::<(crate::types::StepDef, String), WorkflowError>((step, existing_content))
+                            Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>(
+                                (step, existing_content, String::new(), 0)
+                            )
+                        }));
+                        continue;
+                    }
+
+                    // Sub-workflow steps run inline (not in tokio::spawn) to avoid Send bounds
+                    if step.r#type == StepType::SubWorkflow {
+                        let sub_result: Result<(crate::types::StepDef, String, String, usize), WorkflowError> = async {
+                            let wf_name = step.workflow.clone().ok_or_else(|| WorkflowError::StepFailed {
+                                id: step.id.clone(),
+                                reason: "sub-workflow step missing 'workflow' field".to_string(),
+                            })?;
+                            let wf_path = agent007_core::paths::agent007_home()
+                                .join("workflows")
+                                .join(format!("{wf_name}.toml"));
+                            let toml_str = std::fs::read_to_string(&wf_path).map_err(|e| WorkflowError::StepFailed {
+                                id: step.id.clone(),
+                                reason: format!("failed to read sub-workflow '{wf_name}': {e}"),
+                            })?;
+                            let sub_def: crate::types::WorkflowDef = toml::from_str(&toml_str).map_err(|e| WorkflowError::StepFailed {
+                                id: step.id.clone(),
+                                reason: format!("failed to parse sub-workflow '{wf_name}': {e}"),
+                            })?;
+                            let sub_runner = WorkflowRunner::new(
+                                persona_provider.clone(),
+                                router.clone(),
+                                sub_dispatcher.clone(),
+                            );
+                            let result = Box::pin(sub_runner.run(&sub_def, &task_str)).await.map_err(|e| WorkflowError::StepFailed {
+                                id: step.id.clone(),
+                                reason: format!("sub-workflow '{wf_name}' failed: {e}"),
+                            })?;
+                            let content = result.outputs.iter()
+                                .map(|(k, v)| format!("{k}: {v}"))
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            let tokens = result.budget_used.tokens as usize;
+                            Ok((step, content, format!("sub-workflow/{wf_name}"), tokens))
+                        }.await;
+                        step_futures.push(tokio::spawn(async move {
+                            sub_result
                         }));
                         continue;
                     }
@@ -256,7 +301,7 @@ impl WorkflowRunner {
                         // 3. Call model provider
                         let req = CompletionRequest {
                             model: model_name.clone(),
-                            messages: vec![Message { role: Role::User, content: rendered }],
+                            messages: vec![Message { role: Role::User, content: rendered.clone() }],
                             max_tokens: None,
                             temperature: None,
                             system: None,
@@ -266,12 +311,20 @@ impl WorkflowRunner {
                             reason: e.to_string(),
                         })?;
 
-                        Ok::<(crate::types::StepDef, String), WorkflowError>((step, resp.content))
+                        // Use actual API token counts when available; fall back to char estimate.
+                        let tokens = resp.input_tokens
+                            .and_then(|i| resp.output_tokens.map(|o| (i + o) as usize))
+                            .unwrap_or_else(|| rendered.len() / 4 + resp.content.len() / 4);
+                        let actual_model = if resp.model.is_empty() { model_name } else { resp.model.clone() };
+
+                        Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>(
+                            (step, resp.content, actual_model, tokens)
+                        )
                     }));
                 }
 
                 for fut in step_futures {
-                    let (step, content) = match fut.await {
+                    let (step, content, step_model, step_tokens) = match fut.await {
                         Ok(Ok(result)) => result,
                         Ok(Err(error)) => {
                             let step_id = workflow_error_step_id(&error);
@@ -289,6 +342,12 @@ impl WorkflowRunner {
                             );
                         }
                     };
+                    // Emit a ModelRequest event so the dashboard picks up per-step tokens/model.
+                    let _ = self.dispatcher.publish(AgentEvent::ModelRequest {
+                        provider: step_model,
+                        prompt_ref: PromptRef::new(),
+                        token_estimate: step_tokens,
+                    }).await;
 
                     // Handle approval gate (sequential after the step completes)
                     let final_content = match self
@@ -442,6 +501,9 @@ impl WorkflowRunner {
                                 }
                             }
                         }
+                        // Sub-workflow outputs were already injected during execution;
+                        // nothing extra to do at the post-step routing stage.
+                        StepType::SubWorkflow => {}
                     }
 
                     completed_steps.insert(step.id.clone());
@@ -966,6 +1028,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: None,
         }
@@ -989,6 +1052,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "step2".to_string(),
@@ -1003,6 +1067,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,
@@ -1065,6 +1130,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "b".to_string(), agent: "B".to_string(), model: None,
@@ -1074,6 +1140,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,
@@ -1098,6 +1165,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: None,
         };
@@ -1125,6 +1193,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // extremely low — 1 token
@@ -1153,6 +1222,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: None,
@@ -1179,6 +1249,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // would exceed but mode is alert-only
@@ -1212,6 +1283,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -1232,6 +1304,7 @@ mod tests {
                         max_retries: Some(3),
                     }),
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -1246,6 +1319,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,
@@ -1274,6 +1348,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -1294,6 +1369,7 @@ mod tests {
                         max_retries: Some(1),
                     }),
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -1308,6 +1384,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,
@@ -1345,6 +1422,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -1365,6 +1443,7 @@ mod tests {
                         max_retries: Some(3),
                     }),
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -1379,6 +1458,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,
@@ -1415,6 +1495,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: None,
         };
@@ -1468,6 +1549,7 @@ mod tests {
                             default: false,
                         },
                     ]),
+                    workflow: None,
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -1482,6 +1564,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -1496,6 +1579,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,

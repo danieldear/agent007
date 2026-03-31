@@ -113,6 +113,7 @@ impl WebServer {
             .route("/api/skills", get(api::skills_handler).post(api::skill_save_handler))
             .route("/api/skills/run", post(api::skills_run_handler))
             .route("/api/skills/import", post(api::skill_import_handler))
+            .route("/api/skills/generate", post(api::skill_generate_handler))
             .route("/api/skills/detail/{trigger}", get(api::skill_get_handler))
             .route("/api/skill-registry", get(api::skill_registry_handler))
             .route("/api/status", get(api::status_handler))
@@ -124,6 +125,7 @@ impl WebServer {
             .route("/api/personas", get(api::personas_list_handler).post(api::persona_save_handler))
             .route("/api/personas/{name}", axum::routing::delete(api::persona_delete_handler))
             .route("/api/workflows", get(api::workflows_list_handler).post(api::workflow_save_handler))
+            .route("/api/workflows/validate", post(api::workflow_validate_handler))
             .route("/api/workflows/{name}", get(api::workflow_get_handler))
             .route("/api/workflow-templates", get(api::workflow_templates_list_handler))
             .route("/api/workflow-templates/{name}", get(api::workflow_template_get_handler))
@@ -153,6 +155,18 @@ impl WebServer {
             .await
             .map_err(WebError::Io)?;
 
+        Ok(())
+    }
+
+    /// Start serving using a pre-bound `TcpListener`.
+    /// Use this to avoid the TOCTOU race when the caller already holds the binding.
+    pub async fn run_with_listener(self, listener: tokio::net::TcpListener) -> Result<(), WebError> {
+        let cancel = self.state.cancel.clone();
+        let router = self.into_router();
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move { cancel.cancelled().await })
+            .await
+            .map_err(WebError::Io)?;
         Ok(())
     }
 

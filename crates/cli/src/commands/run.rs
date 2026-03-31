@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
+use chrono::Utc;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -422,7 +423,10 @@ async fn build_skill_executor(
         Arc::new(store)
     };
 
-    let retriever = Arc::new(Retriever::new(embedder, db, 5));
+    let retriever = Arc::new(
+        Retriever::new(embedder, db, 5)
+            .with_memory_store(Arc::clone(memory_store))
+    );
     let memory = memory_store.global();
 
     Ok(SkillExecutor::new(provider, retriever, memory))
@@ -449,6 +453,27 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
     ) -> Result<Vec<agent007_memory::SearchResult>, agent007_memory::MemoryError> {
         Ok(vec![])
     }
+}
+
+fn persist_task_memory(
+    memory_store: &Arc<MemoryStore>,
+    run_id: &str,
+    task: &str,
+    success: bool,
+    output: &str,
+) -> Result<()> {
+    let scoped = memory_store.scoped("project");
+    let record = serde_json::json!({
+        "run_id": run_id,
+        "task": task,
+        "success": success,
+        "output": output,
+        "timestamp": Utc::now().to_rfc3339(),
+    });
+    let serialized = serde_json::to_string(&record)?;
+    scoped.write("task_last", &serialized)?;
+    scoped.write(&format!("task_runs/{run_id}"), &serialized)?;
+    Ok(())
 }
 
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
@@ -482,10 +507,28 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         match stack.orchestrator.run(agent_task).await {
             Ok(result) => {
                 let _ = stack.run_store.finish_run(&run.id, true, &result.output);
+                if let Err(error) = persist_task_memory(
+                    &stack.memory_store,
+                    &run.id,
+                    &task,
+                    true,
+                    &result.output,
+                ) {
+                    tracing::warn!("failed to persist task memory: {}", error);
+                }
                 tracing::info!("task completed: {}", result.output);
             }
             Err(error) => {
                 let _ = stack.run_store.finish_run(&run.id, false, error.to_string());
+                if let Err(persist_error) = persist_task_memory(
+                    &stack.memory_store,
+                    &run.id,
+                    &task,
+                    false,
+                    &error.to_string(),
+                ) {
+                    tracing::warn!("failed to persist task memory: {}", persist_error);
+                }
                 return Err(error.into());
             }
         }
@@ -497,6 +540,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     // Submit the task to the orchestrator
     let orchestrator = stack.orchestrator.clone();
     let run_store = stack.run_store.clone();
+    let memory_store = stack.memory_store.clone();
     let run_id = run.id.clone();
     let task_desc = task.clone();
     stack.tracker.spawn(async move {
@@ -504,10 +548,28 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         match orchestrator.run(agent_task).await {
             Ok(result) => {
                 let _ = run_store.finish_run(&run_id, true, &result.output);
+                if let Err(error) = persist_task_memory(
+                    &memory_store,
+                    &run_id,
+                    &task_desc,
+                    true,
+                    &result.output,
+                ) {
+                    tracing::warn!("failed to persist task memory: {}", error);
+                }
                 tracing::info!("task completed: {}", result.output);
             }
             Err(e) => {
                 let _ = run_store.finish_run(&run_id, false, e.to_string());
+                if let Err(error) = persist_task_memory(
+                    &memory_store,
+                    &run_id,
+                    &task_desc,
+                    false,
+                    &e.to_string(),
+                ) {
+                    tracing::warn!("failed to persist task memory: {}", error);
+                }
                 tracing::warn!("task failed: {}", e);
             }
         }
@@ -592,6 +654,29 @@ mod tests {
         let config = Config::default();
         let _ = build_stack(&config).await.unwrap();
         assert!(tmp.path().join("workflows").exists());
+        std::env::remove_var("AGENT007_HOME");
+        std::env::remove_var("AGENT007_DRY_RUN");
+    }
+
+    #[tokio::test]
+    async fn execute_persists_task_memory_records() {
+        let _guard = env_lock();
+        std::env::set_var("AGENT007_DRY_RUN", "1");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
+
+        let config = Arc::new(Config::default());
+        execute(config, "persist this task".to_string()).await.unwrap();
+
+        let task_last = tmp.path().join("memory").join("project").join("task_last.md");
+        assert!(task_last.exists(), "task_last memory record should exist");
+
+        let content = std::fs::read_to_string(&task_last).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["task"], "persist this task");
+        assert!(json["run_id"].as_str().is_some());
+        assert!(json["timestamp"].as_str().is_some());
+
         std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
     }

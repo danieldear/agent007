@@ -466,7 +466,7 @@ impl HostedWorkflowEngine {
         state.sync_outputs(outputs.clone());
 
         match step.r#type {
-            StepType::Execute => {}
+            StepType::Execute | StepType::SubWorkflow => {}
             StepType::Evaluator => {
                 let Some(eval) = &step.evaluate else {
                     state.mark_failed(
@@ -714,6 +714,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: None,
         }
@@ -786,6 +787,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -806,6 +808,7 @@ mod tests {
                         max_retries: Some(3),
                     }),
                     routes: None,
+                    workflow: None,
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -820,6 +823,7 @@ mod tests {
                     r#type: StepType::Execute,
                     evaluate: None,
                     routes: None,
+                    workflow: None,
                 },
             ],
             budget: None,

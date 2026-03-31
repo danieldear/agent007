@@ -187,12 +187,25 @@ async function submitTask() {
       <div class="grid grid-cols-4 gap-3">
         <div class="bg-base-200 rounded-lg p-4">
           <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Total Tokens</div>
-          <div class="text-2xl font-bold text-secondary">{{ fmtTokens(m.total_tokens) }}</div>
-          <div class="text-xs text-base-content/40 mt-1">{{ m.session_requests }} requests</div>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold text-secondary">{{ fmtTokens(m.total_tokens) }}</div>
+            <span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="badge badge-xs badge-ghost text-base-content/40" title="Estimated from prompt length (chars ÷ 4)">est.</span>
+          </div>
+          <div class="text-xs text-base-content/40 mt-1" v-if="m.runtime_mode === 'hosted-mcp'">
+            {{ m.session_requests }} req ·
+            <span :title="'Set AGENT007_HOST_MODEL env var to specify your model'">{{ m.model_provider }}</span>
+          </div>
+          <div class="text-xs text-base-content/40 mt-1" v-else>{{ m.session_requests }} requests</div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
           <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Est. Cost</div>
-          <div class="text-2xl font-bold text-warning">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold text-warning">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+            <span v-if="m.runtime_mode === 'hosted-mcp' && m.estimated_usd > 0" class="badge badge-xs badge-ghost text-base-content/40" title="Rough estimate at $0.002/1k tokens">est.</span>
+          </div>
+          <div class="text-xs text-base-content/40 mt-1" v-if="m.runtime_mode === 'hosted-mcp'">
+            <span title="Set AGENT007_HOST_MODEL env var (e.g. claude-sonnet-4-6) for accurate model tracking">Tip: set AGENT007_HOST_MODEL</span>
+          </div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
           <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Avg Reward</div>
@@ -250,37 +263,57 @@ async function submitTask() {
       </div>
 
       <!-- Recent Tasks -->
-      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 30vh">
+      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 36vh">
         <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
           <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Recent Tasks</span>
           <span class="badge badge-sm badge-ghost">{{ m.recent_tasks?.length || 0 }} entries</span>
         </div>
         <div class="overflow-auto flex-1">
           <table class="table table-xs w-full" v-if="m.recent_tasks?.length">
-            <thead>
+            <thead class="sticky top-0 bg-base-200 z-10">
               <tr class="text-xs text-base-content/50">
-                <th>Task</th>
-                <th>Agent</th>
-                <th>Status</th>
-                <th>Tokens</th>
-                <th>Time</th>
+                <th class="w-[35%]">Task</th>
+                <th class="w-[15%]">Mode</th>
+                <th class="w-[15%]">Model</th>
+                <th class="w-[10%]">Status</th>
+                <th class="w-[10%]">Tokens</th>
+                <th class="w-[15%]">Time</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30">
-                <td class="max-w-[200px] truncate font-mono text-xs">{{ t.task }}</td>
-                <td class="text-xs text-base-content/60">{{ t.agent?.slice(0, 8) || '—' }}</td>
+                <td class="max-w-[0] truncate font-mono text-xs" :title="t.task">{{ t.task }}</td>
+                <td class="text-xs">
+                  <span class="badge badge-xs" :class="{
+                    'badge-warning': t.agent === 'hosted-mcp',
+                    'badge-success': t.agent === 'standalone',
+                    'badge-info': t.agent === 'dry-run',
+                    'badge-ghost': !['hosted-mcp','standalone','dry-run'].includes(t.agent),
+                  }">{{ t.agent || '—' }}</span>
+                </td>
+                <td class="text-xs font-mono text-base-content/70" :title="t.model">
+                  {{ t.model || '—' }}
+                </td>
                 <td>
                   <span class="badge badge-xs"
                     :class="{
                       'badge-info': t.status === 'running',
                       'badge-success': t.status === 'completed',
                       'badge-error': t.status === 'failed',
+                      'badge-warning': t.status === 'awaiting-approval',
                     }"
                   >{{ t.status }}</span>
                 </td>
-                <td class="text-xs font-mono">{{ fmtTokens(t.tokens) }}</td>
-                <td class="text-xs text-base-content/60">{{ t.started_at }}{{ t.finished_at ? ' → ' + t.finished_at : '' }}</td>
+                <td class="text-xs font-mono">
+                  <span v-if="t.tokens > 0">
+                    {{ fmtTokens(t.tokens) }}
+                    <span v-if="t.agent === 'hosted-mcp'" class="text-base-content/30" title="Estimated from prompt length">~</span>
+                  </span>
+                  <span v-else class="text-base-content/30">—</span>
+                </td>
+                <td class="text-xs text-base-content/60 font-mono">
+                  {{ t.started_at }}<span v-if="t.finished_at && t.finished_at !== t.started_at"> → {{ t.finished_at }}</span>
+                </td>
               </tr>
             </tbody>
           </table>

@@ -306,6 +306,7 @@ mod tests {
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
+                workflow: None,
             }],
             budget: None,
         }

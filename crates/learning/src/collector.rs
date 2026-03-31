@@ -66,15 +66,23 @@ impl FeedbackCollector {
                         });
                     }
                 }
-                AgentEvent::ToolCall { agent_id, tool: _ } => {
-                    // TODO: AgentEvent::ToolCall carries no result field. Record as Success until a
-                    // ToolCallResult variant is added to the event schema. At that point, check the
-                    // result and emit Outcome::ToolError when the tool reports failure.
-                    let outcome = crate::types::Outcome::Success;
+                // ToolCall events are fire-and-forget — we wait for ToolCallResult
+                // to get the actual success/failure signal.
+                AgentEvent::ToolCall { .. } => {}
+
+                AgentEvent::ToolCallResult { agent_id, tool: _, success, error } => {
+                    let outcome = if success {
+                        crate::types::Outcome::Success
+                    } else {
+                        crate::types::Outcome::Failure {
+                            reason: error.clone().unwrap_or_else(|| "tool error".to_string()),
+                        }
+                    };
+                    let tool_error_count = if success { 0 } else { 1 };
                     let scoring_ctx = crate::scorer::ScoringContext {
                         outcome: outcome.clone(),
                         user_rating: None,
-                        tool_error_count: Some(0),
+                        tool_error_count: Some(tool_error_count),
                         total_tool_calls: Some(1),
                         retry_count: None,
                         max_retries: None,
@@ -90,7 +98,7 @@ impl FeedbackCollector {
                         reward: Some(reward),
                         timestamp: chrono::Utc::now(),
                     };
-                    tracing::debug!(?entry, "recording feedback for ToolCall");
+                    tracing::debug!(?entry, success, "recording feedback for ToolCallResult");
                     if let Err(e) = self.store.record_feedback(&entry) {
                         tracing::warn!(error = %e, "failed to record feedback entry");
                     } else {

@@ -14,8 +14,8 @@ const navItems = [
 <template>
   <aside class="w-56 bg-base-200 border-r border-base-300 flex flex-col shrink-0">
     <div class="p-4 border-b border-base-300">
-      <h1 class="text-lg font-bold text-primary tracking-wide">agent007</h1>
-      <p class="text-xs text-base-content/50 mt-0.5">orchestration dashboard</p>
+      <h1 class="text-lg font-bold font-mono text-primary tracking-wide">Agent007</h1>
+      <p class="text-xs text-base-content/50 mt-0.5">Orchestration Dashboard</p>
     </div>
 
     <nav class="flex-1 py-2">

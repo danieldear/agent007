@@ -42,11 +42,15 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         cursor: bool,
         /// Set up Codex integration (.codex/config.toml or ~/.codex/config.toml).
-        /// If no IDE flags are specified, Claude Code, Cursor, and Codex are all set up.
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, and Zed are all set up.
         #[arg(long, default_value_t = false)]
         codex: bool,
+        /// Set up Zed integration (~/.config/zed/settings.json LSP entry).
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, and Zed are all set up.
+        #[arg(long, default_value_t = false)]
+        zed: bool,
         /// Skip all IDE integration — only create .agent007/ directory structure.
-        #[arg(long, default_value_t = false, conflicts_with_all = &["claude", "cursor", "codex"])]
+        #[arg(long, default_value_t = false, conflicts_with_all = &["claude", "cursor", "codex", "zed"])]
         no_ide: bool,
     },
     /// Start as an MCP server (stdio transport) + web dashboard on --port (default 8007).
@@ -194,15 +198,15 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = std::sync::Arc::new(crate::config::Config::load()?);
     match cli.command {
-        Commands::Init { force, global, claude, cursor, codex, no_ide } => {
-            let (do_claude, do_cursor, do_codex) = if no_ide {
-                (false, false, false)
-            } else if !claude && !cursor && !codex {
-                (true, true, true)
+        Commands::Init { force, global, claude, cursor, codex, zed, no_ide } => {
+            let (do_claude, do_cursor, do_codex, do_zed) = if no_ide {
+                (false, false, false, false)
+            } else if !claude && !cursor && !codex && !zed {
+                (true, true, true, true)
             } else {
-                (claude, cursor, codex)
+                (claude, cursor, codex, zed)
             };
-            commands::init::execute(config, force, global, do_claude, do_cursor, do_codex).await
+            commands::init::execute(config, force, global, do_claude, do_cursor, do_codex, do_zed).await
         }
         Commands::Run { task } => commands::run::execute(config, task).await,
         Commands::Serve { port, no_dashboard } => {

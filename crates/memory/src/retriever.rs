@@ -1,12 +1,15 @@
 use std::sync::Arc;
 use agent007_models::EmbeddingProvider;
 use crate::error::MemoryError;
+use crate::store::MemoryStore;
 use crate::vectordb::VectorDB;
 
 pub struct Retriever {
     embedder: Arc<dyn EmbeddingProvider>,
     db: Arc<dyn VectorDB>,
     top_k: usize,
+    /// Optional memory store for keyword fallback when vector search returns nothing.
+    memory_store: Option<Arc<MemoryStore>>,
 }
 
 impl Retriever {
@@ -15,17 +18,58 @@ impl Retriever {
         db: Arc<dyn VectorDB>,
         top_k: usize,
     ) -> Self {
-        Self { embedder, db, top_k }
+        Self { embedder, db, top_k, memory_store: None }
+    }
+
+    /// Attach a memory store used as keyword fallback when vector search is empty.
+    pub fn with_memory_store(mut self, store: Arc<MemoryStore>) -> Self {
+        self.memory_store = Some(store);
+        self
     }
 
     pub async fn retrieve(&self, query: &str) -> Result<String, MemoryError> {
         let embedding = self.embedder.embed(query).await
             .map_err(|e| MemoryError::Embedding(e.to_string()))?;
-        let results = self.db.search(embedding, self.top_k).await?;
-        let fragments: Vec<&str> = results.iter()
-            .filter_map(|r| r.payload.get("text").and_then(|v| v.as_str()))
-            .collect();
-        Ok(fragments.join("\n\n"))
+
+        // Detect mock/zero embeddings — all zeros means the embedder is a stub.
+        let is_mock_embedding = embedding.iter().all(|&v| v == 0.0);
+
+        let fragments: Vec<String> = if is_mock_embedding {
+            vec![]
+        } else {
+            let results = self.db.search(embedding, self.top_k).await?;
+            results.iter()
+                .filter_map(|r| r.payload.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect()
+        };
+
+        if !fragments.is_empty() {
+            return Ok(fragments.join("\n\n"));
+        }
+
+        // Fallback: keyword scan across scoped memory files
+        if let Some(store) = &self.memory_store {
+            let query_lower = query.to_lowercase();
+            let keywords: Vec<&str> = query_lower.split_whitespace().collect();
+            let mut matched = Vec::new();
+            for scope in &["user", "project", "skills"] {
+                if let Ok(keys) = store.scoped(scope).list_keys() {
+                    for key in &keys {
+                        if let Ok(Some(val)) = store.scoped(scope).read(key) {
+                            let val_lower = val.to_lowercase();
+                            if keywords.iter().any(|kw| kw.len() >= 3 && val_lower.contains(kw)) {
+                                matched.push(format!("[{}/{}]\n{}", scope, key, val));
+                            }
+                        }
+                    }
+                }
+            }
+            if !matched.is_empty() {
+                return Ok(matched.join("\n\n"));
+            }
+        }
+
+        Ok(String::new())
     }
 }
 

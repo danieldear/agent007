@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io::IsTerminal,
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     path::PathBuf,
     process::Stdio,
     sync::Arc,
@@ -29,6 +28,8 @@ use super::run::{
 use super::skill::SkillSummary;
 
 use agent007_core::dispatcher::LocalDispatcher;
+use agent007_core::events::AgentEvent;
+use agent007_core::types::PromptRef;
 use agent007_learning::LearningDispatcher;
 
 /// MCP server that exposes agent007 tools to Claude Code (or any MCP client).
@@ -230,7 +231,34 @@ impl Agent007Server {
                 }),
             ),
 
-            // 4. Workflow list
+            // 4. Record actual tokens (call this after you finish LLM work so the dashboard shows real counts)
+            tool(
+                "agent007_record_tokens",
+                "Record the actual token usage for a run. Call this after completing LLM work in hosted-MCP mode \
+                 so the dashboard shows accurate token counts instead of estimates. \
+                 Pass the run_id from the original skill/task response, the actual total tokens used, \
+                 and the model name.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "run_id": {
+                            "type": "string",
+                            "description": "The run_id returned by the original skill or task call"
+                        },
+                        "tokens": {
+                            "type": "integer",
+                            "description": "Actual total tokens used (input + output)"
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Model name that was used, e.g. 'claude-sonnet-4-6'"
+                        }
+                    },
+                    "required": ["run_id", "tokens", "model"]
+                }),
+            ),
+
+            // 5. Workflow list
             tool(
                 "agent007_workflow_list",
                 "List workflow YAML files in ~/.agent007/workflows/.",
@@ -1029,7 +1057,23 @@ impl ServerHandler for Agent007Server {
                 }
             }
 
-            // 4. Workflow list
+            // 4. Record actual tokens
+            "agent007_record_tokens" => {
+                let run_id = extract_string(request.arguments.as_ref(), "run_id")?;
+                let tokens = request.arguments.as_ref()
+                    .and_then(|a| a.get("tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let model = extract_string(request.arguments.as_ref(), "model")?;
+                match record_actual_tokens(&run_id, tokens, &model) {
+                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(
+                        format!("Recorded {} tokens for run '{}' (model: {}).", tokens, run_id, model)
+                    )])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                }
+            }
+
+            // 5. Workflow list
             "agent007_workflow_list" => {
                 match workflow_list() {
                     Ok(names) => {
@@ -1924,6 +1968,163 @@ fn create_delegate_run(kind: &str, task: &str) -> Result<String> {
     Ok(run.id)
 }
 
+/// Returns the model label for hosted-mcp runs.
+/// Checks AGENT007_HOST_MODEL env var first; falls back to "hosted-mcp".
+fn hosted_model_label() -> String {
+    std::env::var("AGENT007_HOST_MODEL").unwrap_or_else(|_| "hosted-mcp".to_string())
+}
+
+/// Appends an estimated ModelRequest event so token counts appear in the dashboard.
+/// Estimate: 1 token ≈ 4 characters (GPT/Claude tokenizer rule of thumb).
+/// `model` is the declared model (from skill frontmatter or env var).
+/// Appends an exact ModelRequest event with the actual token count reported by the host LLM.
+/// Called via the `agent007_record_tokens` MCP tool after the host finishes its LLM work.
+fn record_actual_tokens(run_id: &str, tokens: usize, model: &str) -> Result<()> {
+    load_run_store().append_event(
+        run_id,
+        &AgentEvent::ModelRequest {
+            provider: model.to_string(),
+            prompt_ref: PromptRef::new(),
+            token_estimate: tokens,
+        },
+    ).map_err(|e| anyhow::anyhow!("{}", e))?;
+    write_statusline();
+    Ok(())
+}
+
+fn record_estimated_tokens(run_id: &str, prompt_chars: usize, model: &str) {
+    let token_estimate = (prompt_chars / 4).max(1);
+    let _ = load_run_store().append_event(
+        run_id,
+        &AgentEvent::ModelRequest {
+            provider: model.to_string(),
+            prompt_ref: PromptRef::new(),
+            token_estimate,
+        },
+    );
+    write_statusline();
+}
+
+/// Cost per token in USD (blended input+output at Claude Sonnet rates).
+const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_006;
+
+/// Write a rich one-line status to ~/.agent007/statusline for Claude Code's statusLine feature.
+///
+/// Format (segments separated by "  ·  "):
+///   ◈ agent007  ◎ claude-sonnet-4-6  ✓12 ✗1 ↺0  ⚡ 8.4k · ~$0.05  ↩ skill/dev-architect [✓]  🗝 6 mem  ⬡ :8007
+fn write_statusline() {
+    use agent007_core::run_store::RunStatus;
+
+    let store = load_run_store();
+    let runs = match store.list_runs(100) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    // ── Run counts ────────────────────────────────────────────────────────────
+    let succeeded = runs.iter().filter(|r| matches!(r.status, RunStatus::Succeeded)).count();
+    let failed    = runs.iter().filter(|r| matches!(r.status, RunStatus::Failed)).count();
+    let running   = runs.iter().filter(|r| matches!(r.status, RunStatus::Running | RunStatus::AwaitingApproval)).count();
+
+    // ── Token + model scan (20 most recent runs) ──────────────────────────────
+    let mut total_tokens: u64 = 0;
+    let mut last_model = std::env::var("AGENT007_HOST_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "hosted-mcp".to_string());
+
+    for run in runs.iter().take(20) {
+        if let Ok(detail) = store.load_run(&run.id) {
+            for entry in &detail.entries {
+                if entry.kind != "agent-event" { continue; }
+                if let Ok(AgentEvent::ModelRequest { token_estimate, provider, .. }) =
+                    serde_json::from_value::<AgentEvent>(entry.payload.clone())
+                {
+                    total_tokens += token_estimate as u64;
+                    if !provider.is_empty() && provider != "hosted-mcp" {
+                        last_model = provider;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Shorten model name: "claude-sonnet-4-6" → "sonnet-4-6" ───────────────
+    let model_short = last_model
+        .strip_prefix("claude-").unwrap_or(&last_model)
+        .to_string();
+
+    // ── Last finished task ────────────────────────────────────────────────────
+    let last_finished = runs.iter()
+        .find(|r| matches!(r.status, RunStatus::Succeeded | RunStatus::Failed));
+
+    let last_segment = if let Some(run) = last_finished {
+        let icon = if matches!(run.status, RunStatus::Succeeded) { "✓" } else { "✗" };
+        let kind_badge = match run.kind.as_str() {
+            "skill"     => "skill",
+            "task"      => "task",
+            "workflow"  => "wf",
+            "task-submit" => "task",
+            other       => other,
+        };
+        let desc = run.task.chars().take(32).collect::<String>();
+        let ellipsis = if run.task.chars().count() > 32 { "…" } else { "" };
+        format!("↩ {kind_badge}/{desc}{ellipsis} [{icon}]")
+    } else {
+        "↩ no runs yet".to_string()
+    };
+
+    // ── Tokens + cost ─────────────────────────────────────────────────────────
+    let tok_display = if total_tokens >= 1_000_000 {
+        format!("{:.2}M", total_tokens as f64 / 1_000_000.0)
+    } else if total_tokens >= 1_000 {
+        format!("{:.1}k", total_tokens as f64 / 1_000.0)
+    } else {
+        total_tokens.to_string()
+    };
+    let cost_usd = total_tokens as f64 * STATUSLINE_PRICE_PER_TOKEN;
+    let cost_display = if cost_usd >= 1.0 {
+        format!("${:.2}", cost_usd)
+    } else if cost_usd >= 0.01 {
+        format!("${:.3}", cost_usd)
+    } else {
+        format!("<$0.01")
+    };
+
+    // ── Memory key count ──────────────────────────────────────────────────────
+    let mem_count: usize = {
+        let mem_store = memory_store();
+        ["user", "project", "skills", ""].iter()
+            .filter_map(|ns| mem_store.scoped(ns).list_keys().ok())
+            .map(|ks| ks.len())
+            .sum()
+    };
+
+    // ── Dashboard port ────────────────────────────────────────────────────────
+    let dash_segment = {
+        let port_path = agent007_home().join("memory").join("project").join("dashboard_port.md");
+        std::fs::read_to_string(port_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+            .map(|p| format!("⬡ :{p}"))
+            .unwrap_or_else(|| "⬡ offline".to_string())
+    };
+
+    // ── Running indicator ─────────────────────────────────────────────────────
+    let run_stats = if running > 0 {
+        format!("✓{succeeded} ✗{failed} ↺{running}")
+    } else {
+        format!("✓{succeeded} ✗{failed}")
+    };
+
+    let line = format!(
+        "◈ agent007  ◎ {model_short}  {run_stats}  ⚡ {tok_display} · ~{cost_display}  {last_segment}  🗝 {mem_count} mem  {dash_segment}"
+    );
+
+    let path = agent007_home().join("statusline");
+    let _ = std::fs::write(&path, &line);
+}
+
 fn create_recorded_utility_run(config: &Config, kind: &str, task: &str) -> Result<String> {
     let provider = selected_runtime_provider(config);
     let run = load_run_store().create_run(
@@ -1951,14 +2152,16 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
         }
     } else {
         let run_id = create_delegate_run("task", &task)?;
+        let task_escaped = task.replace('"', "\\\"");
         let output = format!(
-            "{{\"mode\":\"hosted-mcp\",\"task\":\"{}\",\"instructions\":\
+            "{{\"mode\":\"hosted-mcp\",\"task\":\"{task_escaped}\",\"run_id\":\"{run_id}\",\"instructions\":\
              \"No standalone provider is configured inside agent007. Execute this task directly using your host LLM capabilities. \
              Use agent007_memory_write to persist results, agent007_workflow_plan to decompose \
-             complex tasks into multi-agent workflows.\",\"run_id\":\"{}\"}}",
-            task.replace('"', "\\\""),
-            run_id,
+             complex tasks into multi-agent workflows. \
+             IMPORTANT: After you finish, call agent007_record_tokens with run_id={run_id}, \
+             the actual total tokens you used (input+output), and your model name — this records real token counts in the dashboard.\"}}"
         );
+        record_estimated_tokens(&run_id, task.len(), &hosted_model_label());
         let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
@@ -1991,12 +2194,22 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
         let run_id = create_delegate_run("skill", &format!("{trigger} {args}"))?;
         let output = format!(
             "[HOSTED MCP MODE — execute the following as the host LLM]\n\n\
-             Skill: {} ({})\n\n\
+             Skill: {} ({})\n\
+             Run ID: {}\n\n\
              ---\n\n\
              {}\n\n\
-             Run ID: {}\n",
-            skill.name(), trigger, rendered, run_id,
+             ---\n\
+             After completing this skill, call agent007_record_tokens with run_id={}, \
+             the actual total tokens you used (input+output), and your model name.\n",
+            skill.name(), trigger, run_id, rendered, run_id,
         );
+        // Use the model declared in the skill's frontmatter (e.g. "claude-sonnet-4-6").
+        // If the user set AGENT007_HOST_MODEL it overrides.
+        let model_label = std::env::var("AGENT007_HOST_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| skill.model().to_string());
+        record_estimated_tokens(&run_id, rendered.len(), &model_label);
         let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
@@ -2022,31 +2235,11 @@ fn memory_write(scope: &str, key: &str, value: &str) -> Result<()> {
 }
 
 fn memory_list(scope: &str) -> Result<Vec<String>> {
-    let home = agent007_home();
-    let scope_dir = if scope.is_empty() || scope == "global" {
-        home.join("memory")
-    } else {
-        home.join("memory").join(scope)
-    };
-
-    if !scope_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut keys = Vec::new();
-    for entry in std::fs::read_dir(&scope_dir)
-        .map_err(|e| anyhow::anyhow!("cannot read memory dir: {}", e))?
-    {
-        let entry = entry.map_err(|e| anyhow::anyhow!("{}", e))?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                keys.push(stem.to_string());
-            }
-        }
-    }
-    keys.sort();
-    Ok(keys)
+    let store = memory_store();
+    let effective_scope = if scope.is_empty() || scope == "global" { "" } else { scope };
+    store.scoped(effective_scope)
+        .list_keys()
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 // ── workflow helpers ──────────────────────────────────────────────────────────
@@ -2443,6 +2636,8 @@ async fn execute_workflow_session(
 fn git_run(args: &[&str]) -> Result<String> {
     let output = std::process::Command::new("git")
         .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()
         .map_err(|e| anyhow::anyhow!("failed to run git: {}", e))?;
 
@@ -2527,11 +2722,11 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
     } else {
         let run_id = create_delegate_run("task-submit", &description)?;
         let output = format!(
-            "Task accepted in hosted MCP mode. ID: {}\n\
-             Host instruction: execute the task directly and persist important results with agent007_memory_write.\n\
-             Task: {}",
-            task_id,
-            description,
+            "Task accepted in hosted MCP mode. ID: {task_id}\n\
+             run_id: {run_id}\n\
+             Host instruction: execute the task directly and persist important results with agent007_memory_write. \
+             After completing, call agent007_record_tokens with run_id={run_id}, actual tokens used, and your model name.\n\
+             Task: {description}"
         );
         let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
@@ -3185,69 +3380,81 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
     let mut shared_learning: Option<Arc<LearningDispatcher>> = None;
 
     if !no_dashboard {
-        if std::io::stdin().is_terminal() {
-            let stack = super::run::build_stack(&config).await?;
-            let standalone_mode = standalone_mode_available(&config);
-            let runtime_mode = runtime_mode_label(&config).to_string();
-            let provider_label = match (
-                selected_runtime_provider(&config),
-                selected_runtime_model(&config),
-            ) {
-                (Some(provider), Some(model)) if provider != model => format!("{provider} / {model}"),
-                (Some(provider), _) => provider,
-                _ => "hosted-mcp".to_string(),
-            };
+        // Guard: if another process already owns the dashboard port, skip starting a new
+        // instance so Zed + Claude Code share one dashboard instead of each spawning their own.
+        let already_running = if let Some(port) = read_dashboard_port() {
+            if dashboard_port_is_live(port).await {
+                eprintln!("[agent007] web dashboard already running: http://localhost:{port} — skipping new instance");
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
+        if already_running {
+            // Still wire up a dispatcher so MCP tool calls publish events — the live
+            // dashboard belongs to the first process but run history is shared on disk.
+            let stack = super::run::build_stack(&config).await?;
             shared_dispatcher = Some(stack.dispatcher.clone());
             shared_learning = Some(stack.learning_dispatcher.clone());
-
             let collector = stack.feedback_collector.clone();
             stack.tracker.spawn(async move {
                 if let Err(e) = collector.run().await {
                     tracing::warn!("feedback collector error: {e}");
                 }
             });
-
-            let web = agent007_web::WebServer::new(
-                stack.dispatcher.clone(),
-                stack.learning_dispatcher.clone(),
-                stack.model_router.clone(),
-                Some(stack.workflow_runner.clone()),
-                stack.cancel.clone(),
-                standalone_mode,
-                runtime_mode,
-                provider_label,
-            );
-
-            tokio::spawn(async move {
-                let preferred = dashboard_port;
-                let actual_port = find_free_port(preferred).await;
-                eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
-                persist_dashboard_port(actual_port);
-                if let Err(e) = web.run(actual_port).await {
-                    eprintln!("[agent007] web dashboard error: {e}");
-                }
-            });
-
-            tracing::info!(
-                "agent007 MCP server starting (stdio) + web dashboard on port {dashboard_port}"
-            );
         } else {
-            match ensure_dashboard_sidecar(dashboard_port).await {
-                Ok(Some(actual_port)) => {
-                    eprintln!("[agent007] web dashboard sidecar: http://localhost:{actual_port}");
-                }
-                Ok(None) => {
-                    tracing::warn!("dashboard sidecar requested but no active dashboard port was discovered");
-                }
-                Err(error) => {
-                    tracing::warn!("failed to start dashboard sidecar: {error}");
-                }
+        // Start the dashboard inline regardless of whether stdin is a terminal.
+        // The MCP stdio protocol and the HTTP web server use completely different
+        // transports and coexist in the same process without conflict.
+        let stack = super::run::build_stack(&config).await?;
+        let standalone_mode = standalone_mode_available(&config);
+        let runtime_mode = runtime_mode_label(&config).to_string();
+        let provider_label = match (
+            selected_runtime_provider(&config),
+            selected_runtime_model(&config),
+        ) {
+            (Some(provider), Some(model)) if provider != model => format!("{provider} / {model}"),
+            (Some(provider), _) => provider,
+            _ => "hosted-mcp".to_string(),
+        };
+
+        shared_dispatcher = Some(stack.dispatcher.clone());
+        shared_learning = Some(stack.learning_dispatcher.clone());
+
+        let collector = stack.feedback_collector.clone();
+        stack.tracker.spawn(async move {
+            if let Err(e) = collector.run().await {
+                tracing::warn!("feedback collector error: {e}");
             }
-            tracing::info!(
-                "agent007 MCP server starting (stdio transport) + detached web dashboard sidecar"
-            );
-        }
+        });
+
+        let web = agent007_web::WebServer::new(
+            stack.dispatcher.clone(),
+            stack.learning_dispatcher.clone(),
+            stack.model_router.clone(),
+            Some(stack.workflow_runner.clone()),
+            stack.cancel.clone(),
+            standalone_mode,
+            runtime_mode,
+            provider_label,
+        );
+
+        tokio::spawn(async move {
+            let (actual_port, listener) = find_free_port_with_listener(dashboard_port).await;
+            eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
+            persist_dashboard_port(actual_port);
+            if let Err(e) = web.run_with_listener(listener).await {
+                eprintln!("[agent007] web dashboard error: {e}");
+            }
+        });
+
+        tracing::info!(
+            "agent007 MCP server starting (stdio) + web dashboard on port {dashboard_port}"
+        );
+        } // end else already_running
     } else {
         tracing::info!("agent007 MCP server starting (stdio transport, dashboard disabled)");
     }
@@ -3262,16 +3469,23 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
 }
 
 /// Try `preferred`, then increment until a bindable port is found.
-async fn find_free_port(preferred: u16) -> u16 {
+/// Find a free port and return both the port number and the already-bound listener,
+/// so the caller can pass the listener directly to the HTTP server (avoids TOCTOU race
+/// where two processes check the same port, both see it free, and one fails to bind).
+async fn find_free_port_with_listener(preferred: u16) -> (u16, tokio::net::TcpListener) {
     for offset in 0u16..50 {
         let port = preferred.wrapping_add(offset);
         let addr = format!("0.0.0.0:{port}");
         if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
-            drop(listener);
-            return port;
+            return (port, listener);
         }
     }
-    preferred
+    // Last-ditch: let the OS assign any free port.
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
+        .await
+        .expect("could not bind to any port");
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(preferred);
+    (port, listener)
 }
 
 /// Write the active dashboard port to `.agent007/memory/project/dashboard_port.md`
@@ -3283,9 +3497,10 @@ fn persist_dashboard_port(port: u16) {
     let _ = scoped.write("dashboard_url", &format!("http://localhost:{port}"));
 }
 
+#[allow(dead_code)]
 async fn ensure_dashboard_sidecar(preferred_port: u16) -> Result<Option<u16>> {
     if let Some(port) = read_dashboard_port() {
-        if dashboard_port_is_live(port) {
+        if dashboard_port_is_live(port).await {
             return Ok(Some(port));
         }
     }
@@ -3306,7 +3521,7 @@ async fn ensure_dashboard_sidecar(preferred_port: u16) -> Result<Option<u16>> {
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(150)).await;
         if let Some(port) = read_dashboard_port() {
-            if dashboard_port_is_live(port) {
+            if dashboard_port_is_live(port).await {
                 return Ok(Some(port));
             }
         }
@@ -3324,9 +3539,15 @@ fn read_dashboard_port() -> Option<u16> {
     raw.trim().parse().ok()
 }
 
-fn dashboard_port_is_live(port: u16) -> bool {
+async fn dashboard_port_is_live(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    .map(|r| r.is_ok())
+    .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -3384,6 +3605,7 @@ mod tests {
             "agent007_memory_read",
             "agent007_memory_write",
             "agent007_memory_list",
+            "agent007_record_tokens",
             "agent007_workflow_list",
             "agent007_workflow_run",
             "agent007_workflow_resume",
@@ -3661,11 +3883,11 @@ requires_approval = true
         std::env::remove_var("AGENT007_HOME");
     }
 
-    #[test]
-    fn dashboard_port_is_live_detects_bound_listener() {
+    #[tokio::test]
+    async fn dashboard_port_is_live_detects_bound_listener() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(dashboard_port_is_live(port));
+        assert!(dashboard_port_is_live(port).await);
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub async fn execute(
     do_claude: bool,
     do_cursor: bool,
     do_codex: bool,
+    do_zed: bool,
 ) -> Result<()> {
     let home = if global {
         super::run::agent007_global_home()
@@ -84,6 +85,9 @@ pub async fn execute(
     }
     if do_codex {
         ide_targets.push("Codex");
+    }
+    if do_zed {
+        ide_targets.push("Zed");
     }
     let ide_label = if ide_targets.is_empty() {
         "none (--no-ide)".to_string()
@@ -256,6 +260,17 @@ pub async fn execute(
     if do_codex {
         section(&format!("{step}. Registering MCP server with Codex"));
         register_codex_mcp(&codex_scope_dir, force)?;
+        step += 1;
+    }
+
+    if do_zed {
+        section(&format!("{step}. Registering LSP server with Zed"));
+        let zed_scope_dir = if global {
+            dirs_home().join(".config").join("zed")
+        } else {
+            project_dir.join(".zed")
+        };
+        register_zed(&zed_scope_dir, &project_dir, force)?;
         step += 1;
     }
 
@@ -451,6 +466,196 @@ fn register_codex_mcp(codex_dir: &Path, force: bool) -> Result<()> {
     println!();
     warn("Restart Codex to activate the MCP server");
     info("Codex uses `serve --no-dashboard` by default for stdio MCP mode");
+    Ok(())
+}
+
+/// Resolve the absolute path of the installed agent007 binary.
+/// Falls back to the current executable path, then bare "agent007".
+fn which_agent007() -> String {
+    // Try `which agent007` first
+    if let Ok(out) = std::process::Command::new("which").arg("agent007").output() {
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !path.is_empty() {
+            return path;
+        }
+    }
+    // Fall back to the running executable
+    if let Ok(exe) = std::env::current_exe() {
+        return exe.display().to_string();
+    }
+    "agent007".to_string()
+}
+
+/// Write Zed integration into <zed_dir>/:
+///   settings.json — LSP binary + MCP context_server + agent tool permissions
+///   tasks.json    — agent007 command palette tasks
+///   AGENTS.md     — rules file wiring Zed AI to agent007 workflows (project root)
+/// Project-local: .zed/ — Global: ~/.config/zed/
+fn register_zed(zed_dir: &Path, project_dir: &Path, force: bool) -> Result<()> {
+    if let Some(parent) = zed_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(zed_dir)?;
+
+    register_zed_settings(zed_dir, force)?;
+    register_zed_tasks(zed_dir, force)?;
+    register_zed_rules(project_dir, force)?;
+    Ok(())
+}
+
+fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
+    let settings_path = zed_dir.join("settings.json");
+
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let raw = std::fs::read_to_string(&settings_path)?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
+    } else {
+        serde_json::Value::Object(serde_json::Map::new())
+    };
+
+    let binary_path = which_agent007();
+    let obj = root.as_object_mut().unwrap();
+
+    // ── LSP ────────────────────────────────────────────────────────────────
+    let lsp = obj
+        .entry("lsp")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    if lsp.contains_key("agent007") && !force {
+        ok(&format!("LSP already registered in {}", settings_path.display()));
+    } else {
+        lsp.insert("agent007".to_string(), serde_json::json!({
+            "binary": {
+                "path": binary_path,
+                "arguments": ["serve-lsp", "--stdio"]
+            }
+        }));
+        ok(&format!("Wrote lsp.agent007 → {binary_path} serve-lsp --stdio"));
+    }
+
+    // ── MCP context_server ─────────────────────────────────────────────────
+    let ctx = obj
+        .entry("context_servers")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    if ctx.contains_key("agent007") && !force {
+        ok(&format!("MCP context_server already registered in {}", settings_path.display()));
+    } else {
+        ctx.insert("agent007".to_string(), serde_json::json!({
+            "command": binary_path,
+            "args": ["serve", "--no-dashboard"],
+            "env": {}
+        }));
+        ok(&format!("Wrote context_servers.agent007 → {binary_path} serve --no-dashboard"));
+    }
+
+    // ── Agent tool permissions ─────────────────────────────────────────────
+    // Auto-allow all agent007 MCP tools so Zed doesn't prompt on every call.
+    let agent = obj
+        .entry("agent")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    let perms = agent
+        .entry("tool_permissions")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    let tools = perms
+        .entry("tools")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    if tools.contains_key("mcp:agent007") && !force {
+        ok("agent tool permissions already set");
+    } else {
+        tools.insert("mcp:agent007".to_string(), serde_json::json!({
+            "default": "allow"
+        }));
+        ok("Wrote agent.tool_permissions.mcp:agent007 → allow");
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
+    ok(&format!("  config: {}", settings_path.display()));
+    println!();
+    warn("Restart Zed to activate the LSP and MCP server");
+    Ok(())
+}
+
+fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
+    // Zed checks AGENTS.md before CLAUDE.md, so this takes precedence.
+    let rules_path = project_dir.join("AGENTS.md");
+    if rules_path.exists() && !force {
+        ok(&format!("AGENTS.md already exists — skipped ({})", rules_path.display()));
+        return Ok(());
+    }
+    std::fs::write(&rules_path, ZED_AGENTS_MD)?;
+    ok(&format!("Wrote AGENTS.md → {}", rules_path.display()));
+    info("Zed auto-loads AGENTS.md into every Agent Panel interaction");
+    Ok(())
+}
+
+fn register_zed_tasks(zed_dir: &Path, force: bool) -> Result<()> {
+    let tasks_path = zed_dir.join("tasks.json");
+
+    if tasks_path.exists() && !force {
+        ok(&format!("tasks.json already exists — skipped ({})", tasks_path.display()));
+        return Ok(());
+    }
+
+    let binary_path = which_agent007();
+    let tasks = serde_json::json!([
+        {
+            "label": "agent007: run task",
+            "command": binary_path,
+            "args": ["run", "$ZED_SELECTED_TEXT"],
+            "reveal": "always",
+            "hide": "on_success",
+            "save": "all"
+        },
+        {
+            "label": "agent007: skill list",
+            "command": binary_path,
+            "args": ["skill", "list"],
+            "reveal": "always",
+            "hide": "never"
+        },
+        {
+            "label": "agent007: serve (MCP + dashboard)",
+            "command": binary_path,
+            "args": ["serve"],
+            "reveal": "no_focus",
+            "hide": "never",
+            "allow_concurrent_runs": false
+        },
+        {
+            "label": "agent007: dashboard",
+            "command": binary_path,
+            "args": ["dashboard"],
+            "reveal": "no_focus",
+            "hide": "on_success"
+        },
+        {
+            "label": "agent007: build frontend",
+            "command": "npm",
+            "args": ["run", "build"],
+            "cwd": "$ZED_WORKTREE_ROOT/crates/web/frontend",
+            "reveal": "always",
+            "hide": "on_success"
+        }
+    ]);
+
+    std::fs::write(&tasks_path, serde_json::to_string_pretty(&tasks)?)?;
+    ok(&format!("Wrote tasks.json ({} tasks)", 5));
+    ok(&format!("  config: {}", tasks_path.display()));
+    info("Run tasks via: Zed command palette → 'task: spawn'");
     Ok(())
 }
 
@@ -869,4 +1074,45 @@ Always:
 Never:
 - [constraint 1]
 """
+"#;
+
+const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules for Zed
+
+You have access to the **agent007** MCP server via `context_servers.agent007`.
+Always prefer agent007 tools over ad-hoc code generation for complex tasks.
+
+## Available Tools
+
+- `agent007_run` — Run any task through the full agent stack
+- `agent007_skill_list` — List all installed skills
+- `agent007_skill_run` — Run a skill by trigger
+- `agent007_workflow_list` — List available workflows
+- `agent007_workflow_run` — Run a named workflow with a task
+
+## Workflows
+
+Use `agent007_workflow_run` to route tasks to the right workflow:
+
+| Workflow | When to use |
+|----------|-------------|
+| `tdd` | Writing new features — Red → Green → Refactor |
+| `code-review` | Reviewing code for security, performance, quality |
+| `sparc` | Building features end-to-end from spec to completion |
+| `log-analysis` | Analyzing logs for errors, patterns, security issues |
+
+## How to Handle Requests
+
+1. **Simple task** → use `agent007_run` with the task description
+2. **Code review** → use `agent007_workflow_run` with name=`code-review`
+3. **New feature** → use `agent007_workflow_run` with name=`tdd` or `sparc`
+4. **Log/error analysis** → use `agent007_workflow_run` with name=`log-analysis`
+5. **Skill needed** → call `agent007_skill_list` then `agent007_skill_run`
+
+## Project Context
+
+- Rust workspace with a Vue 3 frontend (`crates/web/frontend/`)
+- Frontend changes require `npm run build` in `crates/web/frontend/` — use the `agent007: build frontend` task
+- LSP server: `agent007 serve-lsp --stdio`
+- MCP server: `agent007 serve --no-dashboard`
+- Web dashboard: `http://localhost:8007`
 "#;

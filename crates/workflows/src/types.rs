@@ -16,6 +16,8 @@ pub enum StepType {
     Execute,
     Evaluator,
     Router,
+    /// Call another workflow by name and inject its outputs into the current context.
+    SubWorkflow,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -50,6 +52,8 @@ pub struct StepDef {
     pub r#type: StepType,
     pub evaluate: Option<EvaluateConfig>,
     pub routes: Option<Vec<RouteConfig>>,
+    /// For sub-workflow steps: the name of the workflow file to call (without .toml extension).
+    pub workflow: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]

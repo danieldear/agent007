@@ -24,13 +24,11 @@ impl SkillExecutor {
         let rag_context = self.retriever.retrieve(args).await
             .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
 
-        // 2. Read memory values
-        let memory_user = self.memory.read("user")
-            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?
-            .unwrap_or_default();
-        let memory_project = self.memory.read("project")
-            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?
-            .unwrap_or_default();
+        // 2. Read memory values — data lives at <scope>/<key>.md, so read the full scope
+        let memory_user = self.memory.inner.scoped("user").read_all()
+            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
+        let memory_project = self.memory.inner.scoped("project").read_all()
+            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
 
         // 3. Build Tera context
         let mut ctx = tera::Context::new();
@@ -66,7 +64,7 @@ impl SkillExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent007_memory::{MemoryError, MemoryStore, Retriever, SearchResult, ScopedMemoryStore, VectorDB};
+    use agent007_memory::{MemoryError, MemoryStore, Retriever, SearchResult, VectorDB};
     use agent007_models::{EmbeddingProvider, ModelError, ModelProvider, CompletionRequest, CompletionResponse};
     use async_trait::async_trait;
     use crate::types::{Skill, SkillFrontmatter};

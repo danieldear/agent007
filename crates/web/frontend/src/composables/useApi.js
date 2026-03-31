@@ -56,6 +56,9 @@ export function useApi() {
     getWorkflow: (name) => fetchJson(`/api/workflows/${encodeURIComponent(name)}`),
     saveWorkflow: (data) => fetchJson('/api/workflows', { method: 'POST', body: JSON.stringify(data) }),
 
+    // Workflow validation
+    validateWorkflow: (data) => fetchJson('/api/workflows/validate', { method: 'POST', body: JSON.stringify(data) }),
+
     // Workflow Templates
     listTemplates: () => fetchJson('/api/workflow-templates'),
     getTemplate: (name) => fetchJson(`/api/workflow-templates/${encodeURIComponent(name)}`),

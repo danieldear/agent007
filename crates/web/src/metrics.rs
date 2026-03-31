@@ -48,6 +48,7 @@ pub struct TaskLogEntry {
     pub task: String,
     pub status: String,
     pub agent: String,
+    pub model: String,
     pub tokens: u64,
     pub started_at: String,
     pub finished_at: Option<String>,
@@ -93,11 +94,18 @@ impl DashboardMetrics {
                 "hosted-mcp".to_string()
             },
             model_provider: if std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
-                "codex".to_string()
+                std::env::var("OPENAI_MODEL").ok()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "codex".to_string())
             } else if std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
-                "claude".to_string()
+                std::env::var("ANTHROPIC_MODEL").ok()
+                    .or_else(|| std::env::var("CLAUDE_MODEL").ok())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "claude".to_string())
             } else {
-                "hosted-mcp".to_string()
+                std::env::var("AGENT007_HOST_MODEL").ok()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "hosted-mcp".to_string())
             },
             recent_tasks: VecDeque::new(),
         }
@@ -125,6 +133,7 @@ impl DashboardMetrics {
                     task: task.description.chars().take(120).collect(),
                     status: "running".to_string(),
                     agent: format!("{}", agent_id),
+                    model: self.model_provider.clone(),
                     tokens: 0,
                     started_at: Utc::now().format("%H:%M:%S").to_string(),
                     finished_at: None,
@@ -143,12 +152,18 @@ impl DashboardMetrics {
                     entry.finished_at = Some(Utc::now().format("%H:%M:%S").to_string());
                 }
             }
-            AgentEvent::ModelRequest { token_estimate, .. } => {
+            AgentEvent::ModelRequest { token_estimate, provider, .. } => {
                 self.total_tokens += *token_estimate as u64;
                 self.estimated_usd = self.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
                 self.session_requests += 1;
+                // Credit tokens to the most recent running task and update its model.
+                if let Some(entry) = self.recent_tasks.iter_mut().rev().find(|e| e.status == "running") {
+                    entry.tokens += *token_estimate as u64;
+                    entry.model = provider.clone();
+                }
             }
             AgentEvent::ToolCall { .. } => {}
+            AgentEvent::ToolCallResult { .. } => {}
             AgentEvent::MemoryWrite { .. } => {}
             AgentEvent::HookFired { .. } => {}
         }
@@ -216,14 +231,13 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
         metrics.total_tokens += tokens;
         metrics.session_requests += requests;
 
+        let provider_label = run.provider.clone().unwrap_or_else(|| run.mode.clone());
         metrics.recent_tasks.push_back(TaskLogEntry {
             id: run.id.clone(),
             task: run.task.chars().take(120).collect(),
             status: run_status_label(&run.status).to_string(),
-            agent: run
-                .provider
-                .clone()
-                .unwrap_or_else(|| run.mode.clone()),
+            agent: run.mode.clone(),
+            model: provider_label,
             tokens,
             started_at: run.started_at.format("%H:%M:%S").to_string(),
             finished_at: run

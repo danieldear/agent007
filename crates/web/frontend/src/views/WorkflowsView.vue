@@ -17,6 +17,8 @@ const templates = ref([])
 const selectedWorkflow = ref(null)
 const showSaveDialog = ref(false)
 const showTemplateMenu = ref(false)
+const validating = ref(false)
+const validationResult = ref(null)
 const workflowName = ref('')
 const workflowDescription = ref('')
 
@@ -33,6 +35,33 @@ const nodeTypes = {
 }
 
 const contextMenu = ref({ show: false, x: 0, y: 0, type: null, targetId: null })
+
+// Prompt templates keyed by agent/persona name and node type
+const PROMPT_TEMPLATES = {
+  // By persona name
+  Researcher:          'Research and gather comprehensive context for: {{task}}\n\nInclude: background, prior art, relevant patterns, constraints, and key facts needed to proceed.',
+  Architect:           'Design the architecture for: {{task}}\n\nPrevious context: {{research_output}}\n\nDeliver: component breakdown, interfaces, data flow, technology choices, and trade-offs.',
+  Coder:               'Implement the following based on the design:\n\n{{design_output}}\n\nOriginal task: {{task}}\n\nWrite clean, well-structured code with error handling.',
+  CodeReviewer:        'Review the following code for quality, correctness, and security:\n\n{{code}}\n\nCheck: logic errors, edge cases, security issues, performance, readability.\nRespond JSON: {"verdict": "pass" or "retry", "issues": [...], "suggestions": [...]}',
+  SecurityReviewer:    'Perform a security audit on:\n\n{{task}}\n\nCheck for: injection vulnerabilities, auth flaws, insecure data handling, dependency risks, OWASP Top 10.\nOutput: severity-ranked findings with remediation steps.',
+  PerformanceEngineer: 'Analyze performance characteristics of:\n\n{{task}}\n\nIdentify: algorithmic complexity, memory usage, blocking operations, N+1 queries, missing caching.\nOutput: ranked issues with optimization recommendations.',
+  UIUXDesigner:        'Design the user interface for:\n\n{{task}}\n\nContext: {{design_output}}\n\nDeliver: component structure, user flows, accessibility considerations, and implementation-ready specs.',
+  DevOpsEngineer:      'Design the infrastructure and deployment pipeline for:\n\n{{task}}\n\nCover: containerization, CI/CD, scaling strategy, monitoring, rollback plan.',
+  TestEngineer:        'Write a comprehensive test suite for:\n\n{{task}}\n\nCode under test: {{code}}\n\nInclude: unit tests, edge cases, error paths, integration tests. Use the red-green-refactor pattern.',
+  // By node type
+  evaluator:           'Evaluate the output against the acceptance criteria.\n\nOutput to review: {{step_output}}\nOriginal requirement: {{task}}\n\nRespond JSON: {"verdict": "pass" or "retry", "score": 0-10, "reason": "...", "fixes": "..."}',
+  router:              'Classify this task into one of the available categories.\n\nTask: {{task}}\n\nRespond with exactly one of the category labels (no extra text).',
+  approval:            'Review the following for human approval before proceeding.\n\nWork product: {{step_output}}\nOriginal task: {{task}}\n\nSummarize what was done and flag any concerns.',
+}
+
+function autogeneratePrompt() {
+  const agent = nodeEditorForm.value.agent
+  const type = editingNodeType.value
+  // Try persona name first, then node type, then generic
+  const template = PROMPT_TEMPLATES[agent] || PROMPT_TEMPLATES[type] ||
+    `You are a ${agent || 'specialist agent'}. Complete the following task:\n\n{{task}}\n\nBe thorough, accurate, and output clearly structured results.`
+  nodeEditorForm.value.prompt = template
+}
 
 // Node editor state
 const showNodeEditor = ref(false)
@@ -342,6 +371,20 @@ function exportYaml() {
   }
 }
 
+async function validateWorkflow() {
+  if (!nodes.value.length) return
+  validating.value = true
+  validationResult.value = null
+  try {
+    const payload = exportYaml()
+    validationResult.value = await api.validateWorkflow(payload)
+  } catch (e) {
+    validationResult.value = { valid: false, _error: e.message }
+  } finally {
+    validating.value = false
+  }
+}
+
 async function saveWorkflow() {
   const yaml = exportYaml()
   await api.saveWorkflow(yaml)
@@ -375,23 +418,121 @@ async function loadTemplate(tplName) {
 
 <template>
   <div class="flex flex-col h-full" @click="hideContextMenu">
-    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
-      <h2 class="text-lg font-bold">Workflow Designer</h2>
-      <div class="flex gap-2">
-        <div class="dropdown dropdown-end">
-          <label tabindex="0" class="btn btn-sm btn-ghost" @click.stop="showTemplateMenu = !showTemplateMenu">New ▾</label>
-          <ul v-if="showTemplateMenu" tabindex="0" class="dropdown-content z-50 menu p-2 shadow bg-base-300 rounded-box w-56">
-            <li><a @click="newWorkflow">Empty Canvas</a></li>
-            <li class="menu-title"><span>Templates</span></li>
-            <li v-for="tpl in templates" :key="tpl.name">
-              <a @click="loadTemplate(tpl.name)">
-                <span class="font-mono text-xs">{{ tpl.name }}</span>
-                <span class="text-base-content/40 text-[10px]">{{ tpl.description?.slice(0, 30) }}</span>
-              </a>
-            </li>
-          </ul>
+    <div class="border-b border-base-300 bg-base-200">
+      <div class="p-4 flex items-center justify-between">
+        <h2 class="text-lg font-bold">Workflow Designer</h2>
+        <div class="flex gap-2 items-center">
+          <div class="dropdown dropdown-end">
+            <label tabindex="0" class="btn btn-sm btn-ghost" @click.stop="showTemplateMenu = !showTemplateMenu">New ▾</label>
+            <ul v-if="showTemplateMenu" tabindex="0" class="dropdown-content z-50 menu p-2 shadow bg-base-300 rounded-box w-56">
+              <li><a @click="newWorkflow">Empty Canvas</a></li>
+              <li class="menu-title"><span>Templates</span></li>
+              <li v-for="tpl in templates" :key="tpl.name">
+                <a @click="loadTemplate(tpl.name)">
+                  <span class="font-mono text-xs">{{ tpl.name }}</span>
+                  <span class="text-base-content/40 text-[10px]">{{ tpl.description?.slice(0, 30) }}</span>
+                </a>
+              </li>
+            </ul>
+          </div>
+          <button
+            class="btn btn-sm btn-ghost border border-base-content/20 gap-1"
+            :class="{ 'loading loading-spinner': validating }"
+            :disabled="!nodes.length || validating"
+            @click="validateWorkflow"
+          >
+            <span v-if="!validating">🔍 Validate</span>
+            <span v-else>Validating…</span>
+          </button>
+          <button class="btn btn-sm btn-primary" @click="openSaveDialog" :disabled="!nodes.length">Save</button>
         </div>
-        <button class="btn btn-sm btn-primary" @click="openSaveDialog" :disabled="!nodes.length">Save</button>
+      </div>
+
+      <!-- Validation result panel -->
+      <div v-if="validationResult" class="px-4 pb-3">
+        <div
+          class="rounded-lg border text-xs font-mono overflow-hidden"
+          :class="validationResult._error ? 'border-error/40 bg-error/5' :
+                  validationResult.valid ? 'border-success/40 bg-success/5' : 'border-error/40 bg-error/5'"
+        >
+          <!-- Header -->
+          <div
+            class="flex items-center justify-between px-3 py-2 border-b"
+            :class="validationResult._error ? 'border-error/20' :
+                    validationResult.valid ? 'border-success/20' : 'border-error/20'"
+          >
+            <div class="flex items-center gap-2">
+              <span v-if="validationResult._error" class="text-error font-bold">✗ Validation error</span>
+              <span v-else-if="validationResult.valid" class="text-success font-bold">✓ Valid</span>
+              <span v-else class="text-error font-bold">✗ Invalid</span>
+              <span v-if="validationResult.structural?.warnings?.length" class="text-warning">
+                {{ validationResult.structural.warnings.length }} warning{{ validationResult.structural.warnings.length !== 1 ? 's' : '' }}
+              </span>
+              <!-- LLM score badge -->
+              <span
+                v-if="validationResult.llm?.score != null"
+                class="badge badge-sm font-mono"
+                :class="validationResult.llm.score >= 7 ? 'badge-success' : validationResult.llm.score >= 4 ? 'badge-warning' : 'badge-error'"
+              >LLM {{ validationResult.llm.score }}/10</span>
+              <span v-if="validationResult.llm?.available === false" class="text-base-content/40 text-[10px]">
+                (LLM validation requires standalone mode)
+              </span>
+            </div>
+            <button class="btn btn-xs btn-ghost opacity-50 hover:opacity-100" @click="validationResult = null">✕</button>
+          </div>
+
+          <!-- Body -->
+          <div class="p-3 space-y-2 max-h-48 overflow-y-auto">
+            <!-- Network/fetch error -->
+            <p v-if="validationResult._error" class="text-error">{{ validationResult._error }}</p>
+
+            <!-- Structural errors -->
+            <div v-if="validationResult.structural?.errors?.length">
+              <p class="text-error/70 uppercase tracking-wider text-[10px] mb-1">Errors</p>
+              <ul class="space-y-0.5">
+                <li v-for="e in validationResult.structural.errors" :key="e" class="text-error flex gap-1.5">
+                  <span class="shrink-0">✗</span><span>{{ e }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Structural warnings -->
+            <div v-if="validationResult.structural?.warnings?.length">
+              <p class="text-warning/70 uppercase tracking-wider text-[10px] mb-1">Warnings</p>
+              <ul class="space-y-0.5">
+                <li v-for="w in validationResult.structural.warnings" :key="w" class="text-warning flex gap-1.5">
+                  <span class="shrink-0">⚠</span><span>{{ w }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- LLM summary -->
+            <div v-if="validationResult.llm?.summary">
+              <p class="text-base-content/50 uppercase tracking-wider text-[10px] mb-1">LLM Summary</p>
+              <p class="text-base-content/80">{{ validationResult.llm.summary }}</p>
+            </div>
+
+            <!-- LLM issues -->
+            <div v-if="validationResult.llm?.issues?.length">
+              <p class="text-error/70 uppercase tracking-wider text-[10px] mb-1">LLM Issues</p>
+              <ul class="space-y-0.5">
+                <li v-for="issue in validationResult.llm.issues" :key="issue" class="text-error/80 flex gap-1.5">
+                  <span class="shrink-0">→</span><span>{{ issue }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- LLM suggestions -->
+            <div v-if="validationResult.llm?.suggestions?.length">
+              <p class="text-primary/70 uppercase tracking-wider text-[10px] mb-1">Suggestions</p>
+              <ul class="space-y-0.5">
+                <li v-for="s in validationResult.llm.suggestions" :key="s" class="text-primary/80 flex gap-1.5">
+                  <span class="shrink-0">💡</span><span>{{ s }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -528,7 +669,15 @@ async function loadTemplate(tplName) {
           <div class="form-control">
             <label class="label">
               <span class="label-text text-xs">Prompt</span>
-              <span class="label-text-alt text-xs text-base-content/40">Use <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> and output keys from previous steps</span>
+              <span class="label-text-alt flex items-center gap-2">
+                <span class="text-xs text-base-content/40">Use <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> and output keys from previous steps</span>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-ghost text-primary border border-primary/30 hover:border-primary gap-1"
+                  title="Autogenerate prompt based on selected agent"
+                  @click="autogeneratePrompt"
+                >⚡ Autogenerate</button>
+              </span>
             </label>
             <textarea
               v-model="nodeEditorForm.prompt"

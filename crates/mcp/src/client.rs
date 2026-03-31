@@ -178,6 +178,65 @@ impl McpClient {
 
         Ok(json)
     }
+
+    /// Reconnect all servers with exponential backoff (1s, 2s, 4s — max 3 attempts).
+    /// Call this after detecting repeated `ToolCallFailed` errors to restore connectivity.
+    pub async fn reconnect_all(&mut self) -> Result<(), McpError> {
+        const MAX_ATTEMPTS: u32 = 3;
+        self.handles.clear();
+        self.tool_index.clear();
+
+        for config in &self.servers {
+            let mut last_err: Option<McpError> = None;
+            for attempt in 0..MAX_ATTEMPTS {
+                if attempt > 0 {
+                    let delay = std::time::Duration::from_secs(1u64 << (attempt - 1));
+                    tracing::info!(server = %config.name, attempt, delay_secs = delay.as_secs(), "reconnecting MCP server");
+                    tokio::time::sleep(delay).await;
+                }
+
+                let cmd = build_command(config);
+                let transport = match TokioChildProcess::new(cmd) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        last_err = Some(McpError::ServerStartFailed { name: config.name.clone(), source: e });
+                        continue;
+                    }
+                };
+
+                let running = match ClientInfo::default().serve(transport).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = Some(McpError::Sdk(e.to_string()));
+                        continue;
+                    }
+                };
+
+                let peer = running.peer().clone();
+                let handle_idx = self.handles.len();
+                self.handles.push(ServerHandle { peer: peer.clone(), _service: running });
+
+                match peer.list_all_tools().await {
+                    Ok(tools) => {
+                        for tool in tools {
+                            self.tool_index.insert(tool.name.to_string(), handle_idx);
+                        }
+                        tracing::info!(server = %config.name, "reconnected successfully");
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(McpError::Sdk(e.to_string()));
+                    }
+                }
+            }
+            if let Some(e) = last_err {
+                tracing::error!(server = %config.name, error = %e, "failed to reconnect after {} attempts", MAX_ATTEMPTS);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn build_command(config: &McpServerConfig) -> tokio::process::Command {

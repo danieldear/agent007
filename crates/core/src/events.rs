@@ -25,6 +25,9 @@ pub enum AgentEvent {
     TaskAssigned { agent_id: AgentId, task: Task },
     TaskCompleted { agent_id: AgentId, result: TaskResult },
     ToolCall { agent_id: AgentId, tool: ToolCall },
+    /// Emitted after a tool call completes. `success` is false when the tool
+    /// returned an error or non-zero exit code. `error` carries the message.
+    ToolCallResult { agent_id: AgentId, tool: ToolCall, success: bool, error: Option<String> },
     MemoryWrite { key: String, value_ref: MemoryRef },
     HookFired { event: HookEvent },
     ModelRequest { provider: String, prompt_ref: PromptRef, token_estimate: usize },

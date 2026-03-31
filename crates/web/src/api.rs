@@ -776,6 +776,261 @@ pub async fn workflow_get_handler(
     }
 }
 
+// ── Workflow validate ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ValidateStructural {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ValidateLlm {
+    pub available: bool,
+    pub score: Option<u8>,
+    pub summary: Option<String>,
+    pub issues: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct WorkflowValidateResponse {
+    pub valid: bool,
+    pub structural: ValidateStructural,
+    pub llm: ValidateLlm,
+}
+
+/// `POST /api/workflows/validate` — structurally validate a workflow and
+/// optionally ask the LLM for semantic feedback (standalone mode only).
+pub async fn workflow_validate_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let structural = validate_structural(&payload);
+    let llm = if state.standalone_mode {
+        validate_with_llm(&state, &payload).await
+    } else {
+        ValidateLlm { available: false, score: None, summary: None, issues: vec![], suggestions: vec![] }
+    };
+    let valid = structural.errors.is_empty();
+    Json(WorkflowValidateResponse { valid, structural, llm }).into_response()
+}
+
+fn validate_structural(workflow: &Value) -> ValidateStructural {
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    if workflow.get("name").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+        warnings.push("Workflow has no name — it will be saved as 'untitled'".into());
+    }
+
+    let steps = match workflow.get("steps").and_then(|s| s.as_array()) {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            errors.push("Workflow has no steps".into());
+            return ValidateStructural { errors, warnings };
+        }
+    };
+
+    // Collect all IDs and outputs in a first pass
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut outputs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (i, step) in steps.iter().enumerate() {
+        let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() {
+            errors.push(format!("Step {i} has no 'id'"));
+        } else if !ids.insert(id.clone()) {
+            errors.push(format!("Duplicate step id: '{id}'"));
+        }
+        if let Some(out) = step.get("output").and_then(|v| v.as_str()) {
+            outputs.insert(out.to_string());
+        }
+    }
+
+    // Second pass: per-step validation
+    for step in steps {
+        let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+
+        if step.get("agent").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+            errors.push(format!("Step '{id}' has no 'agent'"));
+        }
+
+        let prompt = step.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        if prompt.is_empty() {
+            warnings.push(format!("Step '{id}' has an empty prompt"));
+        }
+
+        match step.get("type").and_then(|v| v.as_str()).unwrap_or("execute") {
+            "evaluator" => {
+                match step.get("evaluate") {
+                    None => errors.push(format!("Evaluator step '{id}' is missing 'evaluate' config")),
+                    Some(eval) => {
+                        if eval.get("decision_field").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                            errors.push(format!("Evaluator step '{id}': evaluate.decision_field is required"));
+                        }
+                        if eval.get("on_pass").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                            warnings.push(format!("Evaluator step '{id}': evaluate.on_pass is empty"));
+                        }
+                        if eval.get("on_fail").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                            warnings.push(format!("Evaluator step '{id}': evaluate.on_fail is empty"));
+                        }
+                    }
+                }
+                if !prompt.to_lowercase().contains("json") {
+                    warnings.push(format!("Evaluator step '{id}': prompt should instruct the agent to respond with JSON"));
+                }
+            }
+            "router" => {
+                let routes = step.get("routes").and_then(|r| r.as_array());
+                if routes.map_or(true, |r| r.is_empty()) {
+                    errors.push(format!("Router step '{id}' is missing 'routes' config"));
+                } else {
+                    let has_default = routes.unwrap().iter()
+                        .any(|r| r.get("default").and_then(|v| v.as_bool()).unwrap_or(false));
+                    if !has_default {
+                        warnings.push(format!("Router step '{id}' has no default route — unmatched classifications will stall"));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // depends_on reference check
+        if let Some(deps) = step.get("depends_on").and_then(|d| d.as_array()) {
+            for dep in deps {
+                let dep_id = dep.as_str().unwrap_or("");
+                if dep_id == id {
+                    errors.push(format!("Step '{id}' has a self-dependency"));
+                } else if !dep_id.is_empty() && !ids.contains(dep_id) {
+                    errors.push(format!("Step '{id}' depends_on '{dep_id}' which does not exist"));
+                }
+            }
+        }
+
+        // {{variable}} reference check
+        for var in extract_template_vars(prompt) {
+            if var != "task" && !outputs.contains(var.as_str()) {
+                warnings.push(format!("Step '{id}' references {{{{'{var}'}}}} but no step produces that output key"));
+            }
+        }
+    }
+
+    // Cycle detection via Kahn's topological sort
+    let mut in_degree: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut fwd: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    for step in steps {
+        let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        in_degree.entry(id).or_insert(0);
+        fwd.entry(id).or_default();
+        if let Some(deps) = step.get("depends_on").and_then(|d| d.as_array()) {
+            for dep in deps {
+                let dep_id = dep.as_str().unwrap_or("");
+                if !dep_id.is_empty() && ids.contains(dep_id) && dep_id != id {
+                    fwd.entry(dep_id).or_default().push(id);
+                    *in_degree.entry(id).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut queue: std::collections::VecDeque<&str> =
+        in_degree.iter().filter(|(_, &v)| v == 0).map(|(&k, _)| k).collect();
+    let mut visited = 0usize;
+    while let Some(node) = queue.pop_front() {
+        visited += 1;
+        for &next in fwd.get(node).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let deg = in_degree.entry(next).or_insert(0);
+            *deg -= 1;
+            if *deg == 0 { queue.push_back(next); }
+        }
+    }
+    if visited < ids.len() {
+        errors.push("Circular dependency detected — workflow contains a cycle".into());
+    }
+
+    ValidateStructural { errors, warnings }
+}
+
+fn extract_template_vars(prompt: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut rest = prompt;
+    while let Some(start) = rest.find("{{") {
+        rest = &rest[start + 2..];
+        if let Some(end) = rest.find("}}") {
+            let var = rest[..end].trim().to_string();
+            if !var.is_empty() { vars.push(var); }
+            rest = &rest[end + 2..];
+        } else {
+            break;
+        }
+    }
+    vars
+}
+
+async fn validate_with_llm(state: &AppState, workflow: &Value) -> ValidateLlm {
+    use agent007_models::types::{CompletionRequest, Message, Role};
+
+    let workflow_json = match serde_json::to_string_pretty(workflow) {
+        Ok(s) => s,
+        Err(_) => return ValidateLlm { available: true, score: None, summary: Some("Could not serialize workflow".into()), issues: vec![], suggestions: vec![] },
+    };
+
+    let prompt = format!(
+        "You are a multi-agent workflow validation expert. Review this workflow JSON and assess its logical correctness.\n\n\
+         ```json\n{workflow_json}\n```\n\n\
+         Check:\n\
+         1. Are step prompts well-formed and actionable?\n\
+         2. Do {{variable}} references match actual output keys from previous steps?\n\
+         3. Is the dependency order logically sound?\n\
+         4. Are the agent personas appropriate for their tasks?\n\
+         5. Any logical gaps, redundancies, missing steps, or anti-patterns?\n\n\
+         Respond with ONLY valid JSON (no markdown fences, no explanation outside JSON):\n\
+         {{\"score\": 0-10, \"summary\": \"one sentence\", \"issues\": [\"...\"], \"suggestions\": [\"...\"]}}",
+    );
+
+    let request = CompletionRequest {
+        model: "default".to_string(),
+        messages: vec![Message { role: Role::User, content: prompt }],
+        max_tokens: Some(1024),
+        temperature: Some(0.1),
+        system: Some("You are a workflow validation expert. Respond only with valid JSON.".into()),
+    };
+
+    let provider = state.model_router.route("validation");
+    match provider.complete(request).await {
+        Err(e) => ValidateLlm {
+            available: true,
+            score: None,
+            summary: Some(format!("LLM validation failed: {e}")),
+            issues: vec![],
+            suggestions: vec![],
+        },
+        Ok(resp) => {
+            // Strip markdown fences if present
+            let content = resp.content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            match serde_json::from_str::<Value>(content) {
+                Ok(json) => ValidateLlm {
+                    available: true,
+                    score: json.get("score").and_then(|v| v.as_u64()).map(|v| v.min(10) as u8),
+                    summary: json.get("summary").and_then(|v| v.as_str()).map(String::from),
+                    issues: json.get("issues").and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+                        .unwrap_or_default(),
+                    suggestions: json.get("suggestions").and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+                        .unwrap_or_default(),
+                },
+                Err(_) => ValidateLlm {
+                    available: true,
+                    score: None,
+                    summary: Some(resp.content),
+                    issues: vec![],
+                    suggestions: vec![],
+                },
+            }
+        }
+    }
+}
+
 pub async fn workflow_save_handler(
     State(_state): State<AppState>,
     Json(payload): Json<Value>,
@@ -807,6 +1062,82 @@ pub struct SkillSaveRequest {
     pub description: String,
     pub model: Option<String>,
     pub template: String,
+}
+
+#[derive(Deserialize)]
+pub struct SkillGenerateRequest {
+    pub name: String,
+    pub description: String,
+    pub category: Option<String>,
+}
+
+/// Generate a skill prompt template from the name + description.
+/// In hosted-mcp mode (no standalone provider) this returns a well-structured template
+/// built from the description without calling an external model.
+/// In standalone mode it calls the configured model to write a richer prompt.
+pub async fn skill_generate_handler(
+    State(state): State<AppState>,
+    Json(req): Json<SkillGenerateRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    let description = req.description.trim().to_string();
+    let category = req.category.as_deref().unwrap_or("custom");
+
+    // If standalone model is available, ask it to write the prompt.
+    if state.standalone_mode {
+        let system = "You are an expert AI prompt engineer. Write a concise, effective system prompt \
+            for an AI skill. Output ONLY the prompt text — no preamble, no markdown fences.";
+        let user_msg = format!(
+            "Write a prompt template for an AI skill named \"{name}\" that does the following:\n\n\
+             {description}\n\n\
+             Requirements:\n\
+             - Use {{{{args}}}} for the user's input text\n\
+             - Use {{{{task}}}} for workflow context (only when inside a workflow)\n\
+             - Use {{{{rag_context}}}} if prior knowledge would help\n\
+             - Be specific and action-oriented, not generic\n\
+             - 100-300 words"
+        );
+        let request = agent007_models::CompletionRequest {
+            model: String::new(),
+            messages: vec![agent007_models::Message {
+                role: agent007_models::Role::User,
+                content: user_msg,
+            }],
+            max_tokens: Some(600),
+            temperature: Some(0.3),
+            system: Some(system.to_string()),
+        };
+        match state.model_router.route(&name).complete(request).await {
+            Ok(resp) => {
+                return Json(serde_json::json!({ "template": resp.content.trim() })).into_response();
+            }
+            Err(_) => {} // fall through to template-based generation
+        }
+    }
+
+    // Hosted-mcp fallback: build a well-structured template from the description.
+    let role_hint = match category {
+        "dev"     => "senior software engineer",
+        "code"    => "expert code reviewer",
+        "project" => "experienced project manager",
+        "meta"    => "AI systems specialist",
+        _         => "expert AI assistant",
+    };
+
+    let template = format!(
+        "You are a {role_hint}. {description}\n\n\
+         # Task\n{{{{args}}}}\n\n\
+         # Context\n{{{{rag_context}}}}\n\n\
+         # Instructions\n\
+         1. Carefully read the task above.\n\
+         2. Apply your expertise as a {role_hint} to produce a thorough, accurate result.\n\
+         3. Structure your output clearly with headings or numbered sections.\n\
+         4. Be specific and actionable — avoid vague recommendations.\n\
+         5. If something is unclear, state your assumptions explicitly.\n\n\
+         # Output"
+    );
+
+    Json(serde_json::json!({ "template": template })).into_response()
 }
 
 pub async fn skill_save_handler(
@@ -1044,6 +1375,52 @@ fn get_workflow_templates() -> Vec<serde_json::Value> {
                 { "id": "summarize", "agent": "Researcher", "prompt": "Summarize outcome: {{result}}", "output": "summary", "depends_on": ["ui-work", "api-work", "infra-work"] }
             ]
         }),
+        serde_json::json!({
+            "name": "orchestrator",
+            "description": "Master orchestrator decomposes goal, delegates to specialists, synthesizes final result",
+            "steps": [
+                { "id": "decompose", "agent": "Architect", "prompt": "You are a master orchestrator. Decompose this goal into 3-5 concrete subtasks, each assignable to a specialist agent. Goal: {{task}}\n\nOutput a numbered list of subtasks with the agent best suited for each.", "output": "subtasks" },
+                { "id": "research", "agent": "Researcher", "prompt": "Execute your assigned subtask from this plan:\n{{subtasks}}\n\nYour role: Researcher — gather context, facts, and prior art.", "output": "research_output", "depends_on": ["decompose"] },
+                { "id": "design", "agent": "Architect", "prompt": "Execute your assigned subtask from this plan:\n{{subtasks}}\n\nResearch context: {{research_output}}\n\nYour role: Architect — produce the structural design.", "output": "design_output", "depends_on": ["research"] },
+                { "id": "implement", "agent": "Coder", "prompt": "Execute your assigned subtask from this plan:\n{{subtasks}}\n\nDesign: {{design_output}}\n\nYour role: Coder — write the implementation.", "output": "impl_output", "depends_on": ["design"] },
+                { "id": "validate", "agent": "CodeReviewer", "type": "evaluator", "prompt": "Validate the implementation against the original goal.\nGoal: {{task}}\nImplementation: {{impl_output}}\n\nRespond JSON: {\"verdict\": \"pass\" or \"retry\", \"gaps\": \"...\", \"fixes\": \"...\"}", "output": "validation", "depends_on": ["implement"], "evaluate": { "decision_field": "verdict", "on_pass": "synthesize", "on_fail": "implement", "max_retries": 2 } },
+                { "id": "synthesize", "agent": "Architect", "prompt": "Synthesize all agent outputs into a final deliverable.\n\nSubtasks: {{subtasks}}\nResearch: {{research_output}}\nDesign: {{design_output}}\nImplementation: {{impl_output}}\nValidation: {{validation}}\n\nProduce a cohesive final report with executive summary, key decisions, and next steps.", "output": "final_result", "depends_on": ["validate"] }
+            ]
+        }),
+        serde_json::json!({
+            "name": "map-reduce",
+            "description": "Split input into chunks, process each in parallel, reduce to final output",
+            "steps": [
+                { "id": "map-split", "agent": "Architect", "prompt": "Split this task into 4 independent, equal-sized chunks that can be processed in parallel. Each chunk should be self-contained.\n\nTask: {{task}}\n\nOutput 4 clearly labelled chunks.", "output": "chunks" },
+                { "id": "map-1", "agent": "Researcher", "prompt": "Process chunk 1 from:\n{{chunks}}\n\nDeliver a complete analysis of your assigned chunk only.", "output": "chunk1_result", "depends_on": ["map-split"] },
+                { "id": "map-2", "agent": "Coder", "prompt": "Process chunk 2 from:\n{{chunks}}\n\nDeliver a complete analysis of your assigned chunk only.", "output": "chunk2_result", "depends_on": ["map-split"] },
+                { "id": "map-3", "agent": "SecurityReviewer", "prompt": "Process chunk 3 from:\n{{chunks}}\n\nDeliver a complete analysis of your assigned chunk only.", "output": "chunk3_result", "depends_on": ["map-split"] },
+                { "id": "map-4", "agent": "PerformanceEngineer", "prompt": "Process chunk 4 from:\n{{chunks}}\n\nDeliver a complete analysis of your assigned chunk only.", "output": "chunk4_result", "depends_on": ["map-split"] },
+                { "id": "reduce", "agent": "Architect", "prompt": "Reduce all chunk results into a single unified output. Remove duplicates, resolve conflicts, and produce a coherent whole.\n\nChunk 1: {{chunk1_result}}\nChunk 2: {{chunk2_result}}\nChunk 3: {{chunk3_result}}\nChunk 4: {{chunk4_result}}", "output": "reduced_result", "depends_on": ["map-1", "map-2", "map-3", "map-4"] }
+            ]
+        }),
+        serde_json::json!({
+            "name": "consensus",
+            "description": "Multiple agents independently analyze, then vote — majority position wins",
+            "steps": [
+                { "id": "agent-a", "agent": "Researcher", "prompt": "Independently analyze this without seeing other agents' views.\n\nTask: {{task}}\n\nProvide your assessment, recommendation, and confidence (high/medium/low).", "output": "view_a" },
+                { "id": "agent-b", "agent": "Architect", "prompt": "Independently analyze this without seeing other agents' views.\n\nTask: {{task}}\n\nProvide your assessment, recommendation, and confidence (high/medium/low).", "output": "view_b" },
+                { "id": "agent-c", "agent": "CodeReviewer", "prompt": "Independently analyze this without seeing other agents' views.\n\nTask: {{task}}\n\nProvide your assessment, recommendation, and confidence (high/medium/low).", "output": "view_c" },
+                { "id": "vote", "agent": "Architect", "prompt": "You are a consensus judge. Review three independent agent assessments and determine the majority position.\n\nAgent A: {{view_a}}\nAgent B: {{view_b}}\nAgent C: {{view_c}}\n\nIdentify: (1) points of agreement, (2) points of conflict, (3) the majority consensus recommendation, (4) minority dissent worth noting.", "output": "consensus_result", "depends_on": ["agent-a", "agent-b", "agent-c"] }
+            ]
+        }),
+        serde_json::json!({
+            "name": "debate",
+            "description": "Two agents argue opposing positions, a judge evaluates and decides",
+            "steps": [
+                { "id": "frame", "agent": "Architect", "prompt": "Frame the following as a debate with two clearly opposing positions (e.g. approach A vs approach B, build vs buy, SQL vs NoSQL).\n\nTopic: {{task}}\n\nOutput: Position 1 (title + core argument) and Position 2 (title + core argument).", "output": "debate_frame" },
+                { "id": "argue-for", "agent": "Researcher", "prompt": "You are arguing FOR Position 1 in this debate:\n{{debate_frame}}\n\nBuild the strongest possible case for Position 1. Use evidence, examples, and logical arguments. Anticipate and pre-refute the strongest objections.", "output": "argument_for" },
+                { "id": "argue-against", "agent": "SecurityReviewer", "prompt": "You are arguing FOR Position 2 in this debate:\n{{debate_frame}}\n\nBuild the strongest possible case for Position 2. Use evidence, examples, and logical arguments. Anticipate and pre-refute the strongest objections.", "output": "argument_against" },
+                { "id": "rebut-for", "agent": "Researcher", "prompt": "Read the opposing argument and provide a focused rebuttal.\n\nYour position (Position 1): {{argument_for}}\nOpposing argument (Position 2): {{argument_against}}\n\nRebuttal: address their strongest points directly.", "output": "rebuttal_for", "depends_on": ["argue-for", "argue-against"] },
+                { "id": "rebut-against", "agent": "SecurityReviewer", "prompt": "Read the opposing argument and provide a focused rebuttal.\n\nYour position (Position 2): {{argument_against}}\nOpposing argument (Position 1): {{argument_for}}\n\nRebuttal: address their strongest points directly.", "output": "rebuttal_against", "depends_on": ["argue-for", "argue-against"] },
+                { "id": "judge", "agent": "Architect", "prompt": "You are the debate judge. Evaluate both sides fairly and reach a verdict.\n\nDebate topic: {{debate_frame}}\n\nPosition 1 argued: {{argument_for}}\nPosition 1 rebuttal: {{rebuttal_for}}\nPosition 2 argued: {{argument_against}}\nPosition 2 rebuttal: {{rebuttal_against}}\n\nVerdict: which position is stronger and why? What is the recommended course of action?", "output": "verdict", "depends_on": ["rebut-for", "rebut-against"] }
+            ]
+        }),
     ]
 }
 
@@ -1151,7 +1528,7 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert!(body.is_array());
         let arr = body.as_array().unwrap();
-        assert_eq!(arr.len(), 5);
+        assert!(arr.len() >= 5);
     }
 
     #[tokio::test]
