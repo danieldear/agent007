@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use agent007_models::provider::ModelProvider;
 use agent007_models::types::{CompletionRequest, Message, Role};
@@ -22,6 +23,10 @@ pub struct PromptOptimizer {
     config: OptimizerConfig,
     provider: Arc<dyn ModelProvider>,
     learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
+    /// Optional directory containing skill `.md` files. When set, successful
+    /// optimizations write the improved prompt template back to disk so the
+    /// next skill execution picks it up without a restart.
+    skills_dir: Option<PathBuf>,
 }
 
 impl PromptOptimizer {
@@ -34,7 +39,15 @@ impl PromptOptimizer {
             config,
             provider,
             learning_dispatcher,
+            skills_dir: None,
         }
+    }
+
+    /// Attach a skill directory so the optimizer can persist improved prompts
+    /// back to their source `.md` files on disk.
+    pub fn with_skills_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.skills_dir = Some(dir.into());
+        self
     }
 
     pub async fn maybe_optimize(
@@ -134,7 +147,13 @@ impl PromptOptimizer {
             avg_reward: Some(avg_reward),
             created_at: chrono::Utc::now(),
         };
-        store.save_prompt_version(version)?;
+        store.save_prompt_version(version.clone())?;
+
+        // Write the improved prompt template back to the skill .md file on disk
+        // so that the next execution picks it up without requiring a restart.
+        if let Some(ref skills_dir) = self.skills_dir {
+            self.persist_to_skill_file(skills_dir, skill_name, &version.prompt_text);
+        }
 
         // Emit OptimizerTriggered event
         self.learning_dispatcher.publish(crate::types::LearningEvent::OptimizerTriggered {
@@ -142,6 +161,54 @@ impl PromptOptimizer {
         })?;
 
         Ok(())
+    }
+
+    /// Rewrite the template body of a skill `.md` file in `skills_dir` while
+    /// preserving the YAML frontmatter.  Errors are logged but not propagated —
+    /// a failed write-back is non-fatal; the improved prompt is already persisted
+    /// in the learning store.
+    fn persist_to_skill_file(&self, skills_dir: &PathBuf, skill_name: &str, new_template: &str) {
+        // Skill files are stored as `<trigger-or-name>.md`. Try both the plain
+        // name and a slugified version (spaces → hyphens, lower-cased).
+        let candidates = [
+            skills_dir.join(format!("{}.md", skill_name)),
+            skills_dir.join(format!("{}.md", skill_name.to_lowercase().replace(' ', "-"))),
+        ];
+
+        let skill_path = match candidates.iter().find(|p| p.exists()) {
+            Some(p) => p.clone(),
+            None => {
+                tracing::warn!(
+                    skill = skill_name,
+                    "optimizer: skill file not found in {:?}; skipping write-back",
+                    skills_dir
+                );
+                return;
+            }
+        };
+
+        let content = match std::fs::read_to_string(&skill_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(skill = skill_name, error = %e, "optimizer: failed to read skill file for write-back");
+                return;
+            }
+        };
+
+        // Skill files use YAML frontmatter delimited by "---".
+        // Split into at most 3 parts: ["", frontmatter, old_template].
+        let parts: Vec<&str> = content.splitn(3, "---").collect();
+        if parts.len() < 3 {
+            tracing::warn!(skill = skill_name, "optimizer: skill file has unexpected format; skipping write-back");
+            return;
+        }
+
+        let updated = format!("---{}---\n{}\n", parts[1], new_template.trim());
+        if let Err(e) = std::fs::write(&skill_path, &updated) {
+            tracing::warn!(skill = skill_name, error = %e, "optimizer: failed to write back improved prompt");
+        } else {
+            tracing::info!(skill = skill_name, path = ?skill_path, "optimizer: wrote improved prompt to skill file");
+        }
     }
 }
 
@@ -322,5 +389,52 @@ mod tests {
 
         // Provider called twice total
         assert_eq!(provider.call_count(), 2);
+    }
+
+    /// When `with_skills_dir` is set and the skill .md file exists, the optimizer
+    /// writes the improved prompt template back to disk while preserving frontmatter.
+    #[tokio::test]
+    async fn optimizer_writes_back_to_skill_file_when_skills_dir_set() {
+        let (store, _dir) = make_store();
+        let dispatcher = Arc::new(LearningDispatcher::new(64));
+        let provider = Arc::new(MockProvider::new("rewritten prompt body", "mock-model"));
+
+        // Create a temporary skills directory with a matching skill file
+        let skills_dir = TempDir::new().unwrap();
+        let skill_file = skills_dir.path().join("skill-e.md");
+        std::fs::write(
+            &skill_file,
+            "---\nname: skill-e\ndescription: original\ntrigger: /skill-e\nmodel: claude\n---\noriginal template body\n",
+        )
+        .unwrap();
+
+        let config = OptimizerConfig {
+            threshold: 0.3,
+            trigger_count: 5,
+            optimizer_model: "mock-model".to_string(),
+        };
+        let optimizer = PromptOptimizer::new(config, provider.clone(), dispatcher)
+            .with_skills_dir(skills_dir.path());
+
+        for _ in 0..5 {
+            store.record_feedback(
+                &make_entry("skill-e", Outcome::Failure { reason: "bad output".to_string() }, 0.1),
+            )
+            .unwrap();
+        }
+
+        optimizer.maybe_optimize("skill-e", &store, "original template body").await.unwrap();
+
+        // Read back the skill file and verify the template was updated
+        let updated = std::fs::read_to_string(&skill_file).unwrap();
+        assert!(
+            updated.contains("rewritten prompt body"),
+            "skill file should contain the improved prompt; got:\n{updated}"
+        );
+        // Frontmatter must be preserved
+        assert!(
+            updated.contains("name: skill-e"),
+            "frontmatter should be preserved; got:\n{updated}"
+        );
     }
 }

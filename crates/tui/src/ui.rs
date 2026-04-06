@@ -205,7 +205,7 @@ mod tests {
 
         // Complete task1 so we have a mix of done/active
         let result = TaskResult::success(task1_id, "done".to_string());
-        app.handle_event(AgentEvent::TaskCompleted { agent_id: agent1, result });
+        app.handle_event(AgentEvent::TaskCompleted { agent_id: agent1, result, skill_name: None, model: None });
 
         // Model usage
         app.handle_event(AgentEvent::ModelRequest {

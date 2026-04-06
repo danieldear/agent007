@@ -29,6 +29,10 @@ pub struct AppState {
     pub metrics: MetricsState,
     pub standalone_mode: bool,
     pub runtime_mode: String,
+    /// Directory name of the project this server is serving (e.g. "my-app").
+    pub project_name: String,
+    /// Full path to the project root (parent of .agent007/).
+    pub project_path: String,
 }
 
 pub struct WebServer {
@@ -58,6 +62,19 @@ impl WebServer {
             dispatcher.clone(),
             learning_dispatcher.clone(),
         );
+
+        // Derive project name + path from the write home (project-local .agent007/ parent).
+        let write_home = agent007_core::paths::agent007_write_home();
+        let project_root = write_home.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| write_home.clone());
+        let project_name = project_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let project_path = project_root.display().to_string();
+
         Self {
             state: AppState {
                 dispatcher,
@@ -68,6 +85,8 @@ impl WebServer {
                 metrics: metrics_state,
                 standalone_mode,
                 runtime_mode,
+                project_name,
+                project_path,
             },
         }
     }
@@ -100,6 +119,7 @@ impl WebServer {
             "dry-run",
             "mock",
         )
+        // project_name/project_path are derived inside new() from agent007_write_home()
     }
 
     /// Build the axum `Router`.

@@ -20,3 +20,10 @@ Each test should have a descriptive name, clear arrange-act-assert structure, an
 Code: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

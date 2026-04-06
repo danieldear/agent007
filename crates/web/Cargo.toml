@@ -27,6 +27,7 @@ futures           = { workspace = true }
 tempfile          = { workspace = true }
 chrono            = { workspace = true }
 reqwest           = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+ts-rs             = { version = "10", features = ["serde-compat"] }
 
 [dev-dependencies]
 tokio        = { workspace = true }

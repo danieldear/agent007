@@ -508,6 +508,8 @@ mod tests {
             .publish(AgentEvent::TaskCompleted {
                 agent_id: crate::types::AgentId::new(),
                 result: crate::task::TaskResult::success(Uuid::new_v4(), "done".to_string()),
+                skill_name: None,
+                model: None,
             })
             .await
             .unwrap();

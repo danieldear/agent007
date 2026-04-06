@@ -85,7 +85,7 @@ impl App {
                     success: false,
                 });
             }
-            AgentEvent::TaskCompleted { agent_id, result } => {
+            AgentEvent::TaskCompleted { agent_id, result, .. } => {
                 // Mark matching task done
                 for task in self.tasks.iter_mut() {
                     if task.task_id == result.task_id {
@@ -187,7 +187,7 @@ mod tests {
         let task_id = task.id;
         app.handle_event(AgentEvent::TaskAssigned { agent_id: agent_id.clone(), task });
         let result = TaskResult::success(task_id, "done".to_string());
-        app.handle_event(AgentEvent::TaskCompleted { agent_id, result });
+        app.handle_event(AgentEvent::TaskCompleted { agent_id, result, skill_name: None, model: None });
         let task_status = app.tasks.iter().find(|t| t.task_id == task_id).unwrap();
         assert!(task_status.done);
         assert!(task_status.success);

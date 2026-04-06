@@ -22,7 +22,12 @@ const DEFAULT_TEMPLATE = `You are a helpful AI assistant.
 2. Provide a clear, structured response.
 3. Include examples where helpful.
 
-Use {{task}} for workflow context when running inside a workflow.`
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}`
 
 const form = ref({
   name: '',
@@ -368,7 +373,12 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
           <div class="form-control">
             <label class="label">
               <span class="label-text text-xs">Prompt Template</span>
-              <span class="label-text-alt text-xs text-base-content/40">Use <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code> for user input, <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> for workflow context</span>
+              <span class="label-text-alt text-xs text-base-content/40">
+                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code> user input &nbsp;·&nbsp;
+                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> workflow context &nbsp;·&nbsp;
+                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;memory.project&#125;&#125;</code> project memory &nbsp;·&nbsp;
+                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code> related memory hits
+              </span>
             </label>
             <textarea
               v-model="form.template"

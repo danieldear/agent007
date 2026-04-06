@@ -1,6 +1,21 @@
 <script setup>
+import { ref, onMounted } from 'vue'
+import { useApi } from '../composables/useApi.js'
+
 defineProps({ current: String, connected: Boolean })
 defineEmits(['navigate'])
+
+const { api } = useApi()
+const projectName = ref('')
+const projectPath = ref('')
+
+onMounted(async () => {
+  try {
+    const stats = await api.getStats()
+    if (stats?.project_name) projectName.value = stats.project_name
+    if (stats?.project_path) projectPath.value = stats.project_path
+  } catch {}
+})
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
@@ -16,6 +31,10 @@ const navItems = [
     <div class="p-4 border-b border-base-300">
       <h1 class="text-lg font-bold font-mono text-primary tracking-wide">Agent007</h1>
       <p class="text-xs text-base-content/50 mt-0.5">Orchestration Dashboard</p>
+      <div v-if="projectName" class="mt-2 flex items-center gap-1.5" :title="projectPath">
+        <span class="text-base-content/30 text-xs">⬡</span>
+        <span class="text-xs font-mono text-primary/80 truncate">{{ projectName }}</span>
+      </div>
     </div>
 
     <nav class="flex-1 py-2">

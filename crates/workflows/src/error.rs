@@ -11,6 +11,9 @@ pub enum WorkflowError {
     #[error("step '{id}' references unknown input '{input}'")]
     UnknownInput { id: String, input: String },
 
+    #[error("workflow schema invalid: {reason}")]
+    SchemaError { reason: String },
+
     #[error("workflow has a dependency cycle")]
     CycleDetected,
 

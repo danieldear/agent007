@@ -23,3 +23,10 @@ For each finding, provide severity (P0/P1/P2), location, and a suggested fix.
 PR diff: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

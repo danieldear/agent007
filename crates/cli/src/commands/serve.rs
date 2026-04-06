@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     net::SocketAddr,
     path::PathBuf,
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::Duration,
 };
 
@@ -22,8 +22,8 @@ use serde_json::Map;
 
 use crate::config::Config;
 use super::run::{
-    agent007_global_home, agent007_home, agent007_project_home, build_stack, runtime_mode_label,
-    selected_runtime_model, selected_runtime_provider, standalone_mode_available,
+    agent007_global_home, agent007_home, agent007_project_home, agent007_write_home, build_stack,
+    runtime_mode_label, selected_runtime_model, selected_runtime_provider, standalone_mode_available,
 };
 use super::skill::SkillSummary;
 
@@ -70,6 +70,8 @@ impl Agent007Server {
             let _ = d.publish(agent007_core::AgentEvent::TaskCompleted {
                 agent_id: agent_id.clone(),
                 result: agent007_core::TaskResult::success(task_id, output.chars().take(200).collect()),
+                skill_name: None,
+                model: None,
             }).await;
         }
     }
@@ -237,7 +239,8 @@ impl Agent007Server {
                 "Record the actual token usage for a run. Call this after completing LLM work in hosted-MCP mode \
                  so the dashboard shows accurate token counts instead of estimates. \
                  Pass the run_id from the original skill/task response, the actual total tokens used, \
-                 and the model name.",
+                 the model name, and optionally the output text so it gets saved to project memory \
+                 for future context reuse.",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -252,6 +255,12 @@ impl Agent007Server {
                         "model": {
                             "type": "string",
                             "description": "Model name that was used, e.g. 'claude-sonnet-4-6'"
+                        },
+                        "output": {
+                            "type": "string",
+                            "description": "Optional: the final output/result text from the skill or task. \
+                                           When provided, it is saved to project memory so future skill \
+                                           invocations can retrieve it as context, reducing repeated analysis."
                         }
                     },
                     "required": ["run_id", "tokens", "model"]
@@ -826,6 +835,36 @@ impl Agent007Server {
                     "propertiesOrder": ["task", "text", "max_prompt_tokens", "reserve_tokens", "max_response_tokens"]
                 }),
             ),
+
+            // Workflow create — save a new workflow YAML to disk
+            tool(
+                "agent007_workflow_create",
+                "Save a new workflow YAML to ~/.agent007/workflows/<name>.yaml (or the project-local \
+                 .agent007/workflows/ if one exists). The YAML must follow the agent007 workflow schema: \
+                 top-level `name`, `description`, and `steps` array. Each step needs `id`, `agent`, \
+                 `prompt`, `output`, and optional `depends_on`. Use agent007_workflow_list to verify \
+                 the workflow appears after saving, then agent007_workflow_start or agent007_workflow_run \
+                 to execute it.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Workflow name — used as the filename (kebab-case recommended, e.g. 'my-workflow')"
+                        },
+                        "yaml": {
+                            "type": "string",
+                            "description": "Complete workflow YAML content"
+                        },
+                        "overwrite": {
+                            "type": "boolean",
+                            "description": "If true, overwrite an existing workflow with the same name. Defaults to false.",
+                            "default": false
+                        }
+                    },
+                    "required": ["name", "yaml"]
+                }),
+            ),
         ]
     }
 
@@ -1065,10 +1104,22 @@ impl ServerHandler for Agent007Server {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
                 let model = extract_string(request.arguments.as_ref(), "model")?;
+                let output = request.arguments.as_ref()
+                    .and_then(|a| a.get("output"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 match record_actual_tokens(&run_id, tokens, &model) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(
-                        format!("Recorded {} tokens for run '{}' (model: {}).", tokens, run_id, model)
-                    )])),
+                    Ok(()) => {
+                        // If the host passes back the skill output, persist it to project memory
+                        if let Some(ref out) = output {
+                            let store = memory_store();
+                            let key = format!("skill_{}", &run_id[..8.min(run_id.len())]);
+                            let _ = store.scoped("project").write(&key, out);
+                        }
+                        Ok(CallToolResult::success(vec![Content::text(
+                            format!("Recorded {} tokens for run '{}' (model: {}).", tokens, run_id, model)
+                        )]))
+                    }
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
                 }
             }
@@ -1369,6 +1420,22 @@ impl ServerHandler for Agent007Server {
                     other => Ok(CallToolResult::error(vec![Content::text(
                         format!("Unknown action '{}'. Use 'templates' or 'save'.", other)
                     )])),
+                }
+            }
+
+            // Workflow create
+            "agent007_workflow_create" => {
+                let name = extract_string(request.arguments.as_ref(), "name")?;
+                let yaml = extract_string(request.arguments.as_ref(), "yaml")?;
+                let overwrite = request.arguments.as_ref()
+                    .and_then(|a| a.get("overwrite"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                match workflow_create(&name, &yaml, overwrite) {
+                    Ok(path) => Ok(CallToolResult::success(vec![Content::text(
+                        format!("Workflow '{}' saved to {}. Use agent007_workflow_list to confirm, then agent007_workflow_start or agent007_workflow_run to execute it.", name, path)
+                    )])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
                 }
             }
 
@@ -1834,6 +1901,7 @@ fn agent007_help(topic: Option<&str>) -> String {
         ("agent007_skill_run", "Run a skill by trigger"),
         ("agent007_workflow_list", "List installed workflows"),
         ("agent007_workflow_run", "Run a workflow by name"),
+        ("agent007_workflow_create", "Save a new or updated workflow YAML to disk"),
         ("agent007_workflow_start", "Start a hosted MCP workflow session"),
         ("agent007_workflow_next", "Get the next hosted workflow steps"),
         ("agent007_workflow_submit_step", "Submit hosted workflow step output"),
@@ -2102,12 +2170,11 @@ fn write_statusline() {
 
     // ── Dashboard port ────────────────────────────────────────────────────────
     let dash_segment = {
-        let port_path = agent007_home().join("memory").join("project").join("dashboard_port.md");
-        std::fs::read_to_string(port_path)
-            .ok()
-            .and_then(|s| s.trim().parse::<u16>().ok())
+        let raw = memory_store().scoped("project")
+            .read("dashboard_port").ok().flatten().unwrap_or_default();
+        raw.trim().parse::<u16>()
             .map(|p| format!("⬡ :{p}"))
-            .unwrap_or_else(|| "⬡ offline".to_string())
+            .unwrap_or_else(|_| "⬡ offline".to_string())
     };
 
     // ── Running indicator ─────────────────────────────────────────────────────
@@ -2121,7 +2188,9 @@ fn write_statusline() {
         "◈ agent007  ◎ {model_short}  {run_stats}  ⚡ {tok_display} · ~{cost_display}  {last_segment}  🗝 {mem_count} mem  {dash_segment}"
     );
 
-    let path = agent007_home().join("statusline");
+    // Always write to global home — settings.json reads `~/.agent007/statusline`
+    // and that path is hardcoded in the Claude Code statusLine command.
+    let path = agent007_global_home().join("statusline");
     let _ = std::fs::write(&path, &line);
 }
 
@@ -2185,11 +2254,45 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
     } else {
         let skill = find_skill(&trigger)?;
 
+        // Load memory scopes for context injection
+        let mem_store = memory_store();
+        let memory_user = mem_store.scoped("user").read_all().unwrap_or_default();
+        let memory_project = mem_store.scoped("project").read_all().unwrap_or_default();
+
+        // Keyword RAG: scan user/project/skills memory for terms in args
+        let rag_context = {
+            let keywords: Vec<String> = args.split_whitespace()
+                .filter(|w| w.len() >= 3)
+                .map(|w| w.to_lowercase())
+                .collect();
+            let mut hits: Vec<String> = Vec::new();
+            for ns in &["user", "project", "skills"] {
+                let scoped = mem_store.scoped(ns);
+                if let Ok(keys) = scoped.list_keys() {
+                    for key in keys {
+                        if let Ok(Some(val)) = scoped.read(&key) {
+                            let val_lower = val.to_lowercase();
+                            if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
+                                hits.push(format!("[{ns}/{key}]\n{val}"));
+                            }
+                        }
+                    }
+                }
+            }
+            hits.join("\n\n")
+        };
+
         let rendered = skill.template()
             .replace("{{args}}", &args)
             .replace("{{ args }}", &args)
             .replace("{{task}}", &args)
-            .replace("{{ task }}", &args);
+            .replace("{{ task }}", &args)
+            .replace("{{memory.user}}", &memory_user)
+            .replace("{{ memory.user }}", &memory_user)
+            .replace("{{memory.project}}", &memory_project)
+            .replace("{{ memory.project }}", &memory_project)
+            .replace("{{rag_context}}", &rag_context)
+            .replace("{{ rag_context }}", &rag_context);
 
         let run_id = create_delegate_run("skill", &format!("{trigger} {args}"))?;
         let output = format!(
@@ -2200,7 +2303,9 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
              {}\n\n\
              ---\n\
              After completing this skill, call agent007_record_tokens with run_id={}, \
-             the actual total tokens you used (input+output), and your model name.\n",
+             the actual total tokens you used (input+output), your model name, \
+             and the output field set to your full response text (this saves it to project memory \
+             so future invocations have context and use fewer tokens).\n",
             skill.name(), trigger, run_id, rendered, run_id,
         );
         // Use the model declared in the skill's frontmatter (e.g. "claude-sonnet-4-6").
@@ -2217,25 +2322,40 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
 
 // ── memory helpers ────────────────────────────────────────────────────────────
 
+/// Returns the MemoryStore base directory for a given scope.
+///
+/// `global` and `user` scopes are always rooted at `~/.agent007/memory/` so
+/// they are shared across all projects on the machine.  All other scopes
+/// (`project`, custom namespaces) use the project-local (or fallback global)
+/// write home so that project-specific keys stay inside the project.
+fn memory_store_for_scope(scope: &str) -> Arc<agent007_memory::store::MemoryStore> {
+    let base = match scope {
+        "global" | "user" => agent007_global_home().join("memory"),
+        _ => agent007_write_home().join("memory"),
+    };
+    Arc::new(agent007_memory::store::MemoryStore::new(base))
+}
+
+/// Legacy single-store accessor used for direct `project`-scoped writes
+/// (e.g. record_tokens).  Always targets the project write home.
 fn memory_store() -> Arc<agent007_memory::store::MemoryStore> {
-    let memory_dir = agent007_home().join("memory");
-    Arc::new(agent007_memory::store::MemoryStore::new(memory_dir))
+    Arc::new(agent007_memory::store::MemoryStore::new(
+        agent007_write_home().join("memory"),
+    ))
 }
 
 fn memory_read(scope: &str, key: &str) -> Result<Option<String>> {
-    let store = memory_store();
-    let scoped = store.scoped(scope);
-    scoped.read(key).map_err(|e| anyhow::anyhow!("{}", e))
+    let store = memory_store_for_scope(scope);
+    store.scoped(scope).read(key).map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn memory_write(scope: &str, key: &str, value: &str) -> Result<()> {
-    let store = memory_store();
-    let scoped = store.scoped(scope);
-    scoped.write(key, value).map_err(|e| anyhow::anyhow!("{}", e))
+    let store = memory_store_for_scope(scope);
+    store.scoped(scope).write(key, value).map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn memory_list(scope: &str) -> Result<Vec<String>> {
-    let store = memory_store();
+    let store = memory_store_for_scope(scope);
     let effective_scope = if scope.is_empty() || scope == "global" { "" } else { scope };
     store.scoped(effective_scope)
         .list_keys()
@@ -2308,19 +2428,21 @@ fn workflow_approve(
     decision: &str,
     content: Option<String>,
 ) -> Result<String> {
-    let store = load_run_store();
-    let mut state: agent007_workflows::WorkflowRunState = store
-        .read_json_artifact(session, "workflow-state.json")?;
-    let step_id = step
-        .or_else(|| state.pending_approval.as_ref().map(|pending| pending.step_id.clone()))
-        .ok_or_else(|| anyhow::anyhow!("no pending approval found in session {}", session))?;
-    let decision = parse_approval_decision(decision, content)?;
-    state.record_approval_decision(&step_id, decision);
-    store.write_json_artifact(session, "workflow-state.json", &state)?;
-    Ok(format!(
-        "Recorded approval decision for step '{}' in session {}. Continue with agent007_workflow_next, agent007_workflow_status, or `agent007 workflow resume --session {}`.",
-        step_id, session, session,
-    ))
+    with_hosted_session_lock(session, || {
+        let store = load_run_store();
+        let mut state: agent007_workflows::WorkflowRunState = store
+            .read_json_artifact(session, "workflow-state.json")?;
+        let step_id = step
+            .or_else(|| state.pending_approval.as_ref().map(|pending| pending.step_id.clone()))
+            .ok_or_else(|| anyhow::anyhow!("no pending approval found in session {}", session))?;
+        let decision = parse_approval_decision(decision, content)?;
+        state.record_approval_decision(&step_id, decision);
+        store.write_json_artifact(session, "workflow-state.json", &state)?;
+        Ok(format!(
+            "Recorded approval decision for step '{}' in session {}. Continue with agent007_workflow_next, agent007_workflow_status, or `agent007 workflow resume --session {}`.",
+            step_id, session, session,
+        ))
+    })
 }
 
 fn load_workflow_def(name: &str) -> Result<agent007_workflows::WorkflowDef> {
@@ -2363,6 +2485,31 @@ fn workflow_persona_provider() -> Arc<dyn agent007_core::PersonaProvider> {
 
 fn hosted_workflow_engine() -> agent007_workflows::HostedWorkflowEngine {
     agent007_workflows::HostedWorkflowEngine::new(workflow_persona_provider())
+}
+
+static HOSTED_WORKFLOW_SESSION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
+    OnceLock::new();
+
+fn with_hosted_session_lock<T>(session: &str, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let session_lock = {
+        let registry = HOSTED_WORKFLOW_SESSION_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut locks = registry
+            .lock()
+            .map_err(|_| anyhow::anyhow!("hosted workflow lock registry is poisoned"))?;
+        locks.retain(|_, lock| lock.strong_count() > 0 || lock.upgrade().is_some());
+        match locks.get(session).and_then(|lock| lock.upgrade()) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(session.to_string(), Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    let _guard = session_lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("hosted workflow session lock is poisoned"))?;
+    operation()
 }
 
 fn load_hosted_workflow_session(
@@ -2493,82 +2640,88 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
 }
 
 fn workflow_hosted_next(session: &str) -> Result<String> {
-    let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-    let engine = hosted_workflow_engine();
+    with_hosted_session_lock(session, || {
+        let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
+        let engine = hosted_workflow_engine();
 
-    match engine.dispatch(&def, &mut state) {
-        Ok(progress) => {
-            store.write_json_artifact(session, "workflow-state.json", &state)?;
-            store.append_note(
-                session,
-                "workflow-hosted-next",
-                serde_json::json!({
-                    "workflow": request.workflow,
-                    "progress": &progress,
-                }),
-            )?;
-            sync_hosted_run_metadata(&store, session, &progress)?;
-            hosted_workflow_response(session, &request, &progress, &state)
+        match engine.dispatch(&def, &mut state) {
+            Ok(progress) => {
+                store.write_json_artifact(session, "workflow-state.json", &state)?;
+                store.append_note(
+                    session,
+                    "workflow-hosted-next",
+                    serde_json::json!({
+                        "workflow": request.workflow,
+                        "progress": &progress,
+                    }),
+                )?;
+                sync_hosted_run_metadata(&store, session, &progress)?;
+                hosted_workflow_response(session, &request, &progress, &state)
+            }
+            Err(error) => {
+                let summary = format!("hosted workflow dispatch failed: {}", error);
+                let _ = store.finish_run(session, false, &summary);
+                Err(anyhow::anyhow!(summary))
+            }
         }
-        Err(error) => {
-            let summary = format!("hosted workflow dispatch failed: {}", error);
-            let _ = store.finish_run(session, false, &summary);
-            Err(anyhow::anyhow!(summary))
-        }
-    }
+    })
 }
 
 fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Result<String> {
-    let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-    let engine = hosted_workflow_engine();
+    with_hosted_session_lock(session, || {
+        let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
+        let engine = hosted_workflow_engine();
 
-    match engine.submit_step_output(&def, &mut state, step, output) {
-        Ok(progress) => {
-            store.write_json_artifact(session, "workflow-state.json", &state)?;
-            store.append_note(
-                session,
-                "workflow-hosted-submit-step",
-                serde_json::json!({
-                    "workflow": request.workflow,
-                    "step": step,
-                    "progress": &progress,
-                }),
-            )?;
-            sync_hosted_run_metadata(&store, session, &progress)?;
-            hosted_workflow_response(session, &request, &progress, &state)
+        match engine.submit_step_output(&def, &mut state, step, output) {
+            Ok(progress) => {
+                store.write_json_artifact(session, "workflow-state.json", &state)?;
+                store.append_note(
+                    session,
+                    "workflow-hosted-submit-step",
+                    serde_json::json!({
+                        "workflow": request.workflow,
+                        "step": step,
+                        "progress": &progress,
+                    }),
+                )?;
+                sync_hosted_run_metadata(&store, session, &progress)?;
+                hosted_workflow_response(session, &request, &progress, &state)
+            }
+            Err(error) => {
+                let summary = format!("hosted workflow step submission failed: {}", error);
+                let _ = store.finish_run(session, false, &summary);
+                Err(anyhow::anyhow!(summary))
+            }
         }
-        Err(error) => {
-            let summary = format!("hosted workflow step submission failed: {}", error);
-            let _ = store.finish_run(session, false, &summary);
-            Err(anyhow::anyhow!(summary))
-        }
-    }
+    })
 }
 
 fn workflow_hosted_status(session: &str) -> Result<String> {
-    let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-    let engine = hosted_workflow_engine();
+    with_hosted_session_lock(session, || {
+        let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
+        let engine = hosted_workflow_engine();
 
-    match engine.status(&def, &mut state) {
-        Ok(progress) => {
-            store.write_json_artifact(session, "workflow-state.json", &state)?;
-            store.append_note(
-                session,
-                "workflow-hosted-status",
-                serde_json::json!({
-                    "workflow": request.workflow,
-                    "progress": &progress,
-                }),
-            )?;
-            sync_hosted_run_metadata(&store, session, &progress)?;
-            hosted_workflow_response(session, &request, &progress, &state)
+        match engine.status(&def, &mut state) {
+            Ok(progress) => {
+                store.write_json_artifact(session, "workflow-state.json", &state)?;
+                store.append_note(
+                    session,
+                    "workflow-hosted-status",
+                    serde_json::json!({
+                        "workflow": request.workflow,
+                        "progress": &progress,
+                    }),
+                )?;
+                sync_hosted_run_metadata(&store, session, &progress)?;
+                hosted_workflow_response(session, &request, &progress, &state)
+            }
+            Err(error) => {
+                let summary = format!("hosted workflow status failed: {}", error);
+                let _ = store.finish_run(session, false, &summary);
+                Err(anyhow::anyhow!(summary))
+            }
         }
-        Err(error) => {
-            let summary = format!("hosted workflow status failed: {}", error);
-            let _ = store.finish_run(session, false, &summary);
-            Err(anyhow::anyhow!(summary))
-        }
-    }
+    })
 }
 
 async fn execute_workflow_session(
@@ -2762,7 +2915,7 @@ fn skill_create(
     template: &str,
     model: &str,
 ) -> Result<String> {
-    let skills_dir = agent007_home().join("skills");
+    let skills_dir = agent007_write_home().join("skills");
     std::fs::create_dir_all(&skills_dir)
         .map_err(|e| anyhow::anyhow!("failed to create skills dir: {}", e))?;
 
@@ -2780,6 +2933,40 @@ fn skill_create(
 
     std::fs::write(&path, &content)
         .map_err(|e| anyhow::anyhow!("failed to write skill file: {}", e))?;
+
+    Ok(path.display().to_string())
+}
+
+// ── workflow create helper ────────────────────────────────────────────────────
+
+/// Save a workflow YAML to the appropriate workflows directory.
+/// Validates the YAML parses as a WorkflowDef before writing.
+fn workflow_create(name: &str, yaml: &str, overwrite: bool) -> Result<String> {
+    // Validate YAML parses as a workflow before touching the filesystem
+    let _def: agent007_workflows::types::WorkflowDef = serde_yaml::from_str(yaml)
+        .map_err(|e| anyhow::anyhow!("invalid workflow YAML: {}", e))?;
+
+    let workflows_dir = agent007_write_home().join("workflows");
+    std::fs::create_dir_all(&workflows_dir)
+        .map_err(|e| anyhow::anyhow!("failed to create workflows dir: {}", e))?;
+
+    // Sanitise file name: keep alphanumeric, hyphens, underscores
+    let filename: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let path = workflows_dir.join(format!("{}.yaml", filename));
+
+    if path.exists() && !overwrite {
+        return Err(anyhow::anyhow!(
+            "workflow '{}' already exists at {}. Set overwrite=true to replace it.",
+            name,
+            path.display()
+        ));
+    }
+
+    std::fs::write(&path, yaml)
+        .map_err(|e| anyhow::anyhow!("failed to write workflow file: {}", e))?;
 
     Ok(path.display().to_string())
 }
@@ -3158,6 +3345,34 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
     let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
         .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
 
+    // Load memory context to inject into every workflow step prompt
+    let mem_store = memory_store();
+    let memory_project = mem_store.scoped("project").read_all().unwrap_or_default();
+    let memory_user = mem_store.scoped("user").read_all().unwrap_or_default();
+
+    // Keyword RAG across memory for workflow task
+    let wf_rag_context = {
+        let keywords: Vec<String> = task.split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+        let mut hits: Vec<String> = Vec::new();
+        for ns in &["user", "project", "skills"] {
+            let scoped = mem_store.scoped(ns);
+            if let Ok(keys) = scoped.list_keys() {
+                for key in keys {
+                    if let Ok(Some(val)) = scoped.read(&key) {
+                        let val_lower = val.to_lowercase();
+                        if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
+                            hits.push(format!("[{ns}/{key}]\n{val}"));
+                        }
+                    }
+                }
+            }
+        }
+        hits.join("\n\n")
+    };
+
     let mut steps = Vec::new();
     for step in &def.steps {
         let persona = {
@@ -3167,7 +3382,13 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
 
         let rendered_prompt = step.prompt.as_deref()
             .unwrap_or("")
-            .replace("{{task}}", task);
+            .replace("{{task}}", task)
+            .replace("{{memory.project}}", &memory_project)
+            .replace("{{ memory.project }}", &memory_project)
+            .replace("{{memory.user}}", &memory_user)
+            .replace("{{ memory.user }}", &memory_user)
+            .replace("{{rag_context}}", &wf_rag_context)
+            .replace("{{ rag_context }}", &wf_rag_context);
 
         let mut step_json = serde_json::json!({
             "id": step.id,
@@ -3246,7 +3467,7 @@ fn agent_save(
     preferred_model: &str,
     allowed_tools: &[String],
 ) -> Result<String> {
-    let personas_dir = agent007_home().join("personas");
+    let personas_dir = agent007_write_home().join("personas");
     std::fs::create_dir_all(&personas_dir)
         .map_err(|e| anyhow::anyhow!("failed to create personas dir: {}", e))?;
 
@@ -3380,10 +3601,12 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
     let mut shared_learning: Option<Arc<LearningDispatcher>> = None;
 
     if !no_dashboard {
-        // Guard: if another process already owns the dashboard port, skip starting a new
-        // instance so Zed + Claude Code share one dashboard instead of each spawning their own.
+        // Guard: if another process already owns the dashboard port AND it's serving the
+        // same project, skip starting a new instance. If a different project owns the port
+        // (e.g. Copilot or Cursor opened another project first), start a new dashboard on
+        // a different port so each project gets its own.
         let already_running = if let Some(port) = read_dashboard_port() {
-            if dashboard_port_is_live(port).await {
+            if dashboard_port_is_live(port).await && dashboard_port_is_same_project(port).await {
                 eprintln!("[agent007] web dashboard already running: http://localhost:{port} — skipping new instance");
                 true
             } else {
@@ -3443,11 +3666,19 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
         );
 
         tokio::spawn(async move {
-            let (actual_port, listener) = find_free_port_with_listener(dashboard_port).await;
-            eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
-            persist_dashboard_port(actual_port);
-            if let Err(e) = web.run_with_listener(listener).await {
-                eprintln!("[agent007] web dashboard error: {e}");
+            match find_free_port_with_listener(dashboard_port).await {
+                Ok((actual_port, listener)) => {
+                    eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
+                    persist_dashboard_port(actual_port);
+                    if let Err(e) = web.run_with_listener(listener).await {
+                        eprintln!("[agent007] web dashboard error: {e}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[agent007] web dashboard disabled: could not bind a local port ({e})"
+                    );
+                }
             }
         });
 
@@ -3472,24 +3703,42 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
 /// Find a free port and return both the port number and the already-bound listener,
 /// so the caller can pass the listener directly to the HTTP server (avoids TOCTOU race
 /// where two processes check the same port, both see it free, and one fails to bind).
-async fn find_free_port_with_listener(preferred: u16) -> (u16, tokio::net::TcpListener) {
+async fn find_free_port_with_listener(
+    preferred: u16,
+) -> std::io::Result<(u16, tokio::net::TcpListener)> {
+    let mut last_err: Option<std::io::Error> = None;
     for offset in 0u16..50 {
         let port = preferred.wrapping_add(offset);
-        let addr = format!("0.0.0.0:{port}");
-        if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
-            return (port, listener);
+        let addr = format!("127.0.0.1:{port}");
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => return Ok((port, listener)),
+            Err(e) => last_err = Some(e),
         }
     }
-    // Last-ditch: let the OS assign any free port.
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
-        .await
-        .expect("could not bind to any port");
-    let port = listener.local_addr().map(|a| a.port()).unwrap_or(preferred);
-    (port, listener)
+    // Last-ditch: let the OS assign any free localhost port.
+    match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => {
+            let port = listener.local_addr().map(|a| a.port()).unwrap_or(preferred);
+            Ok((port, listener))
+        }
+        Err(fallback_err) => {
+            if let Some(first_err) = last_err {
+                Err(std::io::Error::new(
+                    fallback_err.kind(),
+                    format!(
+                        "preferred dashboard ports failed ({first_err}); fallback bind failed ({fallback_err})"
+                    ),
+                ))
+            } else {
+                Err(fallback_err)
+            }
+        }
+    }
 }
 
 /// Write the active dashboard port to `.agent007/memory/project/dashboard_port.md`
 /// so other tools (TUI, scripts, health checks) can discover it.
+/// Project-local — each project has its own serve instance on its own port.
 fn persist_dashboard_port(port: u16) {
     let store = memory_store();
     let scoped = store.scoped("project");
@@ -3531,11 +3780,8 @@ async fn ensure_dashboard_sidecar(preferred_port: u16) -> Result<Option<u16>> {
 }
 
 fn read_dashboard_port() -> Option<u16> {
-    let path = agent007_home()
-        .join("memory")
-        .join("project")
-        .join("dashboard_port.md");
-    let raw = std::fs::read_to_string(path).ok()?;
+    let store = memory_store();
+    let raw = store.scoped("project").read("dashboard_port").ok()??;
     raw.trim().parse().ok()
 }
 
@@ -3550,10 +3796,48 @@ async fn dashboard_port_is_live(port: u16) -> bool {
     .unwrap_or(false)
 }
 
+/// Check if the dashboard on `port` is serving the same project as the current process.
+/// Issues a raw HTTP GET /api/stats and looks for the project_path in the JSON body.
+/// Returns true (treat as same project) on any network/parse error to avoid spurious
+/// double-starts when the API is temporarily unavailable.
+async fn dashboard_port_is_same_project(port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let current_home = agent007_write_home();
+    let current_project = current_home
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let connect = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"));
+    let Ok(Ok(mut stream)) = tokio::time::timeout(Duration::from_millis(400), connect).await
+    else { return true; };
+
+    let req = b"GET /api/stats HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if stream.write_all(req).await.is_err() { return true; }
+
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_millis(400), stream.read_to_end(&mut buf));
+    if read.await.is_err() { return true; }
+
+    let body = String::from_utf8_lossy(&buf);
+    // JSON body starts after the blank line separating headers from body
+    let json_str = body.split("\r\n\r\n").nth(1).unwrap_or("");
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) else { return true; };
+
+    let running_project = json
+        .get("project_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    running_project == current_project
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::env_lock;
+    use std::thread;
 
     fn write_workflow_fixture(dir: &std::path::Path, name: &str, body: &str) {
         let workflows_dir = dir.join("workflows");
@@ -3869,6 +4153,92 @@ requires_approval = true
         let resumed: serde_json::Value = serde_json::from_str(&resumed).unwrap();
         assert_eq!(resumed["progress"]["status"], "succeeded");
         assert_eq!(resumed["workflow_state"]["outputs"]["plan"], "approved plan");
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn workflow_hosted_parallel_submit_step_updates_are_atomic() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        write_workflow_fixture(
+            tmp.path(),
+            "code-review",
+            r#"
+name = "Code Review"
+
+[[steps]]
+id = "security-review"
+agent = "SecurityReviewer"
+prompt = "Security review {{task}}"
+output = "security_findings"
+
+[[steps]]
+id = "performance-review"
+agent = "PerformanceEngineer"
+prompt = "Performance review {{task}}"
+output = "performance_findings"
+
+[[steps]]
+id = "quality-review"
+agent = "CodeReviewer"
+prompt = "Quality review {{task}}"
+output = "quality_findings"
+
+[[steps]]
+id = "synthesize"
+agent = "CodeReviewer"
+depends_on = ["security-review", "performance-review", "quality-review"]
+prompt = "Synthesize {{security_findings}} {{performance_findings}} {{quality_findings}}"
+output = "review_report"
+"#,
+        );
+
+        let started = workflow_hosted_start("code-review", "race repro").unwrap();
+        let started: serde_json::Value = serde_json::from_str(&started).unwrap();
+        let session = started["session"].as_str().unwrap().to_string();
+
+        let mut handles = Vec::new();
+        for (step, output) in [
+            ("security-review", "security findings"),
+            ("performance-review", "performance findings"),
+            ("quality-review", "quality findings"),
+        ] {
+            let session = session.clone();
+            let step = step.to_string();
+            let output = output.to_string();
+            handles.push(thread::spawn(move || {
+                workflow_hosted_submit_step(&session, &step, &output)
+            }));
+        }
+        for handle in handles {
+            let result = handle.join().expect("submit thread panicked");
+            assert!(result.is_ok(), "parallel submit failed: {:?}", result.err());
+        }
+
+        let status = workflow_hosted_status(&session).unwrap();
+        let status: serde_json::Value = serde_json::from_str(&status).unwrap();
+        let completed = status["workflow_state"]["completed_steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 3);
+        assert!(completed.contains(&"security-review"));
+        assert!(completed.contains(&"performance-review"));
+        assert!(completed.contains(&"quality-review"));
+        assert_eq!(status["progress"]["status"], "awaiting-outputs");
+        assert_eq!(status["progress"]["running_steps"][0], "synthesize");
+
+        let finished = workflow_hosted_submit_step(&session, "synthesize", "final report").unwrap();
+        let finished: serde_json::Value = serde_json::from_str(&finished).unwrap();
+        assert_eq!(finished["progress"]["status"], "succeeded");
+        assert_eq!(
+            finished["workflow_state"]["outputs"]["review_report"],
+            "final report"
+        );
 
         std::env::remove_var("AGENT007_HOME");
     }

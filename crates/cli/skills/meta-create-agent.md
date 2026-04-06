@@ -20,3 +20,10 @@ Output the complete TOML file ready to save to .agent007/personas/.
 User request: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

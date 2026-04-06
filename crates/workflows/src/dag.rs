@@ -109,10 +109,19 @@ impl<'a> DagValidator<'a> {
             .map(|(i, s)| (s.id.clone(), node_indices[i]))
             .collect();
 
+        // Built-in input variables injected at runtime — not produced by any step.
+        const BUILTIN_INPUTS: &[&str] = &[
+            "memory.project", "memory.user", "memory.global",
+            "rag_context", "task",
+        ];
+
         for step in &self.def.steps {
             let to_node = id_to_node[&step.id];
 
             for inp in step.inputs.iter().flatten() {
+                if BUILTIN_INPUTS.contains(&inp.as_str()) {
+                    continue;
+                }
                 let producer = output_to_step.get(inp).ok_or_else(|| {
                     WorkflowError::UnknownInput {
                         id: step.id.clone(),
@@ -334,5 +343,23 @@ mod tests {
         ]);
         let err = DagValidator::new(&def).validate().unwrap_err();
         assert!(matches!(err, crate::error::WorkflowError::CycleDetected));
+    }
+
+    #[test]
+    fn builtin_inputs_do_not_trigger_unknown_input_error() {
+        let def = make_def(vec![
+            make_step("a", &["memory.project", "memory.user", "memory.global", "rag_context", "task"], &[], None),
+        ]);
+        let result = DagValidator::new(&def).validate();
+        assert!(result.is_ok(), "builtin inputs should not fail validation: {:?}", result.err());
+    }
+
+    #[test]
+    fn non_builtin_unknown_input_still_fails() {
+        let def = make_def(vec![
+            make_step("a", &["definitely_unknown_output"], &[], None),
+        ]);
+        let err = DagValidator::new(&def).validate().unwrap_err();
+        assert!(matches!(err, crate::error::WorkflowError::UnknownInput { .. }));
     }
 }

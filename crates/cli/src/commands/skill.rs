@@ -144,9 +144,14 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
             let memory_dir = home.join("memory");
             let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(memory_dir));
             let memory = memory_store.global();
+            let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
+                crate::commands::run::agent007_global_home().join("memory")
+            ));
+            let global_memory = global_store.scoped("global");
 
             let executor =
-                agent007_skills::SkillExecutor::new(router as Arc<dyn agent007_models::ModelProvider>, retriever, memory);
+                agent007_skills::SkillExecutor::new(router as Arc<dyn agent007_models::ModelProvider>, retriever, memory)
+                    .with_global_memory(global_memory);
 
             let result = run_skill(&trigger, &args, &executor).await?;
             println!("{}", result);

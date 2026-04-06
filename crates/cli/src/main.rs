@@ -38,19 +38,23 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         claude: bool,
         /// Set up Cursor integration (.cursor/mcp.json).
-        /// If no IDE flags are specified, Claude Code, Cursor, and Codex are all set up.
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, Copilot, and Zed are all set up.
         #[arg(long, default_value_t = false)]
         cursor: bool,
         /// Set up Codex integration (.codex/config.toml or ~/.codex/config.toml).
-        /// If no IDE flags are specified, Claude Code, Cursor, Codex, and Zed are all set up.
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, Copilot, and Zed are all set up.
         #[arg(long, default_value_t = false)]
         codex: bool,
+        /// Set up GitHub Copilot (VS Code) integration (.vscode/mcp.json).
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, Copilot, and Zed are all set up.
+        #[arg(long, default_value_t = false)]
+        copilot: bool,
         /// Set up Zed integration (~/.config/zed/settings.json LSP entry).
-        /// If no IDE flags are specified, Claude Code, Cursor, Codex, and Zed are all set up.
+        /// If no IDE flags are specified, Claude Code, Cursor, Codex, Copilot, and Zed are all set up.
         #[arg(long, default_value_t = false)]
         zed: bool,
         /// Skip all IDE integration — only create .agent007/ directory structure.
-        #[arg(long, default_value_t = false, conflicts_with_all = &["claude", "cursor", "codex", "zed"])]
+        #[arg(long, default_value_t = false, conflicts_with_all = &["claude", "cursor", "codex", "copilot", "zed"])]
         no_ide: bool,
     },
     /// Start as an MCP server (stdio transport) + web dashboard on --port (default 8007).
@@ -194,19 +198,38 @@ pub struct WorkflowArgs {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+    // MCP/LSP clients parse stdio strictly; keep logs off stdout and
+    // default stdio server modes to quiet logging.
+    if matches!(cli.command, Commands::Serve { .. } | Commands::ServeLsp { .. }) {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_max_level(tracing::Level::ERROR)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    }
     let config = std::sync::Arc::new(crate::config::Config::load()?);
     match cli.command {
-        Commands::Init { force, global, claude, cursor, codex, zed, no_ide } => {
-            let (do_claude, do_cursor, do_codex, do_zed) = if no_ide {
-                (false, false, false, false)
-            } else if !claude && !cursor && !codex && !zed {
-                (true, true, true, true)
+        Commands::Init { force, global, claude, cursor, codex, copilot, zed, no_ide } => {
+            let (do_claude, do_cursor, do_codex, do_copilot, do_zed) = if no_ide {
+                (false, false, false, false, false)
+            } else if !claude && !cursor && !codex && !copilot && !zed {
+                (true, true, true, true, true)
             } else {
-                (claude, cursor, codex, zed)
+                (claude, cursor, codex, copilot, zed)
             };
-            commands::init::execute(config, force, global, do_claude, do_cursor, do_codex, do_zed).await
+            commands::init::execute(
+                config,
+                force,
+                global,
+                do_claude,
+                do_cursor,
+                do_codex,
+                do_copilot,
+                do_zed,
+            )
+            .await
         }
         Commands::Run { task } => commands::run::execute(config, task).await,
         Commands::Serve { port, no_dashboard } => {

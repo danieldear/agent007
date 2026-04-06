@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use agent007_models::{CompletionRequest, Message, ModelProvider, Role};
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
@@ -25,6 +26,7 @@ impl WorkerAgent {
         Self { id: AgentId::new(), dispatcher, provider, prompt_store, cancellation }
     }
 
+    #[instrument(skip(self), fields(worker_id = %self.id, task_id = %task.id))]
     pub async fn execute(&self, task: Task) -> Result<TaskResult, CoreError> {
         if self.cancellation.is_cancelled() {
             return Err(CoreError::ShuttingDown);
@@ -53,6 +55,8 @@ impl WorkerAgent {
         self.dispatcher.publish(AgentEvent::TaskCompleted {
             agent_id: self.id.clone(),
             result: result.clone(),
+            skill_name: None,
+            model: Some(self.provider.name().to_string()),
         }).await?;
 
         Ok(result)

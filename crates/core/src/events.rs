@@ -23,7 +23,7 @@ pub enum HookEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentEvent {
     TaskAssigned { agent_id: AgentId, task: Task },
-    TaskCompleted { agent_id: AgentId, result: TaskResult },
+    TaskCompleted { agent_id: AgentId, result: TaskResult, skill_name: Option<String>, model: Option<String> },
     ToolCall { agent_id: AgentId, tool: ToolCall },
     /// Emitted after a tool call completes. `success` is false when the tool
     /// returned an error or non-zero exit code. `error` carries the message.

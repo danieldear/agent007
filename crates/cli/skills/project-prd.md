@@ -21,3 +21,10 @@ Include:
 Feature: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

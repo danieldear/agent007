@@ -8,8 +8,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
-use agent007_core::paths::agent007_home;
+use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home, agent007_write_home};
 use agent007_workflows::{
     WorkflowError, WorkflowLoader, WorkflowRunRequest, WorkflowRunState, WorkflowSourceRef,
 };
@@ -18,42 +19,54 @@ use crate::server::AppState;
 
 // ── request/response shapes ───────────────────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct RunRequest {
     pub task: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct RunResponse {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub session: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct ApprovalRequest {
+    #[ts(optional)]
     pub step: Option<String>,
     pub decision: String,
+    #[ts(optional)]
     pub content: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct SkillRunRequest {
     pub trigger: String,
     #[serde(default)]
     pub args: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct SkillRunResponse {
     pub output: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub session: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
 pub struct StatusResponse {
+    #[ts(type = "unknown[]")]
     pub agents: Vec<Value>,
+    #[ts(type = "unknown[]")]
     pub tasks: Vec<Value>,
     pub avg_reward: f64,
 }
@@ -194,11 +207,16 @@ pub async fn skills_run_handler(
     };
     let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(tmp.path()));
     let memory = memory_store.global();
+    let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
+        agent007_global_home().join("memory")
+    ));
+    let global_memory = global_store.scoped("global");
 
     let model =
         state.model_router.clone() as Arc<dyn agent007_models::ModelProvider>;
 
-    let executor = agent007_skills::SkillExecutor::new(model, retriever, memory);
+    let executor = agent007_skills::SkillExecutor::new(model, retriever, memory)
+        .with_global_memory(global_memory);
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
     let run = match store.create_run(
         "web-skill-run",
@@ -322,16 +340,26 @@ pub async fn stats_handler(
         agent007_home(),
     );
 
-    let home = agent007_home();
-    let skills_count = count_dir_files(&home.join("skills"), "md");
-    let workflows_count = count_dir_files(&home.join("workflows"), "yaml")
-        + count_dir_files(&home.join("workflows"), "yml");
-    let personas_count = count_dir_files(&home.join("personas"), "toml");
-    let memory_keys = count_dir_files(&home.join("memory"), "md");
+    // Collect all home dirs (project-local first, then global) — deduplicated
+    let mut homes = Vec::new();
+    if let Some(proj) = agent007_project_home() { homes.push(proj); }
+    let global = agent007_global_home();
+    if !homes.contains(&global) { homes.push(global); }
+
+    let skills_count: u32 = homes.iter().map(|h| count_dir_files(&h.join("skills"), "md")).sum();
+    let workflows_count: u32 = homes.iter().map(|h| {
+        count_dir_files(&h.join("workflows"), "yaml") + count_dir_files(&h.join("workflows"), "yml")
+    }).sum();
+    let personas_count: u32 = homes.iter().map(|h| count_dir_files(&h.join("personas"), "toml")).sum();
+    // Memory is recursive (user/, project/ subdirs) — count from write home only to avoid double-counting
+    let memory_keys = count_dir_files(&agent007_write_home().join("memory"), "md");
     m.update_inventory(skills_count, workflows_count, personas_count, memory_keys);
 
-    let snapshot = m.clone();
-    drop(m);
+    let mut snapshot = serde_json::to_value(m).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = snapshot.as_object_mut() {
+        obj.insert("project_name".to_string(), serde_json::json!(state.project_name));
+        obj.insert("project_path".to_string(), serde_json::json!(state.project_path));
+    }
     Json(snapshot).into_response()
 }
 
@@ -613,14 +641,24 @@ pub async fn run_resume_handler(
 }
 
 fn count_dir_files(dir: &std::path::Path, ext: &str) -> u32 {
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some(ext))
-                .count() as u32
-        })
-        .unwrap_or(0)
+    count_dir_files_recursive(dir, ext)
+}
+
+fn count_dir_files_recursive(dir: &std::path::Path, ext: &str) -> u32 {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    let mut count = 0u32;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            count += count_dir_files_recursive(&path, ext);
+        } else if path.extension().and_then(|x| x.to_str()) == Some(ext) {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn parse_approval_decision(
@@ -682,7 +720,7 @@ pub async fn persona_save_handler(
     State(_state): State<AppState>,
     Json(payload): Json<PersonaSaveRequest>,
 ) -> impl IntoResponse {
-    let personas_dir = agent007_home().join("personas");
+    let personas_dir = agent007_write_home().join("personas");
     if let Err(e) = std::fs::create_dir_all(&personas_dir) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
@@ -734,18 +772,38 @@ pub async fn persona_delete_handler(
 
 // ── Workflow CRUD ──────────────────────────────────────────────────────────────
 
+/// Returns all directories to search for workflow YAML files, in priority order:
+/// project-local `.agent007/workflows/` first, then global `~/.agent007/workflows/`.
+/// Mirrors `configured_workflow_dirs()` in the MCP server so the dashboard always
+/// shows the same set of workflows that the MCP tool `agent007_workflow_list` returns.
+fn workflow_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(project) = agent007_project_home() {
+        dirs.push(project.join("workflows"));
+    }
+    let global = agent007_global_home().join("workflows");
+    if !dirs.iter().any(|d| d == &global) {
+        dirs.push(global);
+    }
+    dirs
+}
+
 pub async fn workflows_list_handler(
     State(_state): State<AppState>,
 ) -> impl IntoResponse {
-    let wf_dir = agent007_home().join("workflows");
+    let mut seen = std::collections::HashSet::new();
     let mut names = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&wf_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let ext = path.extension().and_then(|e| e.to_str());
-            if ext == Some("yaml") || ext == Some("yml") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    names.push(stem.to_string());
+    for wf_dir in workflow_dirs() {
+        if let Ok(entries) = std::fs::read_dir(&wf_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str());
+                if ext == Some("yaml") || ext == Some("yml") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if seen.insert(stem.to_string()) {
+                            names.push(stem.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -758,10 +816,11 @@ pub async fn workflow_get_handler(
     State(_state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let wf_dir = agent007_home().join("workflows");
-    let yaml_path = wf_dir.join(format!("{name}.yaml"));
-    let yml_path = wf_dir.join(format!("{name}.yml"));
-    let path = if yaml_path.exists() { yaml_path } else if yml_path.exists() { yml_path } else {
+    let path = workflow_dirs()
+        .into_iter()
+        .flat_map(|dir| [dir.join(format!("{name}.yaml")), dir.join(format!("{name}.yml"))])
+        .find(|p| p.exists());
+    let Some(path) = path else {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response();
     };
 
@@ -1036,7 +1095,7 @@ pub async fn workflow_save_handler(
     Json(payload): Json<Value>,
 ) -> impl IntoResponse {
     let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("untitled");
-    let wf_dir = agent007_home().join("workflows");
+    let wf_dir = agent007_write_home().join("workflows");
     if let Err(e) = std::fs::create_dir_all(&wf_dir) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
@@ -1144,7 +1203,7 @@ pub async fn skill_save_handler(
     State(_state): State<AppState>,
     Json(payload): Json<SkillSaveRequest>,
 ) -> impl IntoResponse {
-    let skills_dir = agent007_home().join("skills");
+    let skills_dir = agent007_write_home().join("skills");
     if let Err(e) = std::fs::create_dir_all(&skills_dir) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
@@ -1289,7 +1348,7 @@ pub async fn skill_import_handler(
     let filename = fm.trigger.trim_start_matches('/')
         .chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect::<String>();
-    let skills_dir = agent007_home().join("skills");
+    let skills_dir = agent007_write_home().join("skills");
     let _ = std::fs::create_dir_all(&skills_dir);
     let path = skills_dir.join(format!("{filename}.md"));
 

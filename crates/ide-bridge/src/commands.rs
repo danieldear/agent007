@@ -151,11 +151,19 @@ pub(crate) async fn handle_skill_run(
     let tmp = tempfile::TempDir::new().map_err(IdeBridgeError::Io)?;
     let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(tmp.path()));
     let memory = memory_store.global();
+    let global_home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".agent007")
+        .join("memory");
+    let global_store = Arc::new(agent007_memory::store::MemoryStore::new(global_home));
+    let global_memory = global_store.scoped("global");
 
     let mock_model = Arc::new(agent007_models::MockProvider::new("dry-run response", "mock"))
         as Arc<dyn agent007_models::ModelProvider>;
 
-    let executor = agent007_skills::SkillExecutor::new(mock_model, retriever, memory);
+    let executor = agent007_skills::SkillExecutor::new(mock_model, retriever, memory)
+        .with_global_memory(global_memory);
 
     let skills_dir = agent007_home().join("skills");
     let loader = agent007_skills::SkillLoader::new(&skills_dir);

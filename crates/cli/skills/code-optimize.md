@@ -21,3 +21,10 @@ For each finding, provide the current impact, the suggested optimization, and ex
 Code: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

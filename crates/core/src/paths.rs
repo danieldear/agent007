@@ -33,3 +33,33 @@ pub fn agent007_home() -> PathBuf {
     }
     agent007_project_home().unwrap_or_else(agent007_global_home)
 }
+
+/// Return the directory where new assets (skills, workflows, memory) should be written.
+///
+/// Preference order:
+/// 1. `AGENT007_HOME` env var (explicit override)
+/// 2. Project-local `.agent007/` found by walking up from CWD  ← write here if it exists
+/// 3. CWD `.agent007/` — if CWD looks like a project root (has `.git/` or `Cargo.toml` etc.)
+///    create it and write there, keeping project assets out of the global home
+/// 4. `~/.agent007/` global fallback
+pub fn agent007_write_home() -> PathBuf {
+    if let Ok(p) = std::env::var("AGENT007_HOME") {
+        return PathBuf::from(p);
+    }
+    // Already has a project-local .agent007/ — use it
+    if let Some(project) = agent007_project_home() {
+        return project;
+    }
+    // CWD looks like a project root → create .agent007/ there on first write
+    if let Ok(cwd) = std::env::current_dir() {
+        let is_project_root = cwd.join(".git").exists()
+            || cwd.join("Cargo.toml").exists()
+            || cwd.join("package.json").exists()
+            || cwd.join("pyproject.toml").exists()
+            || cwd.join("go.mod").exists();
+        if is_project_root {
+            return cwd.join(".agent007");
+        }
+    }
+    agent007_global_home()
+}

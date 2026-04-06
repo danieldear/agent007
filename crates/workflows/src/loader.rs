@@ -15,7 +15,7 @@ impl WorkflowLoader {
     pub fn load_file(&self, path: &Path) -> Result<WorkflowDef, WorkflowError> {
         let raw = std::fs::read_to_string(path)?;
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        match ext {
+        let def = match ext {
             "yaml" | "yml" => serde_yaml::from_str::<WorkflowDef>(&raw).map_err(|e| WorkflowError::ParseError {
                 path: path.to_path_buf(),
                 reason: e.to_string(),
@@ -24,7 +24,9 @@ impl WorkflowLoader {
                 path: path.to_path_buf(),
                 reason: e.to_string(),
             }),
-        }
+        }?;
+        def.validate_schema()?;
+        Ok(def)
     }
 
     /// Load a workflow by short name.
@@ -146,5 +148,77 @@ output = "notes"
         let loader = WorkflowLoader::new(dir.path().to_path_buf());
         let names = loader.list_names().unwrap();
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn load_workflow_missing_prompt_and_skill_returns_schema_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        fs::write(
+            &path,
+            r#"name = "Bad"
+[[steps]]
+id = "s1"
+agent = "Coder"
+output = "result"
+"#,
+        )
+        .unwrap();
+        let loader = WorkflowLoader::new(dir.path().to_path_buf());
+        let err = loader.load_file(&path).unwrap_err();
+        assert!(
+            matches!(err, crate::error::WorkflowError::SchemaError { .. }),
+            "expected SchemaError, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn load_sub_workflow_missing_workflow_field_returns_schema_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        fs::write(
+            &path,
+            r#"name = "Bad"
+[[steps]]
+id = "sub"
+agent = "Coder"
+type = "sub-workflow"
+prompt = "do something"
+output = "result"
+"#,
+        )
+        .unwrap();
+        let loader = WorkflowLoader::new(dir.path().to_path_buf());
+        let err = loader.load_file(&path).unwrap_err();
+        assert!(
+            matches!(err, crate::error::WorkflowError::SchemaError { .. }),
+            "expected SchemaError, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn load_workflow_with_empty_name_returns_schema_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("empty_name.toml");
+        fs::write(
+            &path,
+            r#"name = ""
+[[steps]]
+id = "s1"
+agent = "Coder"
+prompt = "do something"
+output = "result"
+"#,
+        )
+        .unwrap();
+        let loader = WorkflowLoader::new(dir.path().to_path_buf());
+        let err = loader.load_file(&path).unwrap_err();
+        assert!(
+            matches!(err, crate::error::WorkflowError::SchemaError { .. }),
+            "expected SchemaError, got {:?}",
+            err
+        );
     }
 }

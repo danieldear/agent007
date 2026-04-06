@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
+use tracing::instrument;
 use crate::error::ModelError;
 use crate::provider::ModelProvider;
 use crate::types::{CompletionRequest, CompletionResponse};
@@ -46,6 +47,7 @@ impl ModelRouter {
     ///
     /// The default provider **must** be registered via `register()` before calling this method.
     /// Panics if neither the rule-matched provider nor the default provider is registered.
+    #[instrument(skip(self), fields(provider = tracing::field::Empty))]
     pub fn route(&self, task_type: &str) -> Arc<dyn ModelProvider> {
         // Check rules first
         let provider_name = if let Some(name) = self.rules.get(task_type) {
@@ -55,7 +57,7 @@ impl ModelRouter {
         };
 
         // Look up provider, fall back to default if not found
-        self.providers
+        let provider = self.providers
             .get(provider_name)
             .cloned()
             .unwrap_or_else(|| {
@@ -66,7 +68,9 @@ impl ModelRouter {
                         "default provider '{}' is not registered — call register() before route()",
                         self.default
                     ))
-            })
+            });
+        tracing::Span::current().record("provider", provider.name());
+        provider
     }
 }
 
@@ -82,6 +86,7 @@ impl ModelProvider for ModelRouter {
         "router"
     }
 
+    #[instrument(skip(self, request), fields(model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
         let requested = self.resolve_provider_name(&request.model);
         let key = if self.providers.contains_key(requested) {

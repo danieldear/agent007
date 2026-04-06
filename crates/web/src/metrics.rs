@@ -375,6 +375,8 @@ mod tests {
         m.process_agent_event(&AgentEvent::TaskCompleted {
             agent_id: aid,
             result: agent007_core::task::TaskResult::success(task.id, "done".to_string()),
+            skill_name: None,
+            model: None,
         });
         assert_eq!(m.running_tasks, 0);
         assert_eq!(m.completed_tasks, 1);

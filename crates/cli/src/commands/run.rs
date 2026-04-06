@@ -26,7 +26,7 @@ use agent007_personas::PersonaRegistry;
 use agent007_zones::{AuditLogger, ZoneChecker, ZoneConfig};
 use agent007_core::tool_executor::ToolExecutor;
 
-pub use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home};
+pub use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home, agent007_write_home};
 
 pub struct Stack {
     pub dispatcher: Arc<LocalDispatcher>,
@@ -428,8 +428,13 @@ async fn build_skill_executor(
             .with_memory_store(Arc::clone(memory_store))
     );
     let memory = memory_store.global();
+    let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
+        agent007_global_home().join("memory")
+    ));
+    let global_memory = global_store.scoped("global");
 
-    Ok(SkillExecutor::new(provider, retriever, memory))
+    Ok(SkillExecutor::new(provider, retriever, memory)
+        .with_global_memory(global_memory))
 }
 
 /// A no-op VectorDB used in dry-run mode (no actual storage).
@@ -671,7 +676,8 @@ mod tests {
         let task_last = tmp.path().join("memory").join("project").join("task_last.md");
         assert!(task_last.exists(), "task_last memory record should exist");
 
-        let content = std::fs::read_to_string(&task_last).unwrap();
+        let store = Arc::new(agent007_memory::store::MemoryStore::new(tmp.path().join("memory")));
+        let content = store.scoped("project").read("task_last").unwrap().unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["task"], "persist this task");
         assert!(json["run_id"].as_str().is_some());

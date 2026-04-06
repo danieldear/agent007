@@ -31,7 +31,7 @@ impl FeedbackCollector {
 
         while let Some(event) = stream.next().await {
             match event {
-                AgentEvent::TaskCompleted { agent_id, result } => {
+                AgentEvent::TaskCompleted { agent_id, result, skill_name, model } => {
                     let outcome = if result.success {
                         crate::types::Outcome::Success
                     } else {
@@ -50,8 +50,8 @@ impl FeedbackCollector {
                         id: uuid::Uuid::new_v4(),
                         agent_id,
                         prompt_ref: PromptRef::new(),
-                        skill_name: None,
-                        model: String::new(),
+                        skill_name,
+                        model: model.unwrap_or_default(),
                         outcome,
                         reward: Some(reward),
                         timestamp: chrono::Utc::now(),
@@ -209,11 +209,11 @@ mod tests {
     async fn task_completed_success_records_feedback_with_success_outcome() {
         let agent_id = AgentId::new();
         let result = TaskResult::success(Uuid::new_v4(), "all good".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id, result }];
+        let events = vec![AgentEvent::TaskCompleted { agent_id, result, skill_name: Some("test-skill".to_string()), model: Some("claude".to_string()) }];
 
         let (ms, _dir) = run_with_events(events).await;
 
-        let index = ms.scoped("learning").read("feedback/index/__none__").unwrap();
+        let index = ms.scoped("learning").read("feedback/index/test-skill").unwrap();
         assert!(index.is_some(), "expected a feedback entry in store");
 
         let ids: Vec<String> = serde_json::from_str(&index.unwrap()).unwrap();
@@ -230,6 +230,8 @@ mod tests {
             entry.outcome
         );
         assert!(entry.reward.is_some());
+        assert_eq!(entry.skill_name.as_deref(), Some("test-skill"), "skill_name should be propagated");
+        assert_eq!(entry.model, "claude", "model should be propagated");
     }
 
     /// On receiving AgentEvent::TaskCompleted with success=false, collector creates a FeedbackEntry
@@ -238,7 +240,7 @@ mod tests {
     async fn task_completed_failure_records_feedback_with_failure_outcome() {
         let agent_id = AgentId::new();
         let result = TaskResult::failure(Uuid::new_v4(), "timeout".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id, result }];
+        let events = vec![AgentEvent::TaskCompleted { agent_id, result, skill_name: None, model: None }];
 
         let (ms, _dir) = run_with_events(events).await;
 
@@ -256,16 +258,15 @@ mod tests {
         assert!(entry.reward.is_some());
     }
 
-    /// On receiving AgentEvent::ToolCall, collector always records Outcome::Success
-    /// regardless of args content, since AgentEvent::ToolCall carries no result field.
+    /// ToolCallResult with success=false records Outcome::Failure (ToolCall itself is fire-and-forget).
     #[tokio::test]
     async fn tool_call_always_records_success_outcome() {
         let agent_id = AgentId::new();
         let tool = ToolCall {
             name: "bash".to_string(),
-            args: serde_json::json!({ "error": "command not found" }),
+            args: serde_json::json!({ "command": "ls" }),
         };
-        let events = vec![AgentEvent::ToolCall { agent_id, tool }];
+        let events = vec![AgentEvent::ToolCallResult { agent_id, tool, success: true, error: None }];
 
         let (ms, _dir) = run_with_events(events).await;
 
@@ -285,7 +286,7 @@ mod tests {
         );
     }
 
-    /// On receiving AgentEvent::ToolCall without "error" in args, collector records Outcome::Success.
+    /// ToolCallResult with success=false records Outcome::Failure.
     #[tokio::test]
     async fn tool_call_without_error_records_success_outcome() {
         let agent_id = AgentId::new();
@@ -293,7 +294,7 @@ mod tests {
             name: "read_file".to_string(),
             args: serde_json::json!({ "path": "/tmp/foo.txt" }),
         };
-        let events = vec![AgentEvent::ToolCall { agent_id, tool }];
+        let events = vec![AgentEvent::ToolCallResult { agent_id, tool, success: false, error: Some("file not found".to_string()) }];
 
         let (ms, _dir) = run_with_events(events).await;
 
@@ -307,8 +308,8 @@ mod tests {
             .unwrap();
         let entry: crate::types::FeedbackEntry = serde_json::from_str(&entry_json).unwrap();
         assert!(
-            matches!(entry.outcome, crate::types::Outcome::Success),
-            "expected Success outcome, got {:?}",
+            matches!(entry.outcome, crate::types::Outcome::Failure { .. }),
+            "expected Failure outcome, got {:?}",
             entry.outcome
         );
     }
@@ -320,7 +321,7 @@ mod tests {
 
         let agent_id = AgentId::new();
         let result = TaskResult::success(Uuid::new_v4(), "done".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id: agent_id.clone(), result }];
+        let events = vec![AgentEvent::TaskCompleted { agent_id: agent_id.clone(), result, skill_name: None, model: Some("claude".to_string()) }];
 
         let (store, _ms, _dir) = make_store_and_ms();
         let dispatcher: Arc<dyn Dispatcher> = MockDispatcher::with_events(events);

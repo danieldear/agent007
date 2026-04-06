@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use agent007_models::ModelRouter;
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
@@ -26,6 +27,7 @@ impl OrchestratorAgent {
         Self { dispatcher, router, prompt_store, cancellation, _max_workers: max_workers }
     }
 
+    #[instrument(skip(self), fields(task_id = %task.id, task_type = %task.task_type))]
     pub async fn run(&self, task: Task) -> Result<TaskResult, CoreError> {
         if self.cancellation.is_cancelled() {
             return Err(CoreError::ShuttingDown);

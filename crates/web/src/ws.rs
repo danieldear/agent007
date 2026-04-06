@@ -54,7 +54,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     > = state.learning_dispatcher.subscribe();
 
     let metrics = state.metrics.clone();
-    let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+    let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
 
     let send_task = tokio::spawn(async move {
         loop {

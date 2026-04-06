@@ -8,6 +8,7 @@ pub struct SkillExecutor {
     provider: Arc<dyn ModelProvider>,
     retriever: Arc<Retriever>,
     memory: ScopedMemoryStore,
+    global_memory: Option<ScopedMemoryStore>,
 }
 
 impl SkillExecutor {
@@ -16,7 +17,12 @@ impl SkillExecutor {
         retriever: Arc<Retriever>,
         memory: ScopedMemoryStore,
     ) -> Self {
-        Self { provider, retriever, memory }
+        Self { provider, retriever, memory, global_memory: None }
+    }
+
+    pub fn with_global_memory(mut self, global: ScopedMemoryStore) -> Self {
+        self.global_memory = Some(global);
+        self
     }
 
     pub async fn execute(&self, skill: &Skill, args: &str) -> Result<String, SkillError> {
@@ -29,6 +35,11 @@ impl SkillExecutor {
             .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
         let memory_project = self.memory.inner.scoped("project").read_all()
             .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
+        let memory_global = match &self.global_memory {
+            Some(store) => store.read_all()
+                .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?,
+            None => String::new(),
+        };
 
         // 3. Build Tera context
         let mut ctx = tera::Context::new();
@@ -38,6 +49,7 @@ impl SkillExecutor {
         ctx.insert("memory", &serde_json::json!({
             "user": memory_user,
             "project": memory_project,
+            "global": memory_global,
         }));
         ctx.insert("date", &chrono::Utc::now().format("%Y-%m-%d").to_string());
 

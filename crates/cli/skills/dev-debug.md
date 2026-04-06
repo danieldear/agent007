@@ -21,3 +21,10 @@ Step 5: Verify — explain how to confirm the fix resolves the issue without reg
 Issue: {{args}}
 
 Context: {{task}}
+
+---
+Prior context from memory (use this to avoid repeating analysis):
+{{rag_context}}
+
+Project notes and decisions:
+{{memory.project}}

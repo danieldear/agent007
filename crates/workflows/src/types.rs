@@ -9,6 +9,78 @@ pub struct WorkflowDef {
     pub budget: Option<BudgetConfig>,
 }
 
+impl WorkflowDef {
+    /// Validate the workflow definition's schema: required fields, type-specific constraints.
+    /// This runs before DAG validation and catches authoring mistakes early.
+    pub fn validate_schema(&self) -> Result<(), crate::error::WorkflowError> {
+        if self.name.trim().is_empty() {
+            return Err(crate::error::WorkflowError::SchemaError {
+                reason: "workflow 'name' must not be empty".to_string(),
+            });
+        }
+        if self.steps.is_empty() {
+            return Err(crate::error::WorkflowError::SchemaError {
+                reason: "workflow must have at least one step".to_string(),
+            });
+        }
+        for step in &self.steps {
+            if step.id.trim().is_empty() {
+                return Err(crate::error::WorkflowError::SchemaError {
+                    reason: "every step must have a non-empty 'id'".to_string(),
+                });
+            }
+            if step.agent.trim().is_empty() {
+                return Err(crate::error::WorkflowError::SchemaError {
+                    reason: format!("step '{}': 'agent' must not be empty", step.id),
+                });
+            }
+            match step.r#type {
+                StepType::SubWorkflow => {
+                    if step.workflow.is_none() {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': sub-workflow steps must specify 'workflow'",
+                                step.id
+                            ),
+                        });
+                    }
+                }
+                StepType::Evaluator => {
+                    if step.evaluate.is_none() {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': evaluator steps must have an 'evaluate' block",
+                                step.id
+                            ),
+                        });
+                    }
+                }
+                StepType::Router => {
+                    if step.routes.as_ref().map_or(true, |r| r.is_empty()) {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': router steps must have at least one 'routes' entry",
+                                step.id
+                            ),
+                        });
+                    }
+                }
+                StepType::Execute => {
+                    if step.prompt.is_none() && step.skill.is_none() {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': must specify either 'prompt' or 'skill'",
+                                step.id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum StepType {

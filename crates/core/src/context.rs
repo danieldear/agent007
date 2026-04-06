@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::budget::{BudgetEstimate, CompactLevel, TokenBudget, estimate_tokens};
@@ -166,34 +167,77 @@ impl ContextCompiler {
         if !dir.exists() {
             return Ok(Vec::new());
         }
-        let mut notes = Vec::new();
-        let entries = fs::read_dir(&dir).map_err(|error| CoreError::io(&dir, error))?;
-        for entry in entries {
-            let entry = entry.map_err(|error| CoreError::io(&dir, error))?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("md") {
-                continue;
-            }
-            let key = path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or("note")
-                .to_string();
+        let mut scored = Vec::new();
+        collect_memory_notes_recursive(&dir, &dir, &mut scored);
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(max_notes);
+        Ok(scored.into_iter().map(|(_, note)| note).collect())
+    }
+}
+
+fn collect_memory_notes_recursive(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    scored: &mut Vec<(f64, ContextMemoryNote)>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_memory_notes_recursive(root, &path, scored);
+        } else if path.extension().and_then(|v| v.to_str()) == Some("md") {
+            let key = if let Ok(rel) = path.strip_prefix(root) {
+                let components: Vec<&str> = rel.components()
+                    .map(|c| c.as_os_str().to_str().unwrap_or(""))
+                    .collect();
+                if let Some((last, rest)) = components.split_last() {
+                    let stem = last.trim_end_matches(".md");
+                    let mut parts: Vec<&str> = rest.iter().copied().collect();
+                    parts.push(stem);
+                    parts.join(":")
+                } else { path.file_stem().and_then(|v| v.to_str()).unwrap_or("note").to_string() }
+            } else { path.file_stem().and_then(|v| v.to_str()).unwrap_or("note").to_string() };
+
             let raw = match fs::read_to_string(&path) {
-                Ok(raw) => raw,
+                Ok(r) => r,
                 Err(_) => continue,
             };
-            let excerpt = summarize_markdown_note(&raw);
-            notes.push(ContextMemoryNote {
+            let (content, meta) = parse_memory_frontmatter(&raw);
+            let score = score_memory_entry(&meta);
+            let excerpt = summarize_markdown_note(&content);
+            scored.push((score, ContextMemoryNote {
                 key,
                 tokens: estimate_tokens(&excerpt),
                 excerpt,
-            });
+            }));
         }
-        notes.sort_by(|left, right| left.key.cmp(&right.key));
-        notes.truncate(max_notes);
-        Ok(notes)
     }
+}
+
+#[derive(Deserialize, Default)]
+struct MemoryFrontmatterMeta {
+    updated_at: Option<chrono::DateTime<Utc>>,
+    access_count: Option<u32>,
+}
+
+fn parse_memory_frontmatter(raw: &str) -> (String, MemoryFrontmatterMeta) {
+    if raw.starts_with("---\n") {
+        if let Some(end) = raw[4..].find("\n---\n") {
+            let yaml = &raw[4..4 + end];
+            let content = raw[4 + end + 5..].to_string();
+            let meta = serde_yaml::from_str::<MemoryFrontmatterMeta>(yaml).unwrap_or_default();
+            return (content, meta);
+        }
+    }
+    (raw.to_string(), MemoryFrontmatterMeta::default())
+}
+
+fn score_memory_entry(meta: &MemoryFrontmatterMeta) -> f64 {
+    let count = meta.access_count.unwrap_or(0) as f64;
+    let days_ago = meta.updated_at
+        .map(|dt| (Utc::now() - dt).num_seconds() as f64 / 86400.0)
+        .unwrap_or(365.0);
+    0.4 * (count + 1.0).ln() + 0.6 * (-days_ago / 30.0).exp()
 }
 
 fn render_context(

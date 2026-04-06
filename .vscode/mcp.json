@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "agent007": {
+      "args": [
+        "serve"
+      ],
+      "command": "agent007",
+      "type": "stdio"
+    }
+  }
+}

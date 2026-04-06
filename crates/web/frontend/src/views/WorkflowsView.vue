@@ -37,17 +37,20 @@ const nodeTypes = {
 const contextMenu = ref({ show: false, x: 0, y: 0, type: null, targetId: null })
 
 // Prompt templates keyed by agent/persona name and node type
+// Available variables: {{task}}, {{memory.project}}, {{rag_context}}, {{<output_var>}} from prior steps
 const PROMPT_TEMPLATES = {
   // By persona name
-  Researcher:          'Research and gather comprehensive context for: {{task}}\n\nInclude: background, prior art, relevant patterns, constraints, and key facts needed to proceed.',
-  Architect:           'Design the architecture for: {{task}}\n\nPrevious context: {{research_output}}\n\nDeliver: component breakdown, interfaces, data flow, technology choices, and trade-offs.',
-  Coder:               'Implement the following based on the design:\n\n{{design_output}}\n\nOriginal task: {{task}}\n\nWrite clean, well-structured code with error handling.',
-  CodeReviewer:        'Review the following code for quality, correctness, and security:\n\n{{code}}\n\nCheck: logic errors, edge cases, security issues, performance, readability.\nRespond JSON: {"verdict": "pass" or "retry", "issues": [...], "suggestions": [...]}',
+  Researcher:          'Research and gather comprehensive context for: {{task}}\n\nInclude: background, prior art, relevant patterns, constraints, and key facts needed to proceed.\n\n{{rag_context}}',
+  Architect:           'Design the architecture for: {{task}}\n\nPrevious context: {{research_output}}\n\nDeliver: component breakdown, interfaces, data flow, technology choices, and trade-offs.\n\nProject decisions:\n{{memory.project}}',
+  Coder:               'Implement the following based on the design:\n\n{{design_output}}\n\nOriginal task: {{task}}\n\nWrite clean, well-structured code with error handling.\n\nProject context:\n{{memory.project}}',
+  ExpertCoder:         'Implement with senior-level expertise:\n\n{{design_output}}\n\nOriginal task: {{task}}\n\nApply language idioms, patterns, and best practices.\n\nProject context:\n{{memory.project}}',
+  CodeReviewer:        'Review the following code for quality, correctness, and security:\n\n{{code}}\n\nCheck: logic errors, edge cases, security issues, performance, readability.\nRespond JSON: {"verdict": "pass" or "retry", "issues": [...], "suggestions": [...]}\n\nProject standards:\n{{memory.project}}',
   SecurityReviewer:    'Perform a security audit on:\n\n{{task}}\n\nCheck for: injection vulnerabilities, auth flaws, insecure data handling, dependency risks, OWASP Top 10.\nOutput: severity-ranked findings with remediation steps.',
   PerformanceEngineer: 'Analyze performance characteristics of:\n\n{{task}}\n\nIdentify: algorithmic complexity, memory usage, blocking operations, N+1 queries, missing caching.\nOutput: ranked issues with optimization recommendations.',
   UIUXDesigner:        'Design the user interface for:\n\n{{task}}\n\nContext: {{design_output}}\n\nDeliver: component structure, user flows, accessibility considerations, and implementation-ready specs.',
   DevOpsEngineer:      'Design the infrastructure and deployment pipeline for:\n\n{{task}}\n\nCover: containerization, CI/CD, scaling strategy, monitoring, rollback plan.',
-  TestEngineer:        'Write a comprehensive test suite for:\n\n{{task}}\n\nCode under test: {{code}}\n\nInclude: unit tests, edge cases, error paths, integration tests. Use the red-green-refactor pattern.',
+  TestDesigner:        'Write a comprehensive test suite for:\n\n{{task}}\n\nCode under test: {{code}}\n\nInclude: unit tests, edge cases, error paths, integration tests. Use the red-green-refactor pattern.',
+  DebugAgent:          'Investigate the following issue:\n\n{{task}}\n\nStep 1: Reproduce. Step 2: Hypothesize root causes. Step 3: Isolate. Step 4: Fix.\n\nPrior debugging notes:\n{{rag_context}}',
   // By node type
   evaluator:           'Evaluate the output against the acceptance criteria.\n\nOutput to review: {{step_output}}\nOriginal requirement: {{task}}\n\nRespond JSON: {"verdict": "pass" or "retry", "score": 0-10, "reason": "...", "fixes": "..."}',
   router:              'Classify this task into one of the available categories.\n\nTask: {{task}}\n\nRespond with exactly one of the category labels (no extra text).',
