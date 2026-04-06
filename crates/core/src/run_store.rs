@@ -147,6 +147,47 @@ impl RunStore {
         Ok(metadata)
     }
 
+    /// On server startup, mark any runs that are still in `Running` or
+    /// `AwaitingApproval` state as `Failed` with `finished_at = now`.
+    /// This prevents stale runs (left open by a crash or SIGKILL) from
+    /// permanently showing `finished_at: null` in the dashboard and
+    /// blocking the NightlyLearner / feedback collector from closing.
+    /// Returns the number of runs that were cleaned up.
+    pub fn cleanup_stale_runs(&self) -> usize {
+        self.ensure_base_dir().ok();
+        let entries = match std::fs::read_dir(self.base_dir.as_ref()) {
+            Ok(e) => e,
+            Err(_) => return 0,
+        };
+        let mut cleaned = 0usize;
+        for entry in entries.flatten() {
+            let meta_path = entry.path().join("meta.json");
+            if !meta_path.exists() {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&meta_path) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let mut metadata: RunMetadata = match serde_json::from_str(&raw) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if matches!(metadata.status, RunStatus::Running | RunStatus::AwaitingApproval)
+                && metadata.finished_at.is_none()
+            {
+                metadata.status = RunStatus::Failed;
+                metadata.finished_at = Some(Utc::now());
+                metadata.output_preview = Some("terminated: server restarted".to_string());
+                if let Ok(json) = serde_json::to_string_pretty(&metadata) {
+                    let _ = std::fs::write(&meta_path, json);
+                    cleaned += 1;
+                }
+            }
+        }
+        cleaned
+    }
+
     pub fn list_runs(&self, limit: usize) -> Result<Vec<RunMetadata>, CoreError> {
         self.ensure_base_dir()?;
         let mut runs = Vec::new();
@@ -532,5 +573,31 @@ mod tests {
         let runs = store.list_runs(10).unwrap();
         assert_eq!(runs[0].id, second.id);
         assert_eq!(runs[1].id, first.id);
+    }
+
+    #[test]
+    fn cleanup_stale_runs_marks_open_runs_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+
+        // Create two runs: one that finishes normally, one left open (simulates crash)
+        let finished = store.create_run("task", "done", "standalone", None).unwrap();
+        store.finish_run(&finished.id, true, "ok").unwrap();
+
+        let stale = store.create_run("task", "stale", "standalone", None).unwrap();
+        assert_eq!(stale.status, RunStatus::Running);
+        assert!(stale.finished_at.is_none());
+
+        let cleaned = store.cleanup_stale_runs();
+        assert_eq!(cleaned, 1);
+
+        let updated = store.load_run(&stale.id).unwrap().metadata;
+        assert_eq!(updated.status, RunStatus::Failed);
+        assert!(updated.finished_at.is_some());
+        assert_eq!(updated.output_preview.as_deref(), Some("terminated: server restarted"));
+
+        // The already-finished run should not be touched
+        let still_ok = store.load_run(&finished.id).unwrap().metadata;
+        assert_eq!(still_ok.status, RunStatus::Succeeded);
     }
 }

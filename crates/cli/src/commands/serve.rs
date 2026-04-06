@@ -3597,6 +3597,12 @@ fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
 
 /// Entry point: start MCP stdio server + web dashboard (unless `--no-dashboard`).
 pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: bool) -> Result<()> {
+    // On every server start, close out any runs left open by a previous crash.
+    let stale = load_run_store().cleanup_stale_runs();
+    if stale > 0 {
+        eprintln!("[agent007] cleaned up {stale} stale run(s) from previous session");
+    }
+
     let mut shared_dispatcher: Option<Arc<LocalDispatcher>> = None;
     let mut shared_learning: Option<Arc<LearningDispatcher>> = None;
 
