@@ -203,6 +203,15 @@ pub async fn execute(
         ok(&format!("{persona_count} persona files seeded"));
     }
 
+    // ── 5b. Bootstrap global ~/.agent007/ if this is a project-local init ───
+    if !global {
+        let global_home = super::run::agent007_global_home();
+        section("5b. Bootstrapping global ~/.agent007/ (first-run)");
+        if let Err(e) = seed_global_if_missing(&global_home) {
+            warn(&format!("Could not seed global home: {e}"));
+        }
+    }
+
     // ── 6. IDE integrations ─────────────────────────────────────────────────
     let mut step = 6;
 
@@ -818,6 +827,76 @@ fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Seed the global ~/.agent007/ with built-in workflows and personas if the
+/// directories are missing or empty. Called during project-local `init` so
+/// every new project gets the globals even without `agent007 init --global`.
+fn seed_global_if_missing(global_home: &Path) -> Result<()> {
+    let wf_dir = global_home.join("workflows");
+    let wf_missing = !wf_dir.exists()
+        || std::fs::read_dir(&wf_dir)
+            .map(|d| d.flatten().count() == 0)
+            .unwrap_or(true);
+    if wf_missing {
+        std::fs::create_dir_all(&wf_dir)?;
+        write_if_missing(&wf_dir.join("log-analysis.yaml"), WORKFLOW_LOG_ANALYSIS, "~/.agent007/workflows/log-analysis.yaml")?;
+        write_if_missing(&wf_dir.join("code-review.yaml"),  WORKFLOW_CODE_REVIEW,  "~/.agent007/workflows/code-review.yaml")?;
+        write_if_missing(&wf_dir.join("sparc.yaml"),        WORKFLOW_SPARC,        "~/.agent007/workflows/sparc.yaml")?;
+        write_if_missing(&wf_dir.join("tdd.yaml"),          WORKFLOW_TDD,          "~/.agent007/workflows/tdd.yaml")?;
+        write_if_missing(&wf_dir.join("ideation.yaml"),     WORKFLOW_IDEATION,     "~/.agent007/workflows/ideation.yaml")?;
+        write_if_missing(&wf_dir.join("feature.yaml"),      WORKFLOW_FEATURE,      "~/.agent007/workflows/feature.yaml")?;
+        ok("6 built-in workflows seeded to ~/.agent007/workflows/");
+    }
+
+    let personas_dir = global_home.join("personas");
+    let personas_missing = !personas_dir.exists()
+        || std::fs::read_dir(&personas_dir)
+            .map(|d| d.flatten().count() == 0)
+            .unwrap_or(true);
+    if personas_missing {
+        std::fs::create_dir_all(&personas_dir)?;
+        let registry = agent007_personas::PersonaRegistry::built_in();
+        let personas = {
+            use agent007_core::PersonaProvider;
+            registry.list()
+        };
+        let mut count = 0usize;
+        for spec in &personas {
+            let filename = spec.name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                .collect::<String>()
+                .to_lowercase();
+            let path = personas_dir.join(format!("{filename}.toml"));
+            let tools_str = spec.allowed_tools.iter()
+                .map(|t| format!("\"{}\"", t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let content = format!(
+                "name            = \"{}\"\n\
+                 description     = \"{}\"\n\
+                 preferred_model = \"{}\"\n\
+                 allowed_tools   = [{}]\n\
+                 \n\
+                 system_prompt   = \"\"\"\n\
+                 {}\n\
+                 \"\"\"\n",
+                spec.name,
+                spec.description.replace('"', "\\\""),
+                spec.preferred_model,
+                tools_str,
+                spec.system_prompt,
+            );
+            if write_if_missing(&path, &content, &format!("~/.agent007/personas/{filename}.toml"))? {
+                count += 1;
+            }
+        }
+        if count > 0 {
+            ok(&format!("{count} personas seeded to ~/.agent007/personas/"));
+        }
+    }
+    Ok(())
 }
 
 // ── Default file contents ───────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use crate::error::MemoryError;
 
@@ -22,6 +22,13 @@ pub struct MemoryMeta {
     pub entry_type: MemoryEntryType,
     #[serde(default)]
     pub summary: String,
+    /// Optional TTL expressed as a human-readable duration: "7d", "30d", "24h", "2h".
+    /// The entry is considered expired when `created_at + duration < now`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_after: Option<String>,
+    /// Related memory keys in the same scope. Used for 1-hop graph expansion during retrieval.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_to: Vec<String>,
 }
 
 impl Default for MemoryMeta {
@@ -33,7 +40,36 @@ impl Default for MemoryMeta {
             access_count: 0,
             entry_type: MemoryEntryType::Semantic,
             summary: String::new(),
+            expires_after: None,
+            related_to: Vec::new(),
         }
+    }
+}
+
+/// Parse a duration string ("7d", "30d", "24h", "2h") into a chrono Duration.
+/// Returns None if the format is unrecognised.
+pub fn parse_duration_str(s: &str) -> Option<Duration> {
+    let s = s.trim();
+    if s.ends_with('d') {
+        s[..s.len() - 1].parse::<i64>().ok().map(Duration::days)
+    } else if s.ends_with('h') {
+        s[..s.len() - 1].parse::<i64>().ok().map(Duration::hours)
+    } else if s.ends_with('m') {
+        s[..s.len() - 1].parse::<i64>().ok().map(Duration::minutes)
+    } else {
+        None
+    }
+}
+
+impl MemoryMeta {
+    /// Returns true if the entry has expired (i.e. `expires_after` is set and the deadline has passed).
+    pub fn is_expired(&self) -> bool {
+        if let Some(ref ttl) = self.expires_after {
+            if let Some(dur) = parse_duration_str(ttl) {
+                return Utc::now() > self.created_at + dur;
+            }
+        }
+        false
     }
 }
 
@@ -103,7 +139,11 @@ impl MemoryStore {
         }
         let raw = std::fs::read_to_string(&path)
             .map_err(|e| MemoryError::Io { path, source: e })?;
-        let (content, _) = parse_frontmatter(&raw);
+        let (content, meta) = parse_frontmatter(&raw);
+        if meta.is_expired() {
+            // Silently skip expired entries; optionally could delete the file here
+            return Ok(None);
+        }
         Ok(Some(content))
     }
 
@@ -115,6 +155,9 @@ impl MemoryStore {
         let raw = std::fs::read_to_string(&path)
             .map_err(|e| MemoryError::Io { path, source: e })?;
         let (content, meta) = parse_frontmatter(&raw);
+        if meta.is_expired() {
+            return Ok(None);
+        }
         Ok(Some((content, meta)))
     }
 
@@ -144,6 +187,15 @@ impl MemoryStore {
         }
         let mut keys = Vec::new();
         collect_keys_recursive(&dir, &dir, &mut keys)?;
+        // Filter out expired entries
+        keys.retain(|k| {
+            if let Ok(path) = std::fs::read_to_string(self.key_path(namespace, k)) {
+                let (_, meta) = parse_frontmatter(&path);
+                !meta.is_expired()
+            } else {
+                true
+            }
+        });
         keys.sort();
         Ok(keys)
     }
@@ -163,6 +215,25 @@ impl MemoryStore {
         } else {
             MemoryMeta::default()
         };
+        let file_content = write_frontmatter(&meta, value);
+        std::fs::write(&path, file_content)
+            .map_err(|e| MemoryError::Io { path, source: e })
+    }
+
+    fn write_with_meta_ns(&self, namespace: &str, key: &str, value: &str, mut meta: MemoryMeta) -> Result<(), MemoryError> {
+        let path = self.key_path(namespace, key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| MemoryError::Io { path: parent.to_path_buf(), source: e })?;
+        }
+        // Preserve original created_at if the file already exists
+        if path.exists() {
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let (_, existing) = parse_frontmatter(&raw);
+                meta.created_at = existing.created_at;
+            }
+        }
+        meta.updated_at = Utc::now();
         let file_content = write_frontmatter(&meta, value);
         std::fs::write(&path, file_content)
             .map_err(|e| MemoryError::Io { path, source: e })
@@ -222,6 +293,12 @@ impl ScopedMemoryStore {
         self.inner.write_ns(&self.namespace, key, value)
     }
 
+    /// Write a value with explicit metadata (e.g. to set entry_type = Procedural).
+    /// Preserves `created_at` if the key already exists.
+    pub fn write_with_meta(&self, key: &str, value: &str, meta: MemoryMeta) -> Result<(), MemoryError> {
+        self.inner.write_with_meta_ns(&self.namespace, key, value, meta)
+    }
+
     pub fn read_with_meta(&self, key: &str) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
         self.inner.read_with_meta_ns(&self.namespace, key)
     }
@@ -233,6 +310,21 @@ impl ScopedMemoryStore {
     /// List all keys stored in this scope.
     pub fn list_keys(&self) -> Result<Vec<String>, MemoryError> {
         self.inner.list_keys_ns(&self.namespace)
+    }
+
+    /// Read a key plus all entries linked via `related_to` (1-hop graph expansion).
+    /// Returns the primary entry first, followed by any related entries that exist.
+    pub fn read_with_related(&self, key: &str) -> Result<Vec<(String, String)>, MemoryError> {
+        let mut results = Vec::new();
+        if let Some((content, meta)) = self.read_with_meta(key)? {
+            results.push((key.to_string(), content));
+            for related_key in &meta.related_to {
+                if let Ok(Some(related_content)) = self.read(related_key) {
+                    results.push((related_key.clone(), related_content));
+                }
+            }
+        }
+        Ok(results)
     }
 
     /// Read all key→value pairs in this scope, concatenated as "### key\nvalue" blocks.
@@ -366,5 +458,77 @@ mod tests {
         let keys = scoped.list_keys().unwrap();
         assert!(keys.contains(&"alpha".to_string()));
         assert!(keys.contains(&"arch:overview".to_string()));
+    }
+
+    #[test]
+    fn expired_entry_reads_as_none() {
+        let dir = TempDir::new().unwrap();
+        // Write a file with expires_after already elapsed (created_at in the past)
+        let path = dir.path().join("stale.md");
+        let past = Utc::now() - chrono::Duration::days(10);
+        let meta = MemoryMeta {
+            created_at: past,
+            updated_at: past,
+            access_count: 0,
+            entry_type: MemoryEntryType::Semantic,
+            summary: String::new(),
+            expires_after: Some("7d".to_string()),
+            related_to: Vec::new(),
+        };
+        let yaml = serde_yaml::to_string(&meta).unwrap();
+        let raw = format!("---\n{}---\nstale content", yaml);
+        std::fs::write(&path, raw).unwrap();
+
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        assert_eq!(store.read("stale").unwrap(), None);
+    }
+
+    #[test]
+    fn not_yet_expired_entry_reads_normally() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("fresh.md");
+        let meta = MemoryMeta {
+            expires_after: Some("30d".to_string()),
+            ..MemoryMeta::default()
+        };
+        let yaml = serde_yaml::to_string(&meta).unwrap();
+        let raw = format!("---\n{}---\nfresh content", yaml);
+        std::fs::write(&path, raw).unwrap();
+
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        assert_eq!(store.read("fresh").unwrap(), Some("fresh content".to_string()));
+    }
+
+    #[test]
+    fn read_with_related_expands_linked_entries() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        // Write two entries and link "main" → ["secondary"]
+        scoped.write("secondary", "related content").unwrap();
+        // Write main with related_to = ["secondary"]
+        let meta = MemoryMeta {
+            related_to: vec!["secondary".to_string()],
+            ..MemoryMeta::default()
+        };
+        let path = dir.path().join("project").join("main.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let yaml = serde_yaml::to_string(&meta).unwrap();
+        std::fs::write(&path, format!("---\n{}---\nprimary content", yaml)).unwrap();
+
+        let results = scoped.read_with_related("main").unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "main");
+        assert_eq!(results[0].1, "primary content");
+        assert_eq!(results[1].0, "secondary");
+        assert_eq!(results[1].1, "related content");
+    }
+
+    #[test]
+    fn parse_duration_str_parses_days_hours_minutes() {
+        assert_eq!(parse_duration_str("7d"), Some(chrono::Duration::days(7)));
+        assert_eq!(parse_duration_str("24h"), Some(chrono::Duration::hours(24)));
+        assert_eq!(parse_duration_str("90m"), Some(chrono::Duration::minutes(90)));
+        assert_eq!(parse_duration_str("invalid"), None);
     }
 }

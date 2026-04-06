@@ -142,6 +142,8 @@ mod tests {
                 trigger: "/test".to_string(),
                 model: model.to_string(),
                 category: "custom".to_string(),
+                version: "1.0.0".to_string(),
+                tags: Vec::new(),
             },
             template: template.to_string(),
         }

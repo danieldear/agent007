@@ -7,11 +7,12 @@ use tokio_util::task::TaskTracker;
 
 use crate::config::Config;
 use agent007_core::dispatcher::LocalDispatcher;
+use agent007_core::events::AgentEvent;
 use agent007_core::orchestrator::OrchestratorAgent;
 use agent007_core::run_store::RunStore;
 use agent007_core::task::Task;
 use agent007_core::types::PromptStore;
-use agent007_memory::store::MemoryStore;
+use agent007_memory::store::{MemoryEntryType, MemoryMeta, MemoryStore};
 use agent007_memory::vectordb::LanceDBStore;
 use agent007_memory::Retriever;
 use agent007_hooks::{HookConfig, HookExecutor};
@@ -481,6 +482,64 @@ fn persist_task_memory(
     Ok(())
 }
 
+/// After a run finishes, analyze the events log and write a compact procedural
+/// memory insight recording which skills were used and whether the task succeeded.
+/// Insights expire after 30 days to avoid polluting long-term memory.
+fn generate_auto_insights(
+    memory_store: &Arc<MemoryStore>,
+    run_store: &Arc<RunStore>,
+    run_id: &str,
+    task: &str,
+    success: bool,
+) {
+    let Ok(run) = run_store.load_run(run_id) else { return; };
+
+    // Collect distinct skill names from TaskCompleted events
+    let mut skills_used: Vec<String> = run.entries
+        .iter()
+        .filter(|e| e.kind == "agent-event")
+        .filter_map(|e| serde_json::from_value::<AgentEvent>(e.payload.clone()).ok())
+        .filter_map(|ev| {
+            if let AgentEvent::TaskCompleted { skill_name: Some(skill), .. } = ev {
+                Some(skill)
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    skills_used.sort();
+
+    if skills_used.is_empty() && success {
+        // Nothing interesting enough to record without skill attribution
+        return;
+    }
+
+    let status = if success { "succeeded" } else { "failed" };
+    let skills_str = if skills_used.is_empty() {
+        "none".to_string()
+    } else {
+        skills_used.join(", ")
+    };
+    let truncated_task = if task.len() > 120 { &task[..120] } else { task };
+    let insight = format!(
+        "Task: {truncated_task}\nStatus: {status}\nSkills: {skills_str}\nRun ID: {run_id}\n"
+    );
+
+    let meta = MemoryMeta {
+        entry_type: MemoryEntryType::Procedural,
+        expires_after: Some("30d".to_string()),
+        summary: format!("{status}: {truncated_task}"),
+        ..MemoryMeta::default()
+    };
+
+    let scoped = memory_store.scoped("project");
+    if let Err(e) = scoped.write_with_meta(&format!("insights:run-{run_id}"), &insight, meta) {
+        tracing::warn!("auto-insights write failed: {}", e);
+    }
+}
+
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
     let mode = runtime_mode_label(&config);
@@ -521,6 +580,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 ) {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
+                generate_auto_insights(&stack.memory_store, &stack.run_store, &run.id, &task, true);
                 tracing::info!("task completed: {}", result.output);
             }
             Err(error) => {
@@ -534,6 +594,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 ) {
                     tracing::warn!("failed to persist task memory: {}", persist_error);
                 }
+                generate_auto_insights(&stack.memory_store, &stack.run_store, &run.id, &task, false);
                 return Err(error.into());
             }
         }
@@ -562,6 +623,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 ) {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
+                generate_auto_insights(&memory_store, &run_store, &run_id, &task_desc, true);
                 tracing::info!("task completed: {}", result.output);
             }
             Err(e) => {
@@ -575,6 +637,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 ) {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
+                generate_auto_insights(&memory_store, &run_store, &run_id, &task_desc, false);
                 tracing::warn!("task failed: {}", e);
             }
         }
