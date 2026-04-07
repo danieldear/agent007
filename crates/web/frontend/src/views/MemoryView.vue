@@ -145,22 +145,25 @@ watch(contentVisible, async (visible) => {
     <div class="flex items-center gap-3 px-5 py-3 border-b border-base-300 bg-base-200 flex-shrink-0">
       <span class="text-primary font-mono font-bold tracking-widest text-sm uppercase">◈ Memory</span>
       <div class="h-4 w-px bg-base-300"></div>
+
       <!-- Scope pills -->
       <div class="flex gap-1">
         <button
           v-for="s in SCOPES" :key="s"
-          class="scope-pill"
-          :class="activeScope === s ? 'scope-pill--active' : ''"
+          class="btn btn-xs font-mono gap-1 rounded-full border border-base-300 bg-base-300/40 text-base-content/50 hover:border-primary/50 hover:text-base-content/80"
+          :class="activeScope === s ? 'border-primary/70 bg-primary/10 text-primary' : ''"
           @click="loadKeys(s)"
         >
-          <span class="scope-pill-icon">{{ SCOPE_ICONS[s] }}</span>
-          <span>{{ s }}</span>
+          <span class="text-[0.72rem]">{{ SCOPE_ICONS[s] }}</span>
+          <span class="text-[0.68rem] tracking-wide">{{ s }}</span>
         </button>
       </div>
+
       <div class="flex-1"></div>
+
       <!-- Key count badge -->
-      <span class="text-xs font-mono text-base-content/30">
-        {{ loadingKeys ? '…' : `${filteredKeys.length} / ${keys.length}` }} keys
+      <span class="badge badge-ghost badge-sm font-mono text-base-content/30">
+        {{ loadingKeys ? '…' : `${filteredKeys.length} / ${keys.length}` }}
       </span>
     </div>
 
@@ -168,28 +171,33 @@ watch(contentVisible, async (visible) => {
     <div class="flex flex-1 overflow-hidden">
 
       <!-- Left: key navigator -->
-      <div class="key-panel">
+      <div class="w-60 flex-shrink-0 border-r border-base-300 flex flex-col overflow-hidden bg-base-200/50">
 
         <!-- Search -->
         <div class="px-3 pt-3 pb-2 flex-shrink-0">
-          <div class="search-wrap">
-            <span class="search-icon">⌕</span>
+          <label class="input input-sm input-bordered flex items-center gap-2 bg-base-300/60 font-mono text-xs">
+            <span class="text-base-content/30 text-sm">⌕</span>
             <input
               v-model="searchQuery"
-              class="search-input"
+              class="grow min-w-0"
               placeholder="Filter keys…"
               type="text"
               spellcheck="false"
             />
-            <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">&times;</button>
-          </div>
+            <button v-if="searchQuery" class="text-base-content/30 hover:text-base-content/70 cursor-pointer" @click="searchQuery = ''">&times;</button>
+          </label>
         </div>
 
         <!-- Key list -->
         <div class="flex-1 overflow-y-auto px-2 pb-3">
+
           <!-- Skeleton loader -->
           <template v-if="loadingKeys">
-            <div v-for="i in 6" :key="i" class="skeleton-key" :style="`opacity:${1 - i * 0.12}`"></div>
+            <div
+              v-for="i in 6" :key="i"
+              class="skeleton h-8 w-full rounded-md mb-1"
+              :style="`opacity:${1 - i * 0.12}`"
+            ></div>
           </template>
 
           <!-- Keys -->
@@ -197,360 +205,121 @@ watch(contentVisible, async (visible) => {
             <button
               v-for="key in filteredKeys"
               :key="key"
-              class="key-item"
-              :class="selectedKey === key ? 'key-item--active' : ''"
+              class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md border border-transparent bg-transparent text-left cursor-pointer transition-all duration-100 mb-0.5 hover:bg-base-300/70 hover:border-base-300"
+              :class="selectedKey === key ? 'bg-primary/10 border-primary/35' : ''"
               @click="selectKey(key)"
               :title="key"
             >
-              <span class="key-item-dot" :class="selectedKey === key ? 'key-item-dot--active' : ''"></span>
-              <span class="key-item-body">
+              <!-- Dot indicator -->
+              <span
+                class="w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all duration-150"
+                :class="selectedKey === key ? 'bg-primary shadow-[0_0_6px_oklch(var(--p)/0.5)]' : 'bg-base-content/20'"
+              ></span>
+
+              <!-- Key path segments -->
+              <span class="font-mono text-[0.72rem] leading-snug overflow-hidden text-ellipsis whitespace-nowrap flex-1">
                 <span
                   v-for="(seg, idx) in keySegments(key)"
                   :key="idx"
-                  class="key-seg"
-                  :class="{ 'key-seg--leaf': idx === keySegments(key).length - 1 }"
-                ><span v-if="idx > 0" class="key-sep"> › </span>{{ seg }}</span>
+                >
+                  <span v-if="idx > 0" class="text-base-content/20 text-[0.62rem]"> › </span>
+                  <span :class="idx === keySegments(key).length - 1
+                    ? (selectedKey === key ? 'text-primary font-semibold' : 'text-base-content/85 font-semibold')
+                    : (selectedKey === key ? 'text-primary/60' : 'text-base-content/45')"
+                  >{{ seg }}</span>
+                </span>
               </span>
             </button>
 
-            <div v-if="!filteredKeys.length && !loadingKeys" class="empty-keys">
-              <div class="empty-keys-icon">{{ searchQuery ? '⊘' : '◈' }}</div>
-              <div>{{ searchQuery ? 'No matches' : `Empty scope` }}</div>
+            <!-- Empty state -->
+            <div v-if="!filteredKeys.length" class="py-6 px-2 text-center font-mono text-[0.72rem] text-base-content/25">
+              <div class="text-xl mb-1.5">{{ searchQuery ? '⊘' : '◈' }}</div>
+              <div>{{ searchQuery ? 'No matches' : 'Empty scope' }}</div>
             </div>
           </template>
         </div>
       </div>
 
       <!-- Right: content viewer -->
-      <div class="preview-panel">
+      <div class="flex-1 flex flex-col overflow-hidden">
 
         <!-- Preview toolbar -->
-        <div class="preview-toolbar">
+        <div class="flex items-center gap-2 px-4 h-9 bg-base-200/60 border-b border-base-300 flex-shrink-0">
           <template v-if="selectedKey">
             <!-- Breadcrumb -->
-            <div class="breadcrumb">
-              <span class="breadcrumb-scope">{{ SCOPE_ICONS[activeScope] }} {{ activeScope }}</span>
-              <span class="breadcrumb-sep"> / </span>
-              <span
-                v-for="(seg, idx) in keySegments(selectedKey)"
-                :key="idx"
-              >
-                <span v-if="idx > 0" class="breadcrumb-sep"> › </span>
-                <span :class="idx === keySegments(selectedKey).length - 1 ? 'breadcrumb-leaf' : 'breadcrumb-node'">{{ seg }}</span>
+            <div class="flex-1 flex items-center gap-0 font-mono text-[0.72rem] overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+              <span class="text-base-content/40 text-[0.7rem] flex-shrink-0">{{ SCOPE_ICONS[activeScope] }} {{ activeScope }}</span>
+              <span class="text-base-content/20 mx-1 flex-shrink-0"> / </span>
+              <span v-for="(seg, idx) in keySegments(selectedKey)" :key="idx" class="flex items-center flex-shrink-0">
+                <span v-if="idx > 0" class="text-base-content/20 mx-0.5"> › </span>
+                <span :class="idx === keySegments(selectedKey).length - 1 ? 'text-primary/90 font-semibold' : 'text-base-content/45'">{{ seg }}</span>
               </span>
             </div>
-            <button v-if="content && !loadingContent" class="copy-btn" @click="copyContent">
-              <span>{{ copyStatus || '⎘ Copy' }}</span>
+            <button v-if="content && !loadingContent" class="btn btn-xs btn-ghost font-mono flex-shrink-0" @click="copyContent">
+              {{ copyStatus || '⎘ Copy' }}
             </button>
           </template>
-          <span v-else class="preview-hint">← select a key</span>
+          <span v-else class="font-mono text-[0.72rem] text-base-content/20 italic">← select a key</span>
           <span v-if="loadingContent" class="loading loading-spinner loading-xs ml-auto text-primary/40"></span>
         </div>
 
-        <!-- Content -->
-        <div class="preview-body">
+        <!-- Content body -->
+        <div class="flex-1 overflow-y-auto p-7 relative">
 
           <!-- Skeleton content loader -->
-          <div v-if="loadingContent" class="skeleton-content">
-            <div class="skeleton-line skeleton-line--h1"></div>
-            <div class="skeleton-line skeleton-line--p"></div>
-            <div class="skeleton-line skeleton-line--p w-3/4"></div>
-            <div class="skeleton-line skeleton-line--p w-1/2"></div>
-            <div class="mt-4 skeleton-line skeleton-line--h2"></div>
-            <div class="skeleton-line skeleton-line--p"></div>
-            <div class="skeleton-line skeleton-line--p w-5/6"></div>
+          <div v-if="loadingContent" class="space-y-2.5 py-1">
+            <div class="skeleton h-5 w-1/2 rounded"></div>
+            <div class="skeleton h-3 w-full rounded"></div>
+            <div class="skeleton h-3 w-3/4 rounded"></div>
+            <div class="skeleton h-3 w-1/2 rounded"></div>
+            <div class="skeleton h-4 w-2/5 rounded mt-5"></div>
+            <div class="skeleton h-3 w-full rounded"></div>
+            <div class="skeleton h-3 w-5/6 rounded"></div>
           </div>
 
           <!-- Error -->
-          <div v-else-if="contentError" class="error-state">
+          <div v-else-if="contentError" class="flex flex-col items-center justify-center py-10 text-error font-mono text-center">
             <div class="text-2xl mb-2">⚠</div>
-            <div class="font-mono text-xs">{{ contentError }}</div>
+            <div class="text-xs">{{ contentError }}</div>
           </div>
 
           <!-- Rendered markdown -->
           <transition name="fade-up">
             <div
               v-if="contentVisible && content && !contentError"
-              class="md-preview font-mono"
+              class="md-preview max-w-3xl"
               v-html="renderMarkdown(content)"
             ></div>
           </transition>
 
           <!-- Empty state -->
-          <div v-if="!selectedKey && !loadingContent" class="empty-preview">
-            <div class="empty-preview-glyph">◈</div>
-            <div class="empty-preview-title">Memory Viewer</div>
-            <div class="empty-preview-sub">Select a key from the left panel<br>to read its contents</div>
+          <div v-if="!selectedKey && !loadingContent" class="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+            <div class="text-[2.5rem] leading-none text-primary/10">◈</div>
+            <div class="font-mono font-bold text-sm text-base-content/15 tracking-widest uppercase">Memory Viewer</div>
+            <div class="text-xs text-base-content/20 text-center leading-relaxed">Select a key from the left panel<br>to read its contents</div>
           </div>
-        </div>
 
+        </div>
       </div>
+
     </div>
   </div>
 </template>
 
 <style scoped>
-/* ── Scope pills ─────────────────────────────────────────────────────── */
-.scope-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 20px;
-  font-size: 0.7rem;
-  font-family: monospace;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  border: 1px solid oklch(var(--b3));
-  background: oklch(var(--b3) / 0.4);
-  color: oklch(var(--bc) / 0.5);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.scope-pill:hover { border-color: oklch(var(--p) / 0.5); color: oklch(var(--bc) / 0.8); }
-.scope-pill--active {
-  border-color: oklch(var(--p) / 0.7);
-  background: oklch(var(--p) / 0.12);
-  color: oklch(var(--p));
-}
-.scope-pill-icon { font-size: 0.72rem; }
-
-/* ── Left key panel ──────────────────────────────────────────────────── */
-.key-panel {
-  width: 240px;
-  flex-shrink: 0;
-  border-right: 1px solid oklch(var(--b3));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: oklch(var(--b2) / 0.5);
-}
-
-/* ── Search ──────────────────────────────────────────────────────────── */
-.search-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.search-icon {
-  position: absolute;
-  left: 8px;
-  font-size: 0.85rem;
-  color: oklch(var(--bc) / 0.3);
-  pointer-events: none;
-  line-height: 1;
-}
-.search-input {
-  width: 100%;
-  background: oklch(var(--b3) / 0.6);
-  border: 1px solid oklch(var(--b3));
-  border-radius: 6px;
-  padding: 5px 28px 5px 26px;
-  font-size: 0.75rem;
-  font-family: monospace;
-  color: oklch(var(--bc));
-  outline: none;
-  transition: border-color 0.15s;
-}
-.search-input:focus { border-color: oklch(var(--p) / 0.5); }
-.search-input::placeholder { color: oklch(var(--bc) / 0.25); }
-.search-clear {
-  position: absolute;
-  right: 8px;
-  font-size: 0.9rem;
-  color: oklch(var(--bc) / 0.3);
-  cursor: pointer;
-  line-height: 1;
-  background: none;
-  border: none;
-}
-.search-clear:hover { color: oklch(var(--bc) / 0.7); }
-
-/* ── Key items ───────────────────────────────────────────────────────── */
-.key-item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s, border-color 0.12s;
-  margin-bottom: 2px;
-}
-.key-item:hover {
-  background: oklch(var(--b3) / 0.7);
-  border-color: oklch(var(--b3));
-}
-.key-item--active {
-  background: oklch(var(--p) / 0.1);
-  border-color: oklch(var(--p) / 0.35);
-}
-.key-item-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: oklch(var(--bc) / 0.2);
-  flex-shrink: 0;
-  transition: background 0.15s;
-}
-.key-item-dot--active { background: oklch(var(--p)); box-shadow: 0 0 6px oklch(var(--p) / 0.5); }
-.key-item-body {
-  font-size: 0.72rem;
-  font-family: monospace;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-.key-seg { color: oklch(var(--bc) / 0.45); }
-.key-seg--leaf { color: oklch(var(--bc) / 0.85); font-weight: 600; }
-.key-item--active .key-seg { color: oklch(var(--p) / 0.6); }
-.key-item--active .key-seg--leaf { color: oklch(var(--p)); }
-.key-sep { color: oklch(var(--bc) / 0.2); font-size: 0.65rem; }
-
-/* ── Skeleton loaders ────────────────────────────────────────────────── */
-.skeleton-key {
-  height: 30px;
-  border-radius: 6px;
-  background: oklch(var(--b3) / 0.5);
-  margin-bottom: 4px;
-  animation: shimmer 1.4s ease-in-out infinite;
-}
-.skeleton-content { padding: 4px 0; }
-.skeleton-line {
-  border-radius: 4px;
-  background: oklch(var(--b3) / 0.6);
-  margin-bottom: 10px;
-  animation: shimmer 1.4s ease-in-out infinite;
-}
-.skeleton-line--h1 { height: 22px; width: 55%; }
-.skeleton-line--h2 { height: 16px; width: 40%; }
-.skeleton-line--p  { height: 11px; width: 100%; }
-@keyframes shimmer {
-  0%, 100% { opacity: 0.5; }
-  50%       { opacity: 0.85; }
-}
-
-/* ── Empty states ────────────────────────────────────────────────────── */
-.empty-keys {
-  padding: 24px 8px;
-  text-align: center;
-  font-size: 0.72rem;
-  font-family: monospace;
-  color: oklch(var(--bc) / 0.25);
-}
-.empty-keys-icon { font-size: 1.4rem; margin-bottom: 6px; }
-
-/* ── Preview panel ───────────────────────────────────────────────────── */
-.preview-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* ── Preview toolbar ─────────────────────────────────────────────────── */
-.preview-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px;
-  height: 36px;
-  background: oklch(var(--b2) / 0.6);
-  border-bottom: 1px solid oklch(var(--b3));
-  flex-shrink: 0;
-}
-.breadcrumb {
-  flex: 1;
-  font-size: 0.72rem;
-  font-family: monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.breadcrumb-scope { color: oklch(var(--bc) / 0.4); font-size: 0.7rem; }
-.breadcrumb-sep   { color: oklch(var(--bc) / 0.2); }
-.breadcrumb-node  { color: oklch(var(--bc) / 0.45); }
-.breadcrumb-leaf  { color: oklch(var(--p) / 0.9); font-weight: 600; }
-.preview-hint { font-size: 0.72rem; font-family: monospace; color: oklch(var(--bc) / 0.2); font-style: italic; }
-.copy-btn {
-  font-size: 0.68rem;
-  font-family: monospace;
-  padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid oklch(var(--b3));
-  background: oklch(var(--b3) / 0.5);
-  color: oklch(var(--bc) / 0.45);
-  cursor: pointer;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-.copy-btn:hover { border-color: oklch(var(--p) / 0.4); color: oklch(var(--p)); }
-
-/* ── Preview body ────────────────────────────────────────────────────── */
-.preview-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 28px 32px;
-  position: relative;
-}
-
-.error-state {
-  padding: 40px 0;
-  text-align: center;
-  color: oklch(var(--er));
-  font-family: monospace;
-}
-
-.empty-preview {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  pointer-events: none;
-}
-.empty-preview-glyph {
-  font-size: 2.5rem;
-  color: oklch(var(--p) / 0.12);
-  line-height: 1;
-}
-.empty-preview-title {
-  font-size: 0.9rem;
-  font-family: monospace;
-  font-weight: 700;
-  color: oklch(var(--bc) / 0.15);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.empty-preview-sub {
-  font-size: 0.75rem;
-  color: oklch(var(--bc) / 0.2);
-  text-align: center;
-  line-height: 1.6;
-}
-
-/* ── Fade-up transition ──────────────────────────────────────────────── */
+/* Vue transition — cannot use utility classes */
 .fade-up-enter-active { transition: opacity 0.25s ease, transform 0.25s ease; }
-.fade-up-enter-from  { opacity: 0; transform: translateY(6px); }
+.fade-up-enter-from   { opacity: 0; transform: translateY(6px); }
 
-/* ── Markdown preview (marked GFM output) ────────────────────────────── */
-.md-preview { max-width: 760px; }
-
+/* ── Markdown preview — :deep() required for v-html injected content ────
+   These styles target marked's standard HTML output and cannot use
+   Tailwind utility classes since they're not in Vue's template scope.  */
 .md-preview :deep(h1),
 .md-preview :deep(h2),
 .md-preview :deep(h3),
 .md-preview :deep(h4) {
   font-family: monospace;
   font-weight: 700;
-  letter-spacing: -0.01em;
   margin: 1.4em 0 0.4em;
   padding-bottom: 0.25em;
   border-bottom: 1px solid oklch(var(--b3));
@@ -560,104 +329,40 @@ watch(contentVisible, async (visible) => {
 .md-preview :deep(h3) { font-size: 1rem;    color: oklch(var(--s)); border-bottom-color: oklch(var(--b3) / 0.5); }
 .md-preview :deep(h4) { font-size: 0.88rem; color: oklch(var(--bc) / 0.7); border-bottom: none; font-style: italic; }
 
-.md-preview :deep(p) {
-  font-size: 0.84rem;
-  line-height: 1.75;
-  color: oklch(var(--bc) / 0.82);
-  margin: 0.5em 0;
-}
-
-.md-preview :deep(hr) {
-  border: none;
-  border-top: 1px solid oklch(var(--b3));
-  margin: 1.2em 0;
-}
+.md-preview :deep(p)  { font-size: 0.84rem; line-height: 1.75; color: oklch(var(--bc) / 0.82); margin: 0.5em 0; }
+.md-preview :deep(hr) { border: none; border-top: 1px solid oklch(var(--b3)); margin: 1.2em 0; }
 
 .md-preview :deep(code) {
-  font-family: monospace;
-  font-size: 0.79rem;
-  background: oklch(var(--b3) / 0.8);
-  color: oklch(var(--s));
-  padding: 0.1em 0.4em;
-  border-radius: 4px;
-  border: 1px solid oklch(var(--b3));
+  font-family: monospace; font-size: 0.79rem;
+  background: oklch(var(--b3) / 0.8); color: oklch(var(--s));
+  padding: 0.1em 0.4em; border-radius: 4px; border: 1px solid oklch(var(--b3));
 }
-
 .md-preview :deep(pre) {
-  border-radius: 8px;
-  border: 1px solid oklch(var(--b3));
-  overflow: hidden;
-  margin: 0.9em 0;
-  background: oklch(var(--b3) / 0.4);
-  position: relative;
+  border-radius: 8px; border: 1px solid oklch(var(--b3));
+  overflow: hidden; margin: 0.9em 0; background: oklch(var(--b3) / 0.4);
 }
 .md-preview :deep(pre code) {
-  display: block;
-  font-family: monospace;
-  font-size: 0.79rem;
-  line-height: 1.6;
-  color: oklch(var(--bc) / 0.85);
-  background: none;
-  border: none;
-  padding: 14px 16px;
-  overflow-x: auto;
+  display: block; background: none; border: none;
+  font-size: 0.79rem; line-height: 1.6; color: oklch(var(--bc) / 0.85);
+  padding: 14px 16px; overflow-x: auto;
 }
 
-.md-preview :deep(ul) {
-  margin: 0.4em 0 0.4em 1.4em;
-  list-style: disc;
-}
-.md-preview :deep(ol) {
-  margin: 0.4em 0 0.4em 1.4em;
-  list-style: decimal;
-}
-.md-preview :deep(li) {
-  font-size: 0.84rem;
-  line-height: 1.65;
-  color: oklch(var(--bc) / 0.8);
-  padding: 1px 0;
-}
+.md-preview :deep(ul)   { margin: 0.4em 0 0.4em 1.4em; list-style: disc; }
+.md-preview :deep(ol)   { margin: 0.4em 0 0.4em 1.4em; list-style: decimal; }
+.md-preview :deep(li)   { font-size: 0.84rem; line-height: 1.65; color: oklch(var(--bc) / 0.8); }
 
 .md-preview :deep(blockquote) {
   border-left: 3px solid oklch(var(--p) / 0.4);
-  margin: 0.8em 0;
-  padding: 4px 14px;
-  color: oklch(var(--bc) / 0.55);
-  font-style: italic;
+  margin: 0.8em 0; padding: 4px 14px;
+  color: oklch(var(--bc) / 0.55); font-style: italic;
 }
 
-.md-preview :deep(a) {
-  color: oklch(var(--p));
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
+.md-preview :deep(a)       { color: oklch(var(--p)); text-decoration: underline; text-underline-offset: 2px; }
 .md-preview :deep(a:hover) { color: oklch(var(--s)); }
 
-.md-preview :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.79rem;
-  font-family: monospace;
-  margin: 0.8em 0;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid oklch(var(--b3));
-}
-.md-preview :deep(th) {
-  background: oklch(var(--b3) / 0.7);
-  color: oklch(var(--bc) / 0.55);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 6px 12px;
-  text-align: left;
-  border-bottom: 1px solid oklch(var(--b3));
-}
-.md-preview :deep(td) {
-  padding: 6px 12px;
-  border-bottom: 1px solid oklch(var(--b3) / 0.5);
-  color: oklch(var(--bc) / 0.8);
-}
+.md-preview :deep(table)  { width: 100%; border-collapse: collapse; font-size: 0.79rem; font-family: monospace; margin: 0.8em 0; border-radius: 6px; overflow: hidden; border: 1px solid oklch(var(--b3)); }
+.md-preview :deep(th)     { background: oklch(var(--b3) / 0.7); color: oklch(var(--bc) / 0.55); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 12px; text-align: left; border-bottom: 1px solid oklch(var(--b3)); }
+.md-preview :deep(td)     { padding: 6px 12px; border-bottom: 1px solid oklch(var(--b3) / 0.5); color: oklch(var(--bc) / 0.8); }
 .md-preview :deep(tr:last-child td) { border-bottom: none; }
 .md-preview :deep(tr:hover td)      { background: oklch(var(--b3) / 0.3); }
 
@@ -665,20 +370,12 @@ watch(contentVisible, async (visible) => {
 .md-preview :deep(em)     { color: oklch(var(--bc) / 0.75); font-style: italic; }
 .md-preview :deep(del)    { color: oklch(var(--bc) / 0.35); text-decoration: line-through; }
 
-/* ── Mermaid diagram blocks ──────────────────────────────────────────── */
 .md-preview :deep(.mermaid-block) {
-  margin: 1em 0;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid oklch(var(--b3));
+  margin: 1em 0; padding: 16px;
+  border-radius: 8px; border: 1px solid oklch(var(--b3));
   background: oklch(var(--b3) / 0.25);
-  display: flex;
-  justify-content: center;
-  overflow-x: auto;
+  display: flex; justify-content: center; overflow-x: auto;
 }
-.md-preview :deep(.mermaid-block svg) {
-  max-width: 100%;
-  height: auto;
-}
+.md-preview :deep(.mermaid-block svg) { max-width: 100%; height: auto; }
 </style>
 
