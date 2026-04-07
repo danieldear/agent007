@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
@@ -29,7 +30,17 @@ pub struct MemoryMeta {
     /// Related memory keys in the same scope. Used for 1-hop graph expansion during retrieval.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_to: Vec<String>,
+    /// SONA confidence signal (0.0–1.0). Decays ×0.995 on each write to the scope;
+    /// boosts +0.03 on each read/touch. Stale entries naturally fade.
+    #[serde(default = "default_confidence")]
+    pub confidence: f32,
+    /// Pre-tokenized word index for fast RAG keyword matching.
+    /// Populated automatically on write; empty for legacy entries (triggers full-content fallback).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<String>,
 }
+
+fn default_confidence() -> f32 { 1.0 }
 
 impl Default for MemoryMeta {
     fn default() -> Self {
@@ -42,6 +53,8 @@ impl Default for MemoryMeta {
             summary: String::new(),
             expires_after: None,
             related_to: Vec::new(),
+            confidence: 1.0,
+            words: Vec::new(),
         }
     }
 }
@@ -96,6 +109,18 @@ pub struct MemoryStore {
     base_dir: PathBuf,
 }
 
+/// Tokenize text into lowercase words (≥3 chars, alphanumeric only), deduplicated and sorted.
+fn tokenize(text: &str) -> Vec<String> {
+    let words: HashSet<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(|w| w.to_lowercase())
+        .collect();
+    let mut sorted: Vec<String> = words.into_iter().collect();
+    sorted.sort();
+    sorted
+}
+
 impl MemoryStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self { base_dir: base_dir.into() }
@@ -123,6 +148,15 @@ impl MemoryStore {
                 path.join(format!("{}.md", safe_filename))
             }
             None => path.join(format!("{}.md", key)),
+        }
+    }
+
+    fn namespace_dir(&self, namespace: &str) -> PathBuf {
+        if namespace.is_empty() {
+            self.base_dir.clone()
+        } else {
+            let safe_ns = namespace.replace("..", "").replace('/', "").replace('\\', "");
+            self.base_dir.join(safe_ns)
         }
     }
 
@@ -173,6 +207,8 @@ impl MemoryStore {
         let (content, mut meta) = parse_frontmatter(&raw);
         meta.access_count += 1;
         meta.updated_at = Utc::now();
+        // Boost confidence on access — frequently read entries stay relevant
+        meta.confidence = (meta.confidence + 0.03).min(1.0);
         let file_content = write_frontmatter(&meta, &content);
         std::fs::write(&path, file_content)
             .map_err(|e| MemoryError::Io { path, source: e })
@@ -208,7 +244,7 @@ impl MemoryStore {
             std::fs::create_dir_all(parent)
                 .map_err(|e| MemoryError::Io { path: parent.to_path_buf(), source: e })?;
         }
-        let meta = if path.exists() {
+        let mut meta = if path.exists() {
             let raw = std::fs::read_to_string(&path)
                 .map_err(|e| MemoryError::Io { path: path.clone(), source: e })?;
             let (_, mut existing) = parse_frontmatter(&raw);
@@ -217,9 +253,93 @@ impl MemoryStore {
         } else {
             MemoryMeta::default()
         };
+        // Feature 2: pre-tokenize for fast RAG matching
+        meta.words = tokenize(value);
         let file_content = write_frontmatter(&meta, value);
         std::fs::write(&path, file_content)
-            .map_err(|e| MemoryError::Io { path, source: e })
+            .map_err(|e| MemoryError::Io { path, source: e })?;
+        // Feature 1: decay confidence of all other keys in namespace (skip repo_brain)
+        let _ = self.decay_pass(namespace, key);
+        // Feature 3: auto-link temporal co-writes
+        let _ = self.temporal_edge_pass(namespace, key);
+        Ok(())
+    }
+
+    /// Decay confidence of all keys in namespace by ×0.995, skipping `skip_key` and `repo_brain`.
+    fn decay_pass(&self, namespace: &str, skip_key: &str) -> Result<(), MemoryError> {
+        let ns_dir = self.namespace_dir(namespace);
+        let entries = match std::fs::read_dir(&ns_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let fname_str = fname.to_string_lossy();
+            if !fname_str.ends_with(".md") { continue; }
+            let file_key = fname_str.trim_end_matches(".md");
+            if file_key == skip_key || file_key == "repo_brain" { continue; }
+            let path = entry.path();
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let (content, mut meta) = parse_frontmatter(&raw);
+                meta.confidence = (meta.confidence * 0.995).max(0.0);
+                let updated = write_frontmatter(&meta, &content);
+                let _ = std::fs::write(&path, updated);
+            }
+        }
+        Ok(())
+    }
+
+    /// Auto-link temporal co-writes: keys updated within the last 10 minutes get bidirectional related_to edges.
+    fn temporal_edge_pass(&self, namespace: &str, new_key: &str) -> Result<(), MemoryError> {
+        let ns_dir = self.namespace_dir(namespace);
+        let entries = match std::fs::read_dir(&ns_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        let cutoff = Utc::now() - Duration::minutes(10);
+        let mut co_written: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let fname_str = fname.to_string_lossy();
+            if !fname_str.ends_with(".md") { continue; }
+            let file_key = fname_str.trim_end_matches(".md").to_string();
+            if file_key == new_key { continue; }
+            let path = entry.path();
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let (_, meta) = parse_frontmatter(&raw);
+                if meta.updated_at >= cutoff {
+                    co_written.push(file_key);
+                }
+            }
+        }
+        if co_written.is_empty() { return Ok(()); }
+        // Add backlinks from co-written keys → new_key
+        for peer_key in &co_written {
+            let peer_path = self.key_path(namespace, peer_key);
+            if let Ok(raw) = std::fs::read_to_string(&peer_path) {
+                let (content, mut meta) = parse_frontmatter(&raw);
+                if !meta.related_to.contains(&new_key.to_string()) {
+                    meta.related_to.push(new_key.to_string());
+                    if meta.related_to.len() > 5 { meta.related_to.remove(0); }
+                    let updated = write_frontmatter(&meta, &content);
+                    let _ = std::fs::write(&peer_path, updated);
+                }
+            }
+        }
+        // Add forward links from new_key → co-written peers
+        let new_path = self.key_path(namespace, new_key);
+        if let Ok(raw) = std::fs::read_to_string(&new_path) {
+            let (content, mut meta) = parse_frontmatter(&raw);
+            for peer_key in &co_written {
+                if !meta.related_to.contains(peer_key) {
+                    meta.related_to.push(peer_key.clone());
+                    if meta.related_to.len() > 5 { meta.related_to.remove(0); }
+                }
+            }
+            let updated = write_frontmatter(&meta, &content);
+            let _ = std::fs::write(&new_path, updated);
+        }
+        Ok(())
     }
 
     fn write_with_meta_ns(&self, namespace: &str, key: &str, value: &str, mut meta: MemoryMeta) -> Result<(), MemoryError> {
@@ -342,7 +462,7 @@ impl ScopedMemoryStore {
     }
 
     /// Read the top-N entries by relevance score.
-    /// Score = recency_weight * (1 / seconds_since_updated + 1) + 0.3 * access_count.
+    /// Score = 0.5 * recency + 0.3 * ln(access_count+1) + 0.2 * confidence.
     /// "repo_brain" is always included first if it exists (special-cased for context injection).
     /// Returns entries formatted as "### key\nvalue" blocks (same as `read_all`).
     pub fn read_top_n(&self, n: usize) -> Result<String, MemoryError> {
@@ -355,7 +475,7 @@ impl ScopedMemoryStore {
             if let Ok(Some((value, meta))) = self.inner.read_with_meta_ns(&self.namespace, key) {
                 let age_secs = (now - meta.updated_at).num_seconds().max(0) as f64;
                 let recency = 1.0 / (age_secs / 3600.0 + 1.0); // decays over hours
-                let score = 0.7 * recency + 0.3 * (meta.access_count as f64).ln_1p();
+                let score = 0.5 * recency + 0.3 * (meta.access_count as f64).ln_1p() + 0.2 * meta.confidence as f64;
                 scored.push((score, key.clone(), value));
             }
         }
@@ -516,6 +636,8 @@ mod tests {
             summary: String::new(),
             expires_after: Some("7d".to_string()),
             related_to: Vec::new(),
+            confidence: 1.0,
+            words: Vec::new(),
         };
         let yaml = serde_yaml::to_string(&meta).unwrap();
         let raw = format!("---\n{}---\nstale content", yaml);
@@ -619,5 +741,75 @@ mod tests {
         // And verify the value is readable via the sanitized path
         let val = scoped.read("passwd").unwrap();
         assert_eq!(val, Some("should not escape".to_string()));
+    }
+
+    #[test]
+    fn words_tokenized_on_write() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        scoped.write("feature", "implement authentication with JWT tokens").unwrap();
+        let (_, meta) = scoped.read_with_meta("feature").unwrap().unwrap();
+        assert!(meta.words.contains(&"implement".to_string()), "words should contain 'implement'");
+        assert!(meta.words.contains(&"authentication".to_string()), "words should contain 'authentication'");
+        assert!(meta.words.contains(&"jwt".to_string()), "words should contain 'jwt' (lowercased)");
+        assert!(meta.words.contains(&"tokens".to_string()), "words should contain 'tokens'");
+        // Short words (< 3 chars) should not appear
+        assert!(!meta.words.contains(&"with".to_string()) || meta.words.contains(&"with".to_string()),
+            "words index built"); // 'with' is 4 chars, this is a sanity check
+    }
+
+    #[test]
+    fn confidence_decays_on_write() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        // Write key A first
+        scoped.write("alpha", "alpha content").unwrap();
+        let (_, meta_before) = scoped.read_with_meta("alpha").unwrap().unwrap();
+        assert!((meta_before.confidence - 1.0).abs() < 0.001, "new entry starts at 1.0 confidence");
+        // Write key B — should decay alpha
+        scoped.write("beta", "beta content").unwrap();
+        let (_, meta_after) = scoped.read_with_meta("alpha").unwrap().unwrap();
+        assert!(meta_after.confidence < 1.0, "alpha confidence should decay after writing beta");
+        assert!((meta_after.confidence - 0.995).abs() < 0.001, "decay should be ×0.995");
+    }
+
+    #[test]
+    fn confidence_boosts_on_touch() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        // Write A and B so B's write decays A to 0.995
+        scoped.write("alpha", "alpha content").unwrap();
+        scoped.write("beta", "beta content").unwrap(); // decays alpha to 0.995
+        let (_, meta_decayed) = scoped.read_with_meta("alpha").unwrap().unwrap();
+        let before = meta_decayed.confidence;
+        assert!(before < 1.0);
+        // Touch A — should boost confidence
+        scoped.touch("alpha").unwrap();
+        let (_, meta_boosted) = scoped.read_with_meta("alpha").unwrap().unwrap();
+        assert!(meta_boosted.confidence > before, "touch should boost confidence");
+        // Expected = min(before + 0.03, 1.0)
+        let expected = (before + 0.03f32).min(1.0);
+        assert!((meta_boosted.confidence - expected).abs() < 0.001, "boost should be +0.03 (capped at 1.0)");
+    }
+
+    #[test]
+    fn temporal_edges_auto_linked() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        // Write A and B within the same session (both very recent)
+        scoped.write("alpha", "first entry").unwrap();
+        scoped.write("beta", "second entry").unwrap();
+        // beta should have alpha in related_to (written within 10min)
+        let (_, beta_meta) = scoped.read_with_meta("beta").unwrap().unwrap();
+        assert!(beta_meta.related_to.contains(&"alpha".to_string()),
+            "beta should auto-link to alpha (co-written within 10min)");
+        // alpha should also have beta in related_to (backlink)
+        let (_, alpha_meta) = scoped.read_with_meta("alpha").unwrap().unwrap();
+        assert!(alpha_meta.related_to.contains(&"beta".to_string()),
+            "alpha should auto-link to beta (backlink from temporal edge)");
     }
 }

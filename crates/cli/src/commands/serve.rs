@@ -2368,9 +2368,17 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
             let scoped = mem_store.scoped(ns);
             if let Ok(keys) = scoped.list_keys() {
                 for key in keys {
-                    if let Ok(Some(val)) = scoped.read(&key) {
-                        let val_lower = val.to_lowercase();
-                        if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
+                    if let Ok(Some((val, meta))) = scoped.read_with_meta(&key) {
+                        let val: String = val;
+                        let matches = if !meta.words.is_empty() {
+                            // Fast path: use pre-tokenized words index
+                            keywords.iter().any(|kw| meta.words.iter().any(|w| w.contains(kw.as_str())))
+                        } else {
+                            // Legacy fallback: full content scan
+                            let val_lower = val.to_lowercase();
+                            keywords.iter().any(|kw| val_lower.contains(kw.as_str()))
+                        };
+                        if matches {
                             hits.push(format!("[{ns}/{key}]\n{val}"));
                         }
                     }
