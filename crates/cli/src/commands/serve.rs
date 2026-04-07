@@ -2590,6 +2590,23 @@ fn load_workflow_def(name: &str) -> Result<agent007_workflows::WorkflowDef> {
     ))
 }
 
+/// Pre-process a workflow definition by substituting all `{{memory.*}}` and
+/// `{{rag_context}}` placeholders in step prompts.  This must happen before
+/// the hosted engine calls `render_prompt` (which runs Tera and only knows
+/// about `{{task}}` and step-output variables).
+fn inject_memory_into_def(
+    mut def: agent007_workflows::WorkflowDef,
+    task: &str,
+) -> agent007_workflows::WorkflowDef {
+    let mem_ctx = build_memory_context(task);
+    for step in &mut def.steps {
+        if let Some(prompt) = &step.prompt {
+            step.prompt = Some(mem_ctx.apply_to(prompt));
+        }
+    }
+    def
+}
+
 fn workflow_persona_provider() -> Arc<dyn agent007_core::PersonaProvider> {
     let personas_dir = agent007_home().join("personas");
     let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
@@ -2647,7 +2664,7 @@ fn load_hosted_workflow_session(
         )?
         .map(|source| source.workflow_ref)
         .unwrap_or_else(|| request.workflow.clone());
-    let def = load_workflow_def(&workflow_ref)?;
+    let def = inject_memory_into_def(load_workflow_def(&workflow_ref)?, &request.task);
     Ok((store, request, def, state))
 }
 
@@ -2708,7 +2725,7 @@ fn hosted_workflow_response(
 }
 
 fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
-    let def = load_workflow_def(name)?;
+    let def = inject_memory_into_def(load_workflow_def(name)?, task);
     let store = load_run_store();
     let run = store.create_run(
         "workflow-hosted",

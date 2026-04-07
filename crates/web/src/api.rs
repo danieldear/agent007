@@ -972,7 +972,16 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
 
         // {{variable}} reference check
         for var in extract_template_vars(prompt) {
-            if var != "task" && !outputs.contains(var.as_str()) {
+            // Skip variables that are injected at runtime by the server
+            // (memory scopes, RAG context, and the built-in task/args).
+            let is_builtin = matches!(
+                var.as_str(),
+                "task" | "args"
+                    | "memory.project" | "memory.user"
+                    | "memory.global" | "memory.repo_brain"
+                    | "rag_context"
+            );
+            if !is_builtin && !outputs.contains(var.as_str()) {
                 warnings.push(format!("Step '{id}' references {{{{'{var}'}}}} but no step produces that output key"));
             }
         }
