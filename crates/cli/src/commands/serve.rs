@@ -2254,61 +2254,16 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
     } else {
         let skill = find_skill(&trigger)?;
 
-        // Load memory scopes for context injection.
-        // Use read_top_n() to surface the most-relevant entries ranked by recency
-        // and access frequency instead of dumping every key (avoids token waste).
-        let mem_store = memory_store();
-        let project_scoped = mem_store.scoped("project");
-        let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
-        let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
-        let global_store = memory_store_for_scope("global");
-        let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
+        // Load ranked memory context for template variable injection.
+        let mem_ctx = build_memory_context(&args);
 
-        // Extract repo_brain specifically so skills can use {{memory.repo_brain}} directly.
-        let memory_repo_brain = project_scoped
-            .read("repo_brain")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-
-        // Keyword RAG: scan user/project/skills memory for terms in args
-        let rag_context = {
-            let keywords: Vec<String> = args.split_whitespace()
-                .filter(|w| w.len() >= 3)
-                .map(|w| w.to_lowercase())
-                .collect();
-            let mut hits: Vec<String> = Vec::new();
-            for ns in &["user", "project", "skills"] {
-                let scoped = mem_store.scoped(ns);
-                if let Ok(keys) = scoped.list_keys() {
-                    for key in keys {
-                        if let Ok(Some(val)) = scoped.read(&key) {
-                            let val_lower = val.to_lowercase();
-                            if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
-                                hits.push(format!("[{ns}/{key}]\n{val}"));
-                            }
-                        }
-                    }
-                }
-            }
-            hits.join("\n\n")
-        };
-
-        let rendered = skill.template()
-            .replace("{{args}}", &args)
-            .replace("{{ args }}", &args)
-            .replace("{{task}}", &args)
-            .replace("{{ task }}", &args)
-            .replace("{{memory.user}}", &memory_user)
-            .replace("{{ memory.user }}", &memory_user)
-            .replace("{{memory.project}}", &memory_project)
-            .replace("{{ memory.project }}", &memory_project)
-            .replace("{{memory.global}}", &memory_global)
-            .replace("{{ memory.global }}", &memory_global)
-            .replace("{{memory.repo_brain}}", &memory_repo_brain)
-            .replace("{{ memory.repo_brain }}", &memory_repo_brain)
-            .replace("{{rag_context}}", &rag_context)
-            .replace("{{ rag_context }}", &rag_context);
+        let rendered = mem_ctx.apply_to(
+            &skill.template()
+                .replace("{{args}}", &args)
+                .replace("{{ args }}", &args)
+                .replace("{{task}}", &args)
+                .replace("{{ task }}", &args)
+        );
 
         let run_id = create_delegate_run("skill", &format!("{trigger} {args}"))?;
         let output = format!(
@@ -2358,6 +2313,80 @@ fn memory_store() -> Arc<agent007_memory::store::MemoryStore> {
     Arc::new(agent007_memory::store::MemoryStore::new(
         agent007_write_home().join("memory"),
     ))
+}
+
+/// All memory-related context needed for template variable injection.
+/// Build once via `build_memory_context()` and apply with `apply_to()`.
+struct MemoryContext {
+    project: String,
+    user: String,
+    global: String,
+    repo_brain: String,
+    rag: String,
+}
+
+impl MemoryContext {
+    /// Replace all `{{memory.*}}` and `{{rag_context}}` placeholders in a template string.
+    fn apply_to(&self, template: &str) -> String {
+        template
+            .replace("{{memory.project}}", &self.project)
+            .replace("{{ memory.project }}", &self.project)
+            .replace("{{memory.user}}", &self.user)
+            .replace("{{ memory.user }}", &self.user)
+            .replace("{{memory.global}}", &self.global)
+            .replace("{{ memory.global }}", &self.global)
+            .replace("{{memory.repo_brain}}", &self.repo_brain)
+            .replace("{{ memory.repo_brain }}", &self.repo_brain)
+            .replace("{{rag_context}}", &self.rag)
+            .replace("{{ rag_context }}", &self.rag)
+    }
+}
+
+/// Load and rank memory from all scopes.  `task_or_args` is used as the RAG
+/// query for keyword matching against stored entries.
+fn build_memory_context(task_or_args: &str) -> MemoryContext {
+    let mem_store = memory_store();
+    let project_scoped = mem_store.scoped("project");
+    let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
+    let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let global_store = memory_store_for_scope("global");
+    let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let memory_repo_brain = project_scoped
+        .read("repo_brain")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let rag_context = {
+        let keywords: Vec<String> = task_or_args
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+        let mut hits: Vec<String> = Vec::new();
+        for ns in &["user", "project", "skills"] {
+            let scoped = mem_store.scoped(ns);
+            if let Ok(keys) = scoped.list_keys() {
+                for key in keys {
+                    if let Ok(Some(val)) = scoped.read(&key) {
+                        let val_lower = val.to_lowercase();
+                        if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
+                            hits.push(format!("[{ns}/{key}]\n{val}"));
+                        }
+                    }
+                }
+            }
+        }
+        hits.join("\n\n")
+    };
+
+    MemoryContext {
+        project: memory_project,
+        user: memory_user,
+        global: memory_global,
+        repo_brain: memory_repo_brain,
+        rag: rag_context,
+    }
 }
 
 fn memory_read(scope: &str, key: &str) -> Result<Option<String>> {
@@ -3361,42 +3390,8 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
     let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
         .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
 
-    // Load memory context to inject into every workflow step prompt.
-    // Use ranked top-N to prioritize most-accessed and most-recent entries.
-    let mem_store = memory_store();
-    let project_scoped = mem_store.scoped("project");
-    let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
-    let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
-    let global_store = memory_store_for_scope("global");
-    let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
-    let memory_repo_brain = project_scoped
-        .read("repo_brain")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-
-    // Keyword RAG across memory for workflow task
-    let wf_rag_context = {
-        let keywords: Vec<String> = task.split_whitespace()
-            .filter(|w| w.len() >= 3)
-            .map(|w| w.to_lowercase())
-            .collect();
-        let mut hits: Vec<String> = Vec::new();
-        for ns in &["user", "project", "skills"] {
-            let scoped = mem_store.scoped(ns);
-            if let Ok(keys) = scoped.list_keys() {
-                for key in keys {
-                    if let Ok(Some(val)) = scoped.read(&key) {
-                        let val_lower = val.to_lowercase();
-                        if keywords.iter().any(|kw| val_lower.contains(kw.as_str())) {
-                            hits.push(format!("[{ns}/{key}]\n{val}"));
-                        }
-                    }
-                }
-            }
-        }
-        hits.join("\n\n")
-    };
+    // Load ranked memory context for template variable injection.
+    let mem_ctx = build_memory_context(task);
 
     let mut steps = Vec::new();
     for step in &def.steps {
@@ -3405,19 +3400,11 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
             registry.get(&step.agent)
         };
 
-        let rendered_prompt = step.prompt.as_deref()
-            .unwrap_or("")
-            .replace("{{task}}", task)
-            .replace("{{memory.project}}", &memory_project)
-            .replace("{{ memory.project }}", &memory_project)
-            .replace("{{memory.user}}", &memory_user)
-            .replace("{{ memory.user }}", &memory_user)
-            .replace("{{memory.global}}", &memory_global)
-            .replace("{{ memory.global }}", &memory_global)
-            .replace("{{memory.repo_brain}}", &memory_repo_brain)
-            .replace("{{ memory.repo_brain }}", &memory_repo_brain)
-            .replace("{{rag_context}}", &wf_rag_context)
-            .replace("{{ rag_context }}", &wf_rag_context);
+        let rendered_prompt = mem_ctx.apply_to(
+            &step.prompt.as_deref()
+                .unwrap_or("")
+                .replace("{{task}}", task)
+        );
 
         let mut step_json = serde_json::json!({
             "id": step.id,

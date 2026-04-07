@@ -105,7 +105,9 @@ impl MemoryStore {
         let mut path = if namespace.is_empty() {
             self.base_dir.clone()
         } else {
-            self.base_dir.join(namespace)
+            // Sanitize namespace just like key components to prevent path traversal
+            let safe_ns = namespace.replace("..", "").replace('/', "").replace('\\', "");
+            self.base_dir.join(safe_ns)
         };
         let parts: Vec<&str> = key.split(':').collect();
         match parts.split_last() {
@@ -590,5 +592,32 @@ mod tests {
         // Should contain at most 3 blocks
         let blocks = result.split("\n\n").filter(|s| s.starts_with("### ")).count();
         assert!(blocks <= 3, "expected at most 3 blocks, got {blocks}");
+    }
+
+    #[test]
+    fn namespace_path_traversal_is_sanitized() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        // A namespace with path traversal components should write inside base_dir, not escape it
+        let scoped = store.scoped("../../etc");
+        scoped.write("passwd", "should not escape").unwrap();
+        // The resulting file must be inside base_dir
+        let base = dir.path().canonicalize().unwrap();
+        // List all files written
+        let found: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        for entry in found {
+            let p = entry.path().canonicalize().unwrap_or_else(|_| entry.path());
+            assert!(
+                p.starts_with(&base),
+                "file escaped base dir: {} not under {}",
+                p.display(), base.display()
+            );
+        }
+        // And verify the value is readable via the sanitized path
+        let val = scoped.read("passwd").unwrap();
+        assert_eq!(val, Some("should not escape".to_string()));
     }
 }
