@@ -261,4 +261,42 @@ mod tests {
         let summaries = list_skills(skills_dir.path()).await.unwrap();
         assert_eq!(summaries.len(), 2);
     }
+
+    #[tokio::test]
+    async fn skill_list_includes_version() {
+        let skills_dir = TempDir::new().unwrap();
+        std::fs::write(
+            skills_dir.path().join("versioned.md"),
+            "---\nname: versioned\ndescription: test\ntrigger: /versioned\nversion: \"2.1.0\"\n---\nDo it.\n",
+        ).unwrap();
+        let summaries = list_skills(skills_dir.path()).await.unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].version, "2.1.0");
+    }
+
+    #[tokio::test]
+    async fn skill_list_defaults_version_when_missing() {
+        let skills_dir = TempDir::new().unwrap();
+        std::fs::write(
+            skills_dir.path().join("no_version.md"),
+            "---\nname: no_version\ndescription: test\ntrigger: /no-version\n---\nDo it.\n",
+        ).unwrap();
+        let summaries = list_skills(skills_dir.path()).await.unwrap();
+        assert_eq!(summaries[0].version, "1.0.0");
+    }
+
+    #[test]
+    fn install_skill_rejects_invalid_source() {
+        let skills_dir = TempDir::new().unwrap();
+        let err = install_skill("ftp://bad-scheme.example.com/skill.md", skills_dir.path());
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("unsupported source"));
+    }
+
+    #[test]
+    fn install_skill_rejects_bad_github_path() {
+        let skills_dir = TempDir::new().unwrap();
+        let err = install_skill("github:only-one-segment", skills_dir.path());
+        assert!(err.is_err());
+    }
 }
