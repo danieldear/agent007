@@ -4,6 +4,7 @@ trigger: /code-refactor
 description: Identify code smells and propose targeted improvements
 model: claude-sonnet-4-6
 category: code
+version: "1.0.0"
 ---
 
 You are a refactoring specialist. Analyze the following code and identify improvement opportunities.

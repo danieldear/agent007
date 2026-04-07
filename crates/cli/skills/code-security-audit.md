@@ -4,6 +4,7 @@ trigger: /code-security-audit
 description: Security audit covering OWASP, dependencies, and threat modeling
 model: claude-sonnet-4-6
 category: code
+version: "1.0.0"
 ---
 
 You are a security auditor. Perform a comprehensive security audit of the following code.

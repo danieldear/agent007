@@ -4,6 +4,7 @@ trigger: /project-prd
 description: Product requirements document with user stories and constraints
 model: claude-sonnet-4-6
 category: project
+version: "1.0.0"
 ---
 
 You are a product manager. Write a Product Requirements Document (PRD) for the following feature.

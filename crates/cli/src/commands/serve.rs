@@ -31,17 +31,20 @@ use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::events::AgentEvent;
 use agent007_core::types::PromptRef;
 use agent007_learning::LearningDispatcher;
+use agent007_hooks::{HookConfig, HookEvent, HookExecutor};
 
 /// MCP server that exposes agent007 tools to Claude Code (or any MCP client).
 pub struct Agent007Server {
     config: Arc<Config>,
     dispatcher: Option<Arc<LocalDispatcher>>,
     learning_dispatcher: Option<Arc<LearningDispatcher>>,
+    hook_executor: Option<Arc<HookExecutor>>,
 }
 
 impl Agent007Server {
     pub fn new(config: Arc<Config>) -> Self {
-        Self { config, dispatcher: None, learning_dispatcher: None }
+        let hook_executor = load_hook_executor();
+        Self { config, dispatcher: None, learning_dispatcher: None, hook_executor }
     }
 
     pub fn with_dispatchers(
@@ -52,6 +55,14 @@ impl Agent007Server {
         self.dispatcher = Some(dispatcher);
         self.learning_dispatcher = Some(learning_dispatcher);
         self
+    }
+
+    fn fire_hook(&self, event: &HookEvent) {
+        if let Some(exec) = &self.hook_executor {
+            if let Err(e) = exec.fire(event) {
+                tracing::warn!(error = %e, "hook fire failed");
+            }
+        }
     }
 
     async fn publish_task_assigned(&self, agent_id: &agent007_core::types::AgentId, task: &agent007_core::Task) {
@@ -74,6 +85,7 @@ impl Agent007Server {
                 model: None,
             }).await;
         }
+        self.fire_hook(&HookEvent::PostTaskComplete);
     }
 
     async fn publish_model_request(&self, token_estimate: usize) {
@@ -1000,6 +1012,7 @@ impl ServerHandler for Agent007Server {
                 let core_task = agent007_core::Task::new(&format!("skill:{trigger}"));
                 let task_id = core_task.id;
                 self.publish_task_assigned(&aid, &core_task).await;
+                self.fire_hook(&HookEvent::OnSkillExecute { skill: trigger.clone() });
                 match run_skill_mcp(&self.config, trigger, args).await {
                     Ok(output) => {
                         let token_est = output.len() / 4;
@@ -1073,9 +1086,12 @@ impl ServerHandler for Agent007Server {
                 let key   = extract_string(request.arguments.as_ref(), "key")?;
                 let value = extract_string(request.arguments.as_ref(), "value")?;
                 match memory_write(&scope, &key, &value) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(
-                        format!("Written key '{}' in scope '{}'.", key, scope)
-                    )])),
+                    Ok(()) => {
+                        self.fire_hook(&HookEvent::OnMemoryWrite { key: key.clone() });
+                        Ok(CallToolResult::success(vec![Content::text(
+                            format!("Written key '{}' in scope '{}'.", key, scope)
+                        )]))
+                    }
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
                 }
             }
@@ -1116,6 +1132,8 @@ impl ServerHandler for Agent007Server {
                             let key = format!("skill_{}", &run_id[..8.min(run_id.len())]);
                             let _ = store.scoped("project").write(&key, out);
                         }
+                        // Passively record feedback in the learning store
+                        record_feedback_entry(&model, output.as_deref());
                         Ok(CallToolResult::success(vec![Content::text(
                             format!("Recorded {} tokens for run '{}' (model: {}).", tokens, run_id, model)
                         )]))
@@ -1741,6 +1759,7 @@ fn list_available_skills() -> Result<Vec<SkillSummary>> {
             name: skill.name().to_string(),
             description: skill.frontmatter.description.clone(),
             trigger: skill.trigger().to_string(),
+            version: skill.version().to_string(),
         })
         .collect())
 }
@@ -1999,7 +2018,7 @@ fn format_skills(skills: &[SkillSummary]) -> String {
     }
     skills
         .iter()
-        .map(|s| format!("• {} — {}", s.trigger, s.description))
+        .map(|s| format!("[v{}] {} — {}", s.version, s.trigger, s.description))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2075,6 +2094,49 @@ fn record_estimated_tokens(run_id: &str, prompt_chars: usize, model: &str) {
 
 /// Cost per token in USD (blended input+output at Claude Sonnet rates).
 const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_006;
+
+/// Load a HookExecutor by trying the project-local hooks.toml first, then the global one.
+/// Returns None if neither file exists or both fail to parse.
+fn load_hook_executor() -> Option<Arc<HookExecutor>> {
+    let global_hooks = agent007_home().join("hooks").join("hooks.toml");
+    let candidates: Vec<std::path::PathBuf> = agent007_project_home()
+        .map(|p| vec![p.join(".agent007").join("hooks").join("hooks.toml"), global_hooks.clone()])
+        .unwrap_or_else(|| vec![global_hooks]);
+    for path in &candidates {
+        if path.exists() {
+            match HookConfig::load(path) {
+                Ok(cfg) => return Some(Arc::new(HookExecutor::new(cfg))),
+                Err(e) => tracing::warn!(path = %path.display(), error = %e, "failed to load hooks.toml"),
+            }
+        }
+    }
+    None
+}
+
+/// Fire-and-forget: save a FeedbackEntry to the global learning store.
+/// Errors are logged but not propagated — learning is best-effort.
+fn record_feedback_entry(model: &str, skill_hint: Option<&str>) {
+    use agent007_learning::{FeedbackEntry, LearningStore, Outcome};
+    use agent007_core::types::{AgentId, PromptRef};
+    use agent007_memory::store::MemoryStore;
+
+    let mem = Arc::new(MemoryStore::new(agent007_global_home().join("memory")));
+    let scoped = mem.scoped("learning");
+    let store = LearningStore::new(scoped);
+    let entry = FeedbackEntry {
+        id: uuid::Uuid::new_v4(),
+        agent_id: AgentId::new(),
+        prompt_ref: PromptRef::new(),
+        skill_name: skill_hint.map(|s| s.to_string()),
+        model: model.to_string(),
+        outcome: Outcome::Success,
+        reward: None,
+        timestamp: chrono::Utc::now(),
+    };
+    if let Err(e) = store.record_feedback(&entry) {
+        tracing::debug!(error = %e, "failed to record learning feedback");
+    }
+}
 
 /// Write a rich one-line status to ~/.agent007/statusline for Claude Code's statusLine feature.
 ///

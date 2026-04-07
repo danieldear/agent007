@@ -4,6 +4,7 @@ trigger: /project-release
 description: Version strategy, release notes, and rollback planning
 model: claude-sonnet-4-6
 category: project
+version: "1.0.0"
 ---
 
 You are a release manager. Plan a release for the following project state.

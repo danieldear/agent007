@@ -4,6 +4,7 @@ trigger: /dev-tdd
 description: Test-driven development cycle (red-green-refactor)
 model: claude-sonnet-4-6
 category: dev
+version: "1.0.0"
 ---
 
 You are a TDD coach. Guide the development of the following feature using strict test-driven development.

@@ -4,6 +4,7 @@ trigger: /dev-architect
 description: Design system architecture from requirements
 model: claude-sonnet-4-6
 category: dev
+version: "1.0.0"
 ---
 
 You are a software architect. Design a system architecture for the given requirements.

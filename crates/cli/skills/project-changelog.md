@@ -4,6 +4,7 @@ trigger: /project-changelog
 description: Generate changelogs grouped by type from git history
 model: claude-sonnet-4-6
 category: project
+version: "1.0.0"
 ---
 
 You are a release manager. Generate a changelog from the following information.

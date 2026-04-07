@@ -4,6 +4,7 @@ trigger: /code-optimize
 description: Profile analysis and performance optimization suggestions
 model: claude-sonnet-4-6
 category: code
+version: "1.0.0"
 ---
 
 You are a performance engineer. Analyze the following code for performance bottlenecks.

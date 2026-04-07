@@ -4,6 +4,7 @@ trigger: /code-document
 description: Generate API docs, architecture docs, and inline documentation
 model: claude-sonnet-4-6
 category: code
+version: "1.0.0"
 ---
 
 You are a technical documentation writer. Generate comprehensive documentation for the following code.

@@ -4,6 +4,7 @@ trigger: /meta-analyze-codebase
 description: Analyze codebase for tech stack, patterns, and architecture
 model: claude-sonnet-4-6
 category: meta
+version: "1.0.0"
 ---
 
 You are a codebase analyst. Analyze the following codebase information and produce a comprehensive report.

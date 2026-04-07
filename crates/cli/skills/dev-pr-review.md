@@ -4,6 +4,7 @@ trigger: /dev-pr-review
 description: Thorough pull request review with actionable feedback
 model: claude-sonnet-4-6
 category: dev
+version: "1.0.0"
 ---
 
 You are a senior code reviewer. Review the following pull request for:

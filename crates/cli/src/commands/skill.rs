@@ -8,6 +8,7 @@ pub struct SkillSummary {
     pub name: String,
     pub description: String,
     pub trigger: String,
+    pub version: String,
 }
 
 /// Copy a skill file into the skills directory (preserving filename).
@@ -29,7 +30,11 @@ struct ListFrontmatter {
     trigger: String,
     #[allow(dead_code)]
     model: Option<String>,
+    #[serde(default = "default_version")]
+    version: String,
 }
+
+fn default_version() -> String { "1.0.0".to_string() }
 
 /// List all skills found in skills_dir. Returns a Vec of summaries (name + description + trigger).
 /// Reads each .md file and parses YAML frontmatter.
@@ -64,6 +69,7 @@ pub async fn list_skills(skills_dir: &Path) -> Result<Vec<SkillSummary>> {
             name: fm.name,
             description: fm.description,
             trigger: fm.trigger,
+            version: fm.version,
         });
     }
 
@@ -103,7 +109,7 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
         SkillAction::List => {
             let summaries = list_skills(&skills_dir).await?;
             for s in &summaries {
-                println!("{:20} {:40} {}", s.trigger, s.name, s.description);
+                println!("[v{}] {:20} {:40} {}", s.version, s.trigger, s.name, s.description);
             }
             Ok(())
         }
@@ -157,11 +163,65 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
             println!("{}", result);
             Ok(())
         }
+        SkillAction::Install { source } => {
+            install_skill(&source, &skills_dir)
+        }
     }
 }
 
 fn default_skills_dir() -> PathBuf {
     crate::commands::run::agent007_home().join("skills")
+}
+
+/// Install a skill from a GitHub path or HTTPS URL.
+///
+/// Supported source formats:
+/// - `github:owner/repo/path/to/skill.md` → fetches from raw.githubusercontent.com/owner/repo/HEAD/path
+/// - `https://...` → fetches directly
+pub fn install_skill(source: &str, skills_dir: &std::path::Path) -> Result<()> {
+    let url = if let Some(gh) = source.strip_prefix("github:") {
+        // github:owner/repo/path/to/skill.md
+        let parts: Vec<&str> = gh.splitn(3, '/').collect();
+        if parts.len() < 3 {
+            anyhow::bail!("invalid github source — expected github:owner/repo/path/to/skill.md");
+        }
+        let (owner, repo, path) = (parts[0], parts[1], parts[2]);
+        format!("https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{path}")
+    } else if source.starts_with("https://") || source.starts_with("http://") {
+        source.to_string()
+    } else {
+        anyhow::bail!("unsupported source — use github:owner/repo/path.md or https://...");
+    };
+
+    let response = reqwest::blocking::get(&url)
+        .map_err(|e| anyhow::anyhow!("failed to fetch skill from {url}: {e}"))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("fetch failed — HTTP {} for {url}", response.status());
+    }
+
+    let content = response.text()
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))?;
+
+    // Validate frontmatter: must have name: and trigger:
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        anyhow::bail!("skill file has no YAML frontmatter (expected --- delimiters)");
+    }
+
+    #[derive(serde::Deserialize)]
+    struct MinimalFrontmatter { name: String, trigger: String }
+    let fm: MinimalFrontmatter = serde_yaml::from_str(parts[1])
+        .map_err(|e| anyhow::anyhow!("failed to parse skill frontmatter: {e}"))?;
+
+    // Derive filename from trigger (strip leading /)
+    let filename = format!("{}.md", fm.trigger.trim_start_matches('/').replace('/', "-"));
+    std::fs::create_dir_all(skills_dir)?;
+    let dest = skills_dir.join(&filename);
+    std::fs::write(&dest, &content)?;
+
+    println!("Installed skill '{}' → {}", fm.name, dest.display());
+    Ok(())
 }
 
 #[cfg(test)]

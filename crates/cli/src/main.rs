@@ -171,6 +171,11 @@ pub enum SkillAction {
         /// Arguments passed to the skill template
         args: String,
     },
+    /// Install a skill from GitHub or a URL
+    Install {
+        /// Source: "github:user/repo/path/to/skill.md" or "https://..."
+        source: String,
+    },
 }
 
 #[derive(Parser, Debug)]

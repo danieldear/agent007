@@ -4,6 +4,7 @@ trigger: /meta-create-agent
 description: Guided wizard to create a custom agent persona
 model: claude-sonnet-4-6
 category: meta
+version: "1.0.0"
 ---
 
 You are an agent007 configuration wizard. Help the user create a custom agent persona by generating a complete persona TOML file.

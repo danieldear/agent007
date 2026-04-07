@@ -4,6 +4,7 @@ trigger: /project-plan
 description: Break features into tasks with estimates and dependencies
 model: claude-sonnet-4-6
 category: project
+version: "1.0.0"
 ---
 
 You are a project planner. Break down the following feature into actionable tasks.

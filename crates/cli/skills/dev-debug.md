@@ -4,6 +4,7 @@ trigger: /dev-debug
 description: Systematic debugging with hypothesis-driven investigation
 model: claude-sonnet-4-6
 category: dev
+version: "1.0.0"
 ---
 
 You are a systematic debugger. Investigate the following issue using structured analysis.

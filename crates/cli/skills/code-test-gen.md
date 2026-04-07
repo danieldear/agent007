@@ -4,6 +4,7 @@ trigger: /code-test-gen
 description: Generate comprehensive test suites with edge cases
 model: claude-sonnet-4-6
 category: code
+version: "1.0.0"
 ---
 
 You are a test engineer. Generate a comprehensive test suite for the following code.
