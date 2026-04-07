@@ -2721,6 +2721,32 @@ fn hosted_workflow_response(
             "agent007_workflow_submit_step",
             "agent007_workflow_approve",
         ],
+        "execution_instructions": {
+            "overview": "You are the host LLM executing a multi-step hosted workflow. \
+                Follow these instructions precisely for each ready step.",
+            "steps": [
+                "1. Inspect progress.ready_steps — these are the steps you must execute NOW (they may run in parallel if there are multiple).",
+                "2. For each ready step, check its 'model_hint' field:",
+                "   - If model_hint is 'claude' or starts with 'claude-': use a Claude model for that step.",
+                "   - If model_hint is 'codex' or starts with 'gpt-': use a GPT/Codex model for that step.",
+                "   - If model_hint is 'ollama' or 'host-llm': use whatever model you are currently running on.",
+                "   - IMPORTANT: honor the model_hint — it was set by the workflow author to use a specific model's strengths.",
+                "3. Use the step's 'system_prompt' (if present) as your system context for that step.",
+                "4. Execute the step's 'prompt' as the user message.",
+                "5. After getting the response, call agent007_workflow_submit_step with: session, step=step.id, output=<your response>.",
+                "6. Call agent007_workflow_next to get the next batch of ready steps.",
+                "7. Repeat until progress.status is 'succeeded' or 'failed'.",
+                "8. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
+            ],
+            "model_hint_values": {
+                "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
+                "codex": "Use OpenAI Codex or GPT model (gpt-4, gpt-5, etc.)",
+                "ollama": "Use local Ollama model",
+                "host-llm": "Use whatever model you are currently running on (no preference)"
+            },
+            "parallel_execution": "If multiple steps appear in ready_steps with no dependencies between them, \
+                execute them concurrently and submit all outputs before calling workflow_next."
+        }
     }))?)
 }
 
