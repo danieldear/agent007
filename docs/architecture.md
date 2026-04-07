@@ -12,7 +12,7 @@ crates/
 ├── memory/       Scoped key-value store + LanceDB vector search + MemoryStore API
 ├── skills/       Skill loading, frontmatter parsing (SkillFrontmatter), SkillDispatcher
 ├── hooks/        HookConfig (hooks.toml) + HookExecutor (spawns shell commands)
-├── learning/     LearningStore + FeedbackEntry recording + PromptOptimizer scaffold
+├── learning/     LearningStore + FeedbackEntry recording + PromptOptimizer + InsightGenerator
 ├── personas/     PersonaSpec loading from ~/.agent007/personas/*.md
 ├── workflows/    WorkflowDef YAML schema + step graph + WorkflowEngine
 ├── mcp/          MCP client (connects to downstream MCP servers) + tool proxy
@@ -52,7 +52,11 @@ AI Editor (Claude Code / Cursor / Codex / Copilot / Zed)
 │    │       └── fire_hook(OnMemoryWrite)                  │
 │    │                                                     │
 │    ├── agent007_record_tokens ─► learning::LearningStore │
-│    │       └── fire_hook(PostTaskComplete)               │
+│    │       │  └── fire_hook(PostTaskComplete)           │
+│    │       └──────────────────► InsightGenerator        │
+│    │                            (writes project memory  │
+│    │                             when failure patterns  │
+│    │                             are detected)          │
 │    │                                                     │
 │    ├── agent007_workflow_* ────► workflows::WorkflowEngine│
 │    │                                                     │
@@ -96,7 +100,10 @@ Scoped key-value with optional LanceDB backend. Scopes are namespaced subdirecto
 Reads `HookConfig` from `hooks.toml`. `fire(event, env_vars)` spawns a subprocess synchronously. Hook commands receive context via environment variables (`HOOK_SKILL`, `HOOK_KEY`, etc.).
 
 ### `learning::LearningStore`
-`LearningStore::new(ScopedMemoryStore)` + `record_feedback(&FeedbackEntry)`. Each `FeedbackEntry` has: `id`, `agent_id`, `model`, `skill_name`, `outcome`, `reward`, `timestamp`. Written to the `learning` scope in memory.
+`LearningStore::new(ScopedMemoryStore)` + `record_feedback(&FeedbackEntry)`. Each `FeedbackEntry` has: `id`, `agent_id`, `model`, `skill_name`, `outcome`, `reward`, `timestamp`. Written to the `learning` scope in memory. Additional methods: `count_feedback(skill)`, `list_skill_names()`.
+
+### `learning::InsightGenerator`
+Attached to `FeedbackCollector` via `with_insight_generator(Arc<InsightGenerator>)`. After each `TaskCompleted` event, checks whether the skill's feedback count crosses a multiple of `check_every_n`. If the failure rate exceeds `min_failure_rate`, calls the configured LLM model and writes a `type: procedural` memory entry to the `project` scope. The entry is immediately available via `{{memory.project}}` and `{{rag_context}}`. See ADR-007.
 
 ### `workflows::WorkflowEngine`
 Parses `~/.agent007/workflows/<name>.yaml`. Builds a dependency graph (petgraph). Steps without `depends_on` run in parallel. Approval gates block progression until `workflow_approve` is called. Hosted-MCP mode: the engine emits step prompts; the host LLM executes and submits outputs back.

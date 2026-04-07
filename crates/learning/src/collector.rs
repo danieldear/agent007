@@ -9,6 +9,11 @@ pub struct FeedbackCollector {
     store: crate::store::LearningStore,
     scorer: crate::scorer::RewardScorer,
     learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
+    /// Optional auto-insight generator. When set, the collector checks whether
+    /// an insight should be generated after every `config.check_every_n` feedback
+    /// entries for a skill. `None` disables insight generation (default behaviour
+    /// if no `ModelProvider` + project `MemoryStore` are available at construction).
+    insight_generator: Option<Arc<crate::insight::InsightGenerator>>,
 }
 
 impl FeedbackCollector {
@@ -18,7 +23,15 @@ impl FeedbackCollector {
         scorer: crate::scorer::RewardScorer,
         learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
     ) -> Self {
-        Self { dispatcher, store, scorer, learning_dispatcher }
+        Self { dispatcher, store, scorer, learning_dispatcher, insight_generator: None }
+    }
+
+    /// Attach an `InsightGenerator` to this collector.
+    /// After each skill feedback entry is recorded, the collector checks whether
+    /// auto-insight generation should fire based on the generator's config.
+    pub fn with_insight_generator(mut self, generator: Arc<crate::insight::InsightGenerator>) -> Self {
+        self.insight_generator = Some(generator);
+        self
     }
 
     /// Subscribe to the core Dispatcher and process AgentEvents in a loop.
@@ -64,6 +77,19 @@ impl FeedbackCollector {
                             agent_id: entry.agent_id.clone(),
                             reward: entry.reward.unwrap_or(0.0),
                         });
+                        // Maybe trigger auto-insight generation for this skill.
+                        if let (Some(generator), Some(ref skill)) = (&self.insight_generator, &entry.skill_name) {
+                            let check_n = generator.config.check_every_n;
+                            match self.store.count_feedback(skill) {
+                                Ok(count) if count >= generator.config.min_feedback_count && count % check_n == 0 => {
+                                    if let Err(e) = generator.maybe_generate(skill, &self.store).await {
+                                        tracing::warn!(error = %e, skill = skill, "auto-insight generation failed");
+                                    }
+                                }
+                                Err(e) => tracing::warn!(error = %e, "failed to count feedback for insight check"),
+                                _ => {}
+                            }
+                        }
                     }
                 }
                 // ToolCall events are fire-and-forget — we wait for ToolCallResult

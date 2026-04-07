@@ -104,6 +104,28 @@ impl LearningStore {
         Ok(entries)
     }
 
+    /// Return the total number of feedback entries recorded for `skill_name`.
+    /// Reads only the index (a JSON array of UUIDs) — O(1) in terms of entry deserialization.
+    pub fn count_feedback(&self, skill_name: &str) -> Result<usize, crate::error::LearningError> {
+        let index_key = format!("feedback/index/{}", skill_name);
+        let ids: Vec<String> = self.scoped
+            .read(&index_key)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Ok(ids.len())
+    }
+
+    /// Return all skill names that have at least one feedback entry recorded.
+    /// Scans the `feedback/index/` key prefix in the learning store.
+    pub fn list_skill_names(&self) -> Result<Vec<String>, crate::error::LearningError> {
+        const PREFIX: &str = "feedback/index/";
+        let keys = self.scoped.list_keys()?;
+        Ok(keys.into_iter()
+            .filter_map(|k| k.strip_prefix(PREFIX).map(str::to_string))
+            .filter(|s| s != "__none__")
+            .collect())
+    }
+
     /// Save an improved prompt as a new version for the given skill.
     // NOTE: The data write and index write are not atomic. If a panic occurs
     // between the two, the entry will exist in storage but not in the index
