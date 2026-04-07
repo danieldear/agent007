@@ -359,6 +359,10 @@ pub async fn stats_handler(
     if let Some(obj) = snapshot.as_object_mut() {
         obj.insert("project_name".to_string(), serde_json::json!(state.project_name));
         obj.insert("project_path".to_string(), serde_json::json!(state.project_path));
+        // Ensure runtime_mode is always present (metrics struct has it, but guarantee it)
+        if !obj.contains_key("runtime_mode") {
+            obj.insert("runtime_mode".to_string(), serde_json::json!(state.runtime_mode));
+        }
     }
     Json(snapshot).into_response()
 }

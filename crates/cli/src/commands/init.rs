@@ -155,6 +155,7 @@ pub async fn execute(
     let wf_dir = home.join("workflows");
     write_file(&wf_dir.join("log-analysis.yaml"),  WORKFLOW_LOG_ANALYSIS,  "workflows/log-analysis.yaml", force)?;
     write_file(&wf_dir.join("code-review.yaml"),   WORKFLOW_CODE_REVIEW,   "workflows/code-review.yaml",  force)?;
+    write_file(&wf_dir.join("security-audit.yaml"),WORKFLOW_SECURITY_AUDIT,"workflows/security-audit.yaml",force)?;
     write_file(&wf_dir.join("sparc.yaml"),         WORKFLOW_SPARC,         "workflows/sparc.yaml",        force)?;
     write_file(&wf_dir.join("tdd.yaml"),           WORKFLOW_TDD,           "workflows/tdd.yaml",          force)?;
     write_file(&wf_dir.join("ideation.yaml"),      WORKFLOW_IDEATION,      "workflows/ideation.yaml",     force)?;
@@ -842,11 +843,12 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
         std::fs::create_dir_all(&wf_dir)?;
         write_if_missing(&wf_dir.join("log-analysis.yaml"), WORKFLOW_LOG_ANALYSIS, "~/.agent007/workflows/log-analysis.yaml")?;
         write_if_missing(&wf_dir.join("code-review.yaml"),  WORKFLOW_CODE_REVIEW,  "~/.agent007/workflows/code-review.yaml")?;
+        write_if_missing(&wf_dir.join("security-audit.yaml"),WORKFLOW_SECURITY_AUDIT,"~/.agent007/workflows/security-audit.yaml")?;
         write_if_missing(&wf_dir.join("sparc.yaml"),        WORKFLOW_SPARC,        "~/.agent007/workflows/sparc.yaml")?;
         write_if_missing(&wf_dir.join("tdd.yaml"),          WORKFLOW_TDD,          "~/.agent007/workflows/tdd.yaml")?;
         write_if_missing(&wf_dir.join("ideation.yaml"),     WORKFLOW_IDEATION,     "~/.agent007/workflows/ideation.yaml")?;
         write_if_missing(&wf_dir.join("feature.yaml"),      WORKFLOW_FEATURE,      "~/.agent007/workflows/feature.yaml")?;
-        ok("6 built-in workflows seeded to ~/.agent007/workflows/");
+        ok("7 built-in workflows seeded to ~/.agent007/workflows/");
     }
 
     let personas_dir = global_home.join("personas");
@@ -1072,6 +1074,13 @@ steps:
       - Dependency vulnerabilities
 
       Code / task: {{task}}
+
+      ---
+      Project architecture (from memory — use to avoid re-reading known files):
+      {{memory.repo_brain}}
+
+      Prior findings (do NOT repeat already-known issues):
+      {{rag_context}}
     output: security_findings
     depends_on: []
 
@@ -1085,6 +1094,13 @@ steps:
       - Missing indexes or caching opportunities
 
       Code / task: {{task}}
+
+      ---
+      Project architecture (from memory):
+      {{memory.repo_brain}}
+
+      Prior findings (do NOT repeat already-known issues):
+      {{rag_context}}
     output: performance_findings
     depends_on: []
 
@@ -1098,6 +1114,13 @@ steps:
       - Readability and maintainability issues
 
       Code / task: {{task}}
+
+      ---
+      Project notes and decisions:
+      {{memory.project}}
+
+      Prior findings (do NOT repeat already-known issues):
+      {{rag_context}}
     output: quality_findings
     depends_on: []
 
@@ -1120,6 +1143,137 @@ steps:
     depends_on: [security-review, performance-review, quality-review]
 "#;
 
+const WORKFLOW_SECURITY_AUDIT: &str = r#"name: security-audit
+description: >
+  Deep security audit pipeline. OWASP, secrets, threat model, and dependency
+  scanners run in parallel; the lead synthesizes a severity-ranked report.
+
+steps:
+  - id: owasp-scan
+    agent: SecurityReviewer
+    prompt: |
+      You are an application security expert. Perform an OWASP Top 10 audit.
+
+      Target: {{task}}
+
+      Check:
+      - A01 Broken Access Control (IDOR, path traversal, privilege escalation)
+      - A02 Cryptographic Failures (weak ciphers, missing TLS, key exposure)
+      - A03 Injection (SQL, command, template, XPath)
+      - A04 Insecure Design (missing rate limits, absent threat controls)
+      - A05 Security Misconfiguration (debug endpoints, default creds, verbose errors)
+      - A07 Auth Failures (weak session, missing MFA, insecure password reset)
+      - A08 Integrity Failures (unsafe deserialization, unsigned updates)
+      - A09 Logging Failures (missing audit trail, sensitive data in logs)
+      - A10 SSRF (internal service access from user-controlled URLs)
+
+      Output a findings table: | Severity | OWASP ID | Finding | Location | Fix |
+
+      ---
+      Project architecture (use to focus on relevant attack surfaces):
+      {{memory.repo_brain}}
+
+      Prior security findings (skip already-known issues):
+      {{rag_context}}
+    output: owasp_findings
+    depends_on: []
+
+  - id: secrets-scan
+    agent: SecurityReviewer
+    prompt: |
+      You are a secrets detection specialist. Scan the following for credential leaks.
+
+      Target: {{task}}
+
+      Find:
+      - Hardcoded API keys, tokens, passwords, connection strings
+      - Private keys or certificates in source/config
+      - Credentials in environment variable defaults
+      - Secrets in comments or test fixtures
+      - Insecure secret storage patterns (plaintext files, unencrypted env)
+
+      Output: | Severity | Type | Location | Pattern Found | Remediation |
+
+      ---
+      Project notes:
+      {{memory.project}}
+    output: secrets_findings
+    depends_on: []
+
+  - id: threat-model
+    agent: Architect
+    prompt: |
+      You are a threat modeling expert using the STRIDE framework.
+
+      Target: {{task}}
+
+      For each trust boundary and component, analyze:
+      | Threat | Component | Attack Vector | Impact | Mitigations |
+      |--------|-----------|---------------|--------|-------------|
+      | Spoofing | | | | |
+      | Tampering | | | | |
+      | Repudiation | | | | |
+      | Information Disclosure | | | | |
+      | Denial of Service | | | | |
+      | Elevation of Privilege | | | | |
+
+      Include: data flow diagram description, trust boundaries, attack surface summary.
+
+      ---
+      Architecture context:
+      {{memory.repo_brain}}
+    output: threat_model
+    depends_on: []
+
+  - id: dep-scan
+    agent: SecurityReviewer
+    prompt: |
+      You are a supply chain security expert. Analyze dependencies for risk.
+
+      Target: {{task}}
+
+      Check:
+      - Outdated packages with known CVEs (check Cargo.toml, package.json, requirements.txt)
+      - Wildcard/unpinned version ranges that allow malicious upgrades
+      - Packages with excessive permissions or unusual install scripts
+      - Transitive dependency risks
+      - License compliance issues (GPL contamination)
+
+      Output: | Severity | Package | Current Version | CVE / Risk | Recommended Action |
+
+      ---
+      Project notes:
+      {{memory.project}}
+    output: dep_findings
+    depends_on: []
+
+  - id: synthesize
+    agent: SecurityReviewer
+    prompt: |
+      Synthesize all security audit findings into a final executive report.
+
+      OWASP FINDINGS:
+      {{owasp_findings}}
+
+      SECRETS SCAN:
+      {{secrets_findings}}
+
+      THREAT MODEL:
+      {{threat_model}}
+
+      DEPENDENCY SCAN:
+      {{dep_findings}}
+
+      Produce:
+      1. **Executive Summary** (2-3 sentences, overall security posture)
+      2. **Severity-ranked master findings table**: | Severity | Category | Finding | Location | Effort | Fix |
+      3. **Attack surface map**: entry points, trust boundaries, data flows
+      4. **Top 5 Priority Remediations** with code examples
+      5. **Security Score**: 0–100 with breakdown by category
+    output: security_report
+    depends_on: [owasp-scan, secrets-scan, threat-model, dep-scan]
+"#;
+
 const WORKFLOW_SPARC: &str = r#"name: sparc
 description: >
   SPARC methodology pipeline: Spec → Pseudocode → Architecture → Refinement → Completion.
@@ -1132,6 +1286,13 @@ steps:
       SPARC Phase 1 — Specification.
       Write a detailed specification for: {{task}}
       Include: goals, constraints, user stories, acceptance criteria, edge cases.
+
+      ---
+      Project context (use to understand existing conventions and avoid duplicate work):
+      {{memory.repo_brain}}
+
+      Project decisions and notes:
+      {{memory.project}}
     output: specification
     depends_on: []
 
@@ -1154,6 +1315,10 @@ steps:
       Pseudocode: {{pseudocode}}
 
       Design the system architecture: components, interfaces, data flow, dependencies.
+
+      ---
+      Project architecture context:
+      {{memory.repo_brain}}
     output: architecture
     depends_on: [pseudocode]
 
@@ -1191,6 +1356,10 @@ steps:
       TDD Red Phase — write a failing test for: {{task}}
       Produce: test file with failing test cases covering the requirement.
       Tests must fail because the implementation doesn't exist yet.
+
+      ---
+      Project context (use to match existing test patterns and conventions):
+      {{memory.repo_brain}}
     output: failing_tests
     depends_on: []
 
@@ -1240,6 +1409,13 @@ steps:
       5. Recommended direction with rationale
 
       Be thorough — this output drives all downstream steps.
+
+      ---
+      Project context (use to understand existing architecture before suggesting approaches):
+      {{memory.repo_brain}}
+
+      Project decisions and notes:
+      {{memory.project}}
     output: research_output
     depends_on: []
 

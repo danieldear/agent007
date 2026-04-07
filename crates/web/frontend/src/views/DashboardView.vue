@@ -101,7 +101,10 @@ async function recordApproval(decision) {
       decision,
       content: decision === 'edit' ? approvalEditContent.value : undefined,
     })
-    approvalStatus.value = `Recorded ${decision}. Resume the workflow to continue.`
+    const isHostedMcp = m.value.runtime_mode === 'hosted-mcp'
+    approvalStatus.value = isHostedMcp
+      ? `✓ Approval recorded (${decision}). Your AI assistant will continue automatically — ask it to call agent007_workflow_next.`
+      : `Recorded ${decision}. Resume the workflow to continue.`
     await selectRun(selectedRunId.value)
     await refreshRuns()
   } catch (e) {
@@ -419,11 +422,14 @@ async function submitTask() {
                   <div class="flex items-center justify-between gap-3">
                     <div>
                       <div class="text-xs font-bold uppercase tracking-wider text-info">Resume Ready</div>
-                      <div class="text-xs text-base-content/70 mt-1">
+                      <div v-if="m.runtime_mode === 'hosted-mcp'" class="text-xs text-base-content/70 mt-1">
+                        Approval recorded. Your AI assistant will continue automatically — ask it to call <code class="font-mono bg-base-200 px-1 rounded">agent007_workflow_next</code>.
+                      </div>
+                      <div v-else class="text-xs text-base-content/70 mt-1">
                         Approval has been recorded for this paused workflow. Resume it to continue execution.
                       </div>
                     </div>
-                    <button class="btn btn-xs btn-info" @click="resumeSelectedRun">Resume Workflow</button>
+                    <button v-if="m.runtime_mode !== 'hosted-mcp'" class="btn btn-xs btn-info" @click="resumeSelectedRun">Resume Workflow</button>
                   </div>
                   <div v-if="resumeStatus" class="text-xs text-base-content/70 mt-3">{{ resumeStatus }}</div>
                 </div>

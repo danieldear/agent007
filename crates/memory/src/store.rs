@@ -338,6 +338,46 @@ impl ScopedMemoryStore {
         }
         Ok(parts.join("\n\n"))
     }
+
+    /// Read the top-N entries by relevance score.
+    /// Score = recency_weight * (1 / seconds_since_updated + 1) + 0.3 * access_count.
+    /// "repo_brain" is always included first if it exists (special-cased for context injection).
+    /// Returns entries formatted as "### key\nvalue" blocks (same as `read_all`).
+    pub fn read_top_n(&self, n: usize) -> Result<String, MemoryError> {
+        let keys = self.list_keys()?;
+        let now = Utc::now();
+
+        // Collect (score, key, value) tuples
+        let mut scored: Vec<(f64, String, String)> = Vec::new();
+        for key in &keys {
+            if let Ok(Some((value, meta))) = self.inner.read_with_meta_ns(&self.namespace, key) {
+                let age_secs = (now - meta.updated_at).num_seconds().max(0) as f64;
+                let recency = 1.0 / (age_secs / 3600.0 + 1.0); // decays over hours
+                let score = 0.7 * recency + 0.3 * (meta.access_count as f64).ln_1p();
+                scored.push((score, key.clone(), value));
+            }
+        }
+
+        // Always include repo_brain at the front if it exists
+        let brain_pos = scored.iter().position(|(_, k, _)| k == "repo_brain");
+        let brain_entry = brain_pos.map(|i| scored.remove(i));
+
+        // Sort by score descending; reserve one slot for repo_brain if present
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let remaining_slots = if brain_entry.is_some() { n.saturating_sub(1) } else { n };
+        scored.truncate(remaining_slots);
+
+        let mut parts = Vec::new();
+        if let Some((_, key, value)) = brain_entry {
+            parts.push(format!("### {}\n{}", key, value));
+        }
+        for (_, key, value) in scored {
+            if key != "repo_brain" {
+                parts.push(format!("### {}\n{}", key, value));
+            }
+        }
+        Ok(parts.join("\n\n"))
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +570,25 @@ mod tests {
         assert_eq!(parse_duration_str("24h"), Some(chrono::Duration::hours(24)));
         assert_eq!(parse_duration_str("90m"), Some(chrono::Duration::minutes(90)));
         assert_eq!(parse_duration_str("invalid"), None);
+    }
+
+    #[test]
+    fn read_top_n_returns_at_most_n_and_prioritises_repo_brain() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+
+        // Write 5 entries + repo_brain
+        for i in 0..5 {
+            scoped.write(&format!("entry-{i}"), &format!("value-{i}")).unwrap();
+        }
+        scoped.write("repo_brain", "# Architecture overview").unwrap();
+
+        // Top-3 should include repo_brain first and 2 others
+        let result = scoped.read_top_n(3).unwrap();
+        assert!(result.starts_with("### repo_brain"), "repo_brain should be first");
+        // Should contain at most 3 blocks
+        let blocks = result.split("\n\n").filter(|s| s.starts_with("### ")).count();
+        assert!(blocks <= 3, "expected at most 3 blocks, got {blocks}");
     }
 }

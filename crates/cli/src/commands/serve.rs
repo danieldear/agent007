@@ -2254,10 +2254,22 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
     } else {
         let skill = find_skill(&trigger)?;
 
-        // Load memory scopes for context injection
+        // Load memory scopes for context injection.
+        // Use read_top_n() to surface the most-relevant entries ranked by recency
+        // and access frequency instead of dumping every key (avoids token waste).
         let mem_store = memory_store();
-        let memory_user = mem_store.scoped("user").read_all().unwrap_or_default();
-        let memory_project = mem_store.scoped("project").read_all().unwrap_or_default();
+        let project_scoped = mem_store.scoped("project");
+        let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
+        let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
+        let global_store = memory_store_for_scope("global");
+        let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
+
+        // Extract repo_brain specifically so skills can use {{memory.repo_brain}} directly.
+        let memory_repo_brain = project_scoped
+            .read("repo_brain")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
 
         // Keyword RAG: scan user/project/skills memory for terms in args
         let rag_context = {
@@ -2291,6 +2303,10 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
             .replace("{{ memory.user }}", &memory_user)
             .replace("{{memory.project}}", &memory_project)
             .replace("{{ memory.project }}", &memory_project)
+            .replace("{{memory.global}}", &memory_global)
+            .replace("{{ memory.global }}", &memory_global)
+            .replace("{{memory.repo_brain}}", &memory_repo_brain)
+            .replace("{{ memory.repo_brain }}", &memory_repo_brain)
             .replace("{{rag_context}}", &rag_context)
             .replace("{{ rag_context }}", &rag_context);
 
@@ -3345,10 +3361,19 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
     let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
         .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
 
-    // Load memory context to inject into every workflow step prompt
+    // Load memory context to inject into every workflow step prompt.
+    // Use ranked top-N to prioritize most-accessed and most-recent entries.
     let mem_store = memory_store();
-    let memory_project = mem_store.scoped("project").read_all().unwrap_or_default();
-    let memory_user = mem_store.scoped("user").read_all().unwrap_or_default();
+    let project_scoped = mem_store.scoped("project");
+    let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
+    let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let global_store = memory_store_for_scope("global");
+    let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let memory_repo_brain = project_scoped
+        .read("repo_brain")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     // Keyword RAG across memory for workflow task
     let wf_rag_context = {
@@ -3387,6 +3412,10 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
             .replace("{{ memory.project }}", &memory_project)
             .replace("{{memory.user}}", &memory_user)
             .replace("{{ memory.user }}", &memory_user)
+            .replace("{{memory.global}}", &memory_global)
+            .replace("{{ memory.global }}", &memory_global)
+            .replace("{{memory.repo_brain}}", &memory_repo_brain)
+            .replace("{{ memory.repo_brain }}", &memory_repo_brain)
             .replace("{{rag_context}}", &wf_rag_context)
             .replace("{{ rag_context }}", &wf_rag_context);
 
