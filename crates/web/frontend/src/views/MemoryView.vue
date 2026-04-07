@@ -287,7 +287,7 @@ watch(contentVisible, async (visible) => {
           <transition name="fade-up">
             <div
               v-if="contentVisible && content && !contentError"
-              class="md-preview max-w-3xl"
+              class="md-preview max-w-3xl font-mono"
               v-html="renderMarkdown(content)"
             ></div>
           </transition>
@@ -318,7 +318,7 @@ watch(contentVisible, async (visible) => {
 .md-preview :deep(h2),
 .md-preview :deep(h3),
 .md-preview :deep(h4) {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-weight: 700;
   margin: 1.4em 0 0.4em;
   padding-bottom: 0.25em;
@@ -333,7 +333,7 @@ watch(contentVisible, async (visible) => {
 .md-preview :deep(hr) { border: none; border-top: 1px solid oklch(var(--b3)); margin: 1.2em 0; }
 
 .md-preview :deep(code) {
-  font-family: monospace; font-size: 0.79rem;
+  font-family: var(--font-mono); font-size: 0.79rem;
   background: oklch(var(--b3) / 0.8); color: oklch(var(--s));
   padding: 0.1em 0.4em; border-radius: 4px; border: 1px solid oklch(var(--b3));
 }
@@ -360,7 +360,7 @@ watch(contentVisible, async (visible) => {
 .md-preview :deep(a)       { color: oklch(var(--p)); text-decoration: underline; text-underline-offset: 2px; }
 .md-preview :deep(a:hover) { color: oklch(var(--s)); }
 
-.md-preview :deep(table)  { width: 100%; border-collapse: collapse; font-size: 0.79rem; font-family: monospace; margin: 0.8em 0; border-radius: 6px; overflow: hidden; border: 1px solid oklch(var(--b3)); }
+.md-preview :deep(table)  { width: 100%; border-collapse: collapse; font-size: 0.79rem; font-family: var(--font-mono); margin: 0.8em 0; border-radius: 6px; overflow: hidden; border: 1px solid oklch(var(--b3)); }
 .md-preview :deep(th)     { background: oklch(var(--b3) / 0.7); color: oklch(var(--bc) / 0.55); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 12px; text-align: left; border-bottom: 1px solid oklch(var(--b3)); }
 .md-preview :deep(td)     { padding: 6px 12px; border-bottom: 1px solid oklch(var(--b3) / 0.5); color: oklch(var(--bc) / 0.8); }
 .md-preview :deep(tr:last-child td) { border-bottom: none; }

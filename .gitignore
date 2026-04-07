@@ -1,5 +1,8 @@
 /target/
 
+# Build artifacts
+crates/web/static/dist/
+
 # macOS noise
 .DS_Store
 
