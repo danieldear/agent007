@@ -1,0 +1,372 @@
+# agent007
+
+> Multi-agent AI orchestration — MCP server, CLI, skills, workflows, and memory. Works with Claude Code, Cursor, Codex, GitHub Copilot, and Zed.
+
+## What it does
+
+agent007 runs as an MCP server that gives your AI editor a 44-tool orchestration layer:
+
+- **Skills** — reusable prompt templates triggered by `/slash-commands`
+- **Workflows** — multi-step pipelines (TDD, code review, feature delivery, SPARC)
+- **Memory** — scoped key-value store + LanceDB vector search, persisted to `~/.agent007/`
+- **Personas** — swap agent identities with different system prompts and preferred models
+- **ModelRouter** — route tasks to the right model (code, reasoning, fast, sensitive)
+- **Hooks** — auto-execute shell commands on lifecycle events
+- **Learning** — passive feedback recording → future PromptOptimizer
+- **Git agent** — AI-powered branch, commit, PR, and impact analysis
+- **Web dashboard** — live run/task/memory inspector at `http://localhost:8007`
+
+---
+
+## Install
+
+```bash
+cargo install --path crates/cli
+```
+
+Or build from source:
+
+```bash
+cargo build --release
+# binary at target/release/agent007
+```
+
+---
+
+## Quick start
+
+```bash
+# 1. Initialize — creates ~/.agent007/, writes config, registers MCP with your editors
+agent007 init
+
+# 2. Start the MCP server (editors connect automatically via their MCP config)
+agent007 serve
+
+# 3. Or run a one-shot task from the terminal
+agent007 run "Refactor the auth module to use JWT"
+```
+
+---
+
+## CLI reference
+
+### `agent007 init`
+
+Sets up `~/.agent007/` directory structure, writes `config.toml` and `hooks.toml`, and registers the MCP server with your IDE(s).
+
+```
+agent007 init [OPTIONS]
+
+Options:
+  --force      Re-run even if already initialized (overwrites existing config)
+  --global     Register globally in ~/.claude/ instead of project .claude/
+  --claude     Set up Claude Code integration only
+  --cursor     Set up Cursor integration only
+  --codex      Set up Codex integration only
+  --copilot    Set up GitHub Copilot (VS Code) integration only
+  --zed        Set up Zed integration only
+  --no-ide     Skip all IDE integration — only create .agent007/ dirs
+```
+
+By default (no flags), all supported IDEs are configured.
+
+### `agent007 serve`
+
+Starts the MCP server on stdio (for IDE connection) and the web dashboard.
+
+```
+agent007 serve [OPTIONS]
+
+Options:
+  --port <PORT>     Web dashboard port [default: 8007]
+  --no-dashboard    Disable web dashboard (MCP-only mode)
+```
+
+### `agent007 run <TASK>`
+
+Run a task through the full agent stack (ModelRouter → skill dispatch → memory RAG → response).
+
+```bash
+agent007 run "Write unit tests for src/auth.rs"
+```
+
+### `agent007 skill`
+
+Manage skills — reusable prompt templates stored as `.md` files with YAML frontmatter.
+
+```
+agent007 skill list                              List all available skills
+agent007 skill run <trigger> [args]             Execute a skill by trigger
+agent007 skill install github:<owner>/<repo>/<path>   Install from GitHub
+agent007 skill install https://example.com/skill.md   Install from URL
+agent007 skill create                            Interactive skill creator
+```
+
+### `agent007 workflow`
+
+Run multi-step agent pipelines.
+
+```
+agent007 workflow list                           List available workflows
+agent007 workflow run <name> <task>             Run workflow synchronously
+agent007 workflow start <name> <task>           Start hosted workflow session
+agent007 workflow next <session>                Fetch next steps to execute
+agent007 workflow submit <session> <step> <output>  Submit a step's output
+agent007 workflow status <session>              Check session state
+agent007 workflow approve <session>             Approve a pending gate
+agent007 workflow resume <session>              Resume a paused workflow
+```
+
+### `agent007 persona`
+
+```
+agent007 persona list          List all personas
+agent007 persona show <name>   Show persona details + system prompt
+agent007 persona switch <name> Activate a persona
+```
+
+### `agent007 git`
+
+AI-powered git operations.
+
+```
+agent007 git branch <description>    Create a branch from natural language
+agent007 git commit                  Generate a commit message from diff
+agent007 git pr                      Draft a PR description
+agent007 git impact                  Analyze risk of current diff
+```
+
+### `agent007 checkpoint`
+
+Stash-based checkpoints for safe experimentation.
+
+```
+agent007 checkpoint save <name>      Save current state
+agent007 checkpoint list             List saved checkpoints
+agent007 checkpoint restore <name>   Restore a checkpoint
+```
+
+### Other commands
+
+```
+agent007 simulate <template>   Run simulation templates
+agent007 test                  Run the AI testing pipeline
+agent007 audit                 Run a security/quality audit
+agent007 replay <run-id>       Replay a past run
+```
+
+---
+
+## MCP tools (44 total)
+
+These are available to your AI editor once `agent007 serve` is running.
+
+### Core
+| Tool | Description |
+|------|-------------|
+| `agent007_run` | Run a task through the full agent stack |
+| `agent007_task_submit` | Submit a task to the orchestrator queue |
+| `agent007_help` | Show available tools and capabilities |
+| `agent007_health` | Health check — memory dir, skills count, personas |
+| `agent007_config_show` | Show current config.toml as TOML |
+
+### Skills
+| Tool | Description |
+|------|-------------|
+| `agent007_skill_list` | List all skills with trigger, description, version |
+| `agent007_skill_run` | Execute a skill by trigger with args |
+| `agent007_skill_create` | Create a new skill file |
+| `agent007_skill_wizard` | Interactive skill creation wizard |
+| `agent007_skill_write_tests` | Generate tests for a skill |
+| `agent007_skill_review_pr` | Run PR review skill |
+
+### Workflows
+| Tool | Description |
+|------|-------------|
+| `agent007_workflow_list` | List workflow YAML files |
+| `agent007_workflow_run` | Run a workflow synchronously |
+| `agent007_workflow_start` | Start a hosted workflow session |
+| `agent007_workflow_next` | Fetch next ready steps |
+| `agent007_workflow_submit_step` | Submit a step output |
+| `agent007_workflow_status` | Inspect workflow session state |
+| `agent007_workflow_approve` | Record approval decision |
+| `agent007_workflow_resume` | Resume from a prior session |
+| `agent007_workflow_plan` | Get execution plan without running |
+| `agent007_workflow_create` | Save a new workflow YAML |
+| `agent007_workflow_tdd` | Shortcut: start TDD workflow |
+| `agent007_workflow_code_review` | Shortcut: start code-review workflow |
+
+### Memory
+| Tool | Description |
+|------|-------------|
+| `agent007_memory_read` | Read a value by scope + key |
+| `agent007_memory_write` | Write a key/value to a scope |
+| `agent007_memory_list` | List all keys in a scope |
+| `agent007_context_compile` | Compile a task-scoped context bundle (repo brain + memory + files) |
+| `agent007_repo_brain_refresh` | Refresh the persistent repo summary |
+
+### Personas
+| Tool | Description |
+|------|-------------|
+| `agent007_persona_list` | List available personas |
+| `agent007_persona_show` | Show persona details |
+| `agent007_persona_switch` | Activate a persona |
+| `agent007_agent_create` | Create or browse agent archetypes |
+
+### Git
+| Tool | Description |
+|------|-------------|
+| `agent007_git_status` | Run git status |
+| `agent007_git_diff` | Run git diff (staged + unstaged) |
+| `agent007_git_log` | Show last N commits |
+| `agent007_git_commit` | Create a commit with a message |
+
+### Observability
+| Tool | Description |
+|------|-------------|
+| `agent007_run_history` | List recent recorded runs |
+| `agent007_run_show` | Show run metadata + event trace |
+| `agent007_record_tokens` | Record actual token usage for a run (also writes FeedbackEntry to learning store) |
+| `agent007_compact_output` | Compact noisy command output into high-signal summary |
+| `agent007_budget_estimate` | Estimate prompt budget pressure |
+
+### MCP passthrough
+| Tool | Description |
+|------|-------------|
+| `agent007_mcp_tools_list` | List tools from downstream MCP servers |
+| `agent007_mcp_tool_call` | Call a downstream MCP tool |
+
+### Zones & access control
+| Tool | Description |
+|------|-------------|
+| `agent007_zone_check` | Check if a path operation is allowed by zone rules |
+
+---
+
+## Skills system
+
+Skills are Markdown files with YAML frontmatter. They live in `~/.agent007/skills/` (global) or `.agent007/skills/` (project-local).
+
+```markdown
+---
+name: My Skill
+trigger: /my-skill
+description: Does something useful
+model: claude-sonnet-4-6
+version: "1.0.0"
+---
+You are a helpful assistant. Given: {{args}}
+
+Do the following...
+```
+
+### Built-in skills (15)
+
+| Trigger | Description |
+|---------|-------------|
+| `/code-document` | Generate API docs, architecture docs, inline documentation |
+| `/code-optimize` | Profile analysis and performance optimization suggestions |
+| `/code-refactor` | Identify code smells and propose targeted improvements |
+| `/code-security-audit` | Security audit covering OWASP, dependencies, threat modeling |
+| `/code-test-gen` | Generate comprehensive test suites with edge cases |
+| `/dev-architect` | Design system architecture from requirements |
+| `/dev-debug` | Systematic debugging with hypothesis-driven investigation |
+| `/dev-pr-review` | Thorough pull request review with actionable feedback |
+| `/dev-tdd` | Test-driven development cycle (red-green-refactor) |
+| `/meta-analyze-codebase` | Analyze codebase for tech stack, patterns, and architecture |
+| `/meta-create-agent` | Guided wizard to create a custom agent persona |
+| `/project-changelog` | Generate changelogs grouped by type from git history |
+| `/project-plan` | Break features into tasks with estimates and dependencies |
+| `/project-prd` | Product requirements document with user stories and constraints |
+| `/project-release` | Version strategy, release notes, and rollback planning |
+
+### Install a skill
+
+```bash
+# From GitHub
+agent007 skill install github:owner/repo/path/to/skill.md
+
+# From URL
+agent007 skill install https://example.com/my-skill.md
+```
+
+---
+
+## Workflows
+
+Workflows are YAML pipelines in `~/.agent007/workflows/`. Steps without dependencies run in parallel; steps with `depends_on` run sequentially.
+
+| Workflow | Steps | Use for |
+|----------|-------|---------|
+| `tdd` | 3 | Red → Green → Refactor cycle |
+| `code-review` | 4 | Security + performance + style in parallel, synthesized |
+| `sparc` | 5 | Spec → Pseudocode → Architecture → Refinement → Completion |
+| `log-analysis` | 4 | Error analysis + pattern detection + security check in parallel |
+| `feature` | 17 | Full delivery: spec → arch → implement → review → test → release |
+| `ideation` | 7 | Research → PRD → architecture → project plan |
+| `security-audit` | 5 | OWASP + secrets + threat model + dependencies in parallel |
+
+---
+
+## Hooks
+
+Auto-execute shell commands at lifecycle events. Configure in `~/.agent007/hooks/hooks.toml` (project `.agent007/hooks/hooks.toml` takes priority):
+
+```toml
+pre_agent_run     = ""
+post_agent_run    = ""
+pre_tool_call     = ""
+post_tool_call    = ""
+on_memory_write   = "echo 'Memory written: $HOOK_KEY'"
+on_skill_execute  = "echo 'Skill: $HOOK_SKILL'"
+post_task_complete = "notify-send 'agent007' 'Task complete'"
+```
+
+---
+
+## Memory
+
+Memory is persisted to `~/.agent007/memory/`. Scopes:
+
+- `global` — cross-session facts
+- `user` — user preferences
+- `project` — project-specific notes
+- `learning` — passive FeedbackEntry records (written by `agent007_record_tokens`)
+- Any custom namespace
+
+Vector search via LanceDB is available when configured.
+
+---
+
+## IDE setup
+
+| IDE | Config location | How to register |
+|-----|-----------------|-----------------|
+| Claude Code | `.claude/mcp.json` | `agent007 init --claude` |
+| Cursor | `.cursor/mcp.json` | `agent007 init --cursor` |
+| Codex | `.codex/config.toml` | `agent007 init --codex` |
+| GitHub Copilot (VS Code) | `.vscode/mcp.json` | `agent007 init --copilot` |
+| Zed | `~/.config/zed/settings.json` | `agent007 init --zed` |
+
+`agent007 init` (no flags) registers all of the above at once.
+
+---
+
+## Configuration
+
+Full config lives at `~/.agent007/config.toml`. See [docs/configuration.md](docs/configuration.md) for the complete schema.
+
+---
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the crate map and data flow.
+
+---
+
+## Docs
+
+- [docs/architecture.md](docs/architecture.md) — crate map, data flow, key interfaces
+- [docs/skills.md](docs/skills.md) — skills system deep-dive
+- [docs/workflows.md](docs/workflows.md) — workflow reference
+- [docs/configuration.md](docs/configuration.md) — config.toml + hooks.toml schema
