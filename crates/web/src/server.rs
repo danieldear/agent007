@@ -150,6 +150,7 @@ impl WebServer {
             .route("/api/workflow-templates", get(api::workflow_templates_list_handler))
             .route("/api/workflow-templates/{name}", get(api::workflow_template_get_handler))
             .route("/api/memory/{scope}", get(api::memory_list_handler))
+            .route("/api/memory/{scope}/{key}", get(api::memory_get_handler))
             .nest_service("/assets", {
                 let dist_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("static/dist/assets");

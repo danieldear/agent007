@@ -1229,32 +1229,65 @@ pub async fn skill_save_handler(
     }
 }
 
+// ── Memory helpers ────────────────────────────────────────────────────────────
+
+/// Build a MemoryStore rooted at `~/.agent007/memory` (or the project-local equivalent).
+/// Map the API "global" scope → empty namespace (files live at the root of the memory dir).
+fn memory_store_for_web() -> Arc<agent007_memory::store::MemoryStore> {
+    Arc::new(agent007_memory::store::MemoryStore::new(
+        agent007_home().join("memory"),
+    ))
+}
+
+fn web_namespace(scope: &str) -> &str {
+    if scope == "global" { "" } else { scope }
+}
+
 // ── Memory list ───────────────────────────────────────────────────────────────
 
 pub async fn memory_list_handler(
     State(_state): State<AppState>,
     Path(scope): Path<String>,
 ) -> impl IntoResponse {
-    let home = agent007_home();
-    let scope_dir = if scope == "global" {
-        home.join("memory")
-    } else {
-        home.join("memory").join(&scope)
-    };
+    // Basic scope validation — reject traversal attempts
+    if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid scope"}))).into_response();
+    }
+    let store = memory_store_for_web();
+    let namespace = web_namespace(&scope);
+    let keys = store.scoped(namespace).list_keys().unwrap_or_default();
+    Json(keys).into_response()
+}
 
-    let mut keys = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&scope_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    keys.push(stem.to_string());
-                }
-            }
+// ── Memory get ────────────────────────────────────────────────────────────────
+
+pub async fn memory_get_handler(
+    State(_state): State<AppState>,
+    Path((scope, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    // Basic scope validation — MemoryStore sanitizes key components internally
+    if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
+        return (StatusCode::BAD_REQUEST, "invalid scope").into_response();
+    }
+    // Reject null bytes in key
+    if key.contains('\0') {
+        return (StatusCode::BAD_REQUEST, "invalid key").into_response();
+    }
+
+    let store = memory_store_for_web();
+    let namespace = web_namespace(&scope);
+    match store.scoped(namespace).read(&key) {
+        Ok(Some(content)) => (
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            content,
+        )
+            .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "not found").into_response(),
+        Err(e) => {
+            tracing::warn!("memory_get scope={scope} key={key}: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read error").into_response()
         }
     }
-    keys.sort();
-    Json(keys).into_response()
 }
 
 // ── Workflow Templates ────────────────────────────────────────────────────────

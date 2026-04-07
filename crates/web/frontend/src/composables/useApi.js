@@ -65,6 +65,10 @@ export function useApi() {
 
     // Memory
     listMemory: (scope) => fetchJson(`/api/memory/${encodeURIComponent(scope)}`),
+    getMemory: (scope, key) => fetch(`/api/memory/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`).then(r => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+      return r.text()
+    }),
 
     // Status
     getStatus: () => fetchJson('/api/status'),
