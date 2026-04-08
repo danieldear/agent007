@@ -27,7 +27,7 @@ function toggleAllSkills() {
     : skills.value.map(s => s.trigger.replace(/^\//, ''))
 }
 function toggleAllWorkflows() {
-  selectedWorkflows.value = allWorkflowsSelected.value ? [] : [...workflows.value]
+  selectedWorkflows.value = allWorkflowsSelected.value ? [] : workflows.value.map(w => w.name)
 }
 
 // ─── import state ────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ onMounted(async () => {
   }
   if (wf) {
     workflows.value = wf
-    selectedWorkflows.value = [...wf]
+    selectedWorkflows.value = wf.map(w => w.name)
   }
 })
 
@@ -153,10 +153,10 @@ async function importBundle() {
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
+    <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
       <div>
-        <h2 class="text-lg font-bold">Sharing</h2>
-        <p class="text-xs text-base-content/50 mt-0.5">Export and import skill &amp; workflow bundles</p>
+        <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Sharing</span>
+        <p class="text-[11px] font-mono text-base-content/30 mt-0.5">export &amp; import .a7bundle files</p>
       </div>
     </div>
 
@@ -212,16 +212,17 @@ async function importBundle() {
             <div class="space-y-1 max-h-48 overflow-y-auto">
               <label
                 v-for="w in workflows"
-                :key="w"
+                :key="w.name"
                 class="flex items-center gap-2 cursor-pointer hover:bg-base-300/50 rounded px-1 py-0.5"
               >
                 <input
                   type="checkbox"
                   class="checkbox checkbox-xs"
-                  :value="w"
+                  :value="w.name"
                   v-model="selectedWorkflows"
                 />
-                <span class="text-xs font-mono truncate">{{ w }}</span>
+                <span class="text-xs font-mono truncate">{{ w.name }}</span>
+                <span v-if="w.source" class="text-[10px] font-mono text-base-content/30 shrink-0">{{ w.source }}</span>
               </label>
             </div>
           </div>

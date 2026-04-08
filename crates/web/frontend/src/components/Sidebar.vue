@@ -18,45 +18,61 @@ onMounted(async () => {
 })
 
 const navItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
-  { id: 'agents', label: 'Agents', icon: '◉' },
-  { id: 'skills', label: 'Skills', icon: '⚡' },
-  { id: 'workflows', label: 'Workflows', icon: '⬡' },
-  { id: 'memory', label: 'Memory', icon: '◈' },
-  { id: 'sharing', label: 'Sharing', icon: '📦' },
+  { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
+  { id: 'agents',    label: 'Agents',    symbol: '◉' },
+  { id: 'skills',    label: 'Skills',    symbol: '⚡' },
+  { id: 'workflows', label: 'Workflows', symbol: '⬡' },
+  { id: 'memory',    label: 'Memory',    symbol: '◈' },
+  { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },
 ]
 </script>
 
 <template>
-  <aside class="w-56 bg-base-200 border-r border-base-300 flex flex-col shrink-0">
-    <div class="p-4 border-b border-base-300">
-      <h1 class="text-lg font-bold font-mono text-primary tracking-wide">Agent007</h1>
-      <p class="text-xs text-base-content/50 mt-0.5">Orchestration Dashboard</p>
-      <div v-if="projectName" class="mt-2 flex items-center gap-1.5" :title="projectPath">
-        <span class="text-base-content/30 text-xs">⬡</span>
-        <span class="text-xs font-mono text-primary/80 truncate">{{ projectName }}</span>
+  <aside class="w-52 bg-base-200 border-r border-base-300/80 flex flex-col shrink-0">
+    <!-- Branding -->
+    <div class="px-4 pt-5 pb-4 border-b border-base-300/80">
+      <div class="flex items-baseline gap-2">
+        <h1 class="text-base font-bold font-mono text-primary tracking-widest uppercase">agent007</h1>
+        <span class="text-[10px] font-mono text-base-content/30 tracking-wider">v0.1</span>
+      </div>
+      <p class="text-[11px] text-base-content/40 mt-0.5 tracking-wide">AI Orchestration</p>
+      <div v-if="projectName"
+        class="mt-3 px-2 py-1 rounded border border-primary/20 bg-primary/5 flex items-center gap-1.5"
+        :title="projectPath">
+        <span class="text-[9px] font-mono text-primary/60 uppercase tracking-widest">proj</span>
+        <span class="text-[11px] font-mono text-primary/80 truncate">{{ projectName }}</span>
       </div>
     </div>
 
-    <nav class="flex-1 py-2">
+    <!-- Navigation -->
+    <nav class="flex-1 py-3 space-y-0.5">
       <button
         v-for="item in navItems"
         :key="item.id"
-        class="btn btn-ghost btn-sm justify-start w-full rounded-none font-mono text-xs gap-3"
-        :class="{ 'btn-active': current === item.id }"
+        class="relative w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors duration-100"
+        :class="current === item.id
+          ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
+          : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
         @click="$emit('navigate', item.id)"
       >
-        <span class="text-base opacity-60">{{ item.icon }}</span>
-        {{ item.label }}
+        <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
+          {{ item.symbol }}
+        </span>
+        <span class="font-mono text-[12px] tracking-wide">{{ item.label }}</span>
       </button>
     </nav>
 
-    <div class="p-3 border-t border-base-300">
-      <div class="flex items-center gap-2 text-xs">
-        <span class="w-2 h-2 rounded-full" :class="connected ? 'bg-success' : 'bg-error'" />
-        <span class="text-base-content/60">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+    <!-- Connection status -->
+    <div class="px-4 py-3 border-t border-base-300/80">
+      <div class="flex items-center gap-2">
+        <span
+          class="w-1.5 h-1.5 rounded-full shrink-0"
+          :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"
+        />
+        <span class="text-[11px] font-mono" :class="connected ? 'text-success/70' : 'text-error/70'">
+          {{ connected ? 'ws:live' : 'ws:off' }}
+        </span>
       </div>
-      <div class="text-xs text-base-content/40 mt-1">v0.1.0</div>
     </div>
   </aside>
 </template>

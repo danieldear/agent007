@@ -156,11 +156,11 @@ async function submitTask() {
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
-      <h2 class="text-lg font-bold">Dashboard</h2>
+    <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
+      <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Dashboard</span>
       <div class="flex items-center gap-2">
-        <span class="w-2 h-2 rounded-full" :class="connected ? 'bg-success' : 'bg-error'"></span>
-        <span class="text-xs text-base-content/60">{{ connected ? 'Live' : 'Offline' }}</span>
+        <span class="w-1.5 h-1.5 rounded-full" :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"></span>
+        <span class="text-[11px] font-mono" :class="connected ? 'text-success/60' : 'text-error/60'">{{ connected ? 'live' : 'offline' }}</span>
       </div>
     </div>
 
@@ -168,66 +168,72 @@ async function submitTask() {
 
       <!-- Stats Row 1: Runtime -->
       <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Active Agents</div>
-          <div class="text-2xl font-bold text-primary">{{ m.active_agents }}</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-primary/60 relative overflow-hidden">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Active Agents</div>
+          <div class="text-3xl font-bold font-mono text-primary tabular-nums">{{ m.active_agents }}</div>
+          <div v-if="m.active_agents > 0" class="absolute top-3 right-3 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Running Tasks</div>
-          <div class="text-2xl font-bold text-info">{{ m.running_tasks }}</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-info/60 relative overflow-hidden">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Running Tasks</div>
+          <div class="text-3xl font-bold font-mono text-info tabular-nums">{{ m.running_tasks }}</div>
+          <div v-if="m.running_tasks > 0" class="absolute top-3 right-3 w-1.5 h-1.5 rounded-full bg-info animate-pulse" />
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Completed</div>
-          <div class="text-2xl font-bold text-success">{{ m.completed_tasks }}</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-success/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Completed</div>
+          <div class="text-3xl font-bold font-mono text-success tabular-nums">{{ m.completed_tasks }}</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Failed</div>
-          <div class="text-2xl font-bold text-error">{{ m.failed_tasks }}</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-error/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Failed</div>
+          <div class="text-3xl font-bold font-mono text-error tabular-nums">{{ m.failed_tasks }}</div>
         </div>
       </div>
 
       <!-- Stats Row 2: Tokens, Cost, Reward, Uptime -->
       <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Total Tokens</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-secondary/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Total Tokens</div>
           <div class="flex items-baseline gap-2">
-            <div class="text-2xl font-bold text-secondary">{{ fmtTokens(m.total_tokens) }}</div>
-            <span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="badge badge-xs badge-ghost text-base-content/40" title="Estimated from prompt length (chars ÷ 4)">est.</span>
+            <div class="text-3xl font-bold font-mono text-secondary tabular-nums">{{ fmtTokens(m.total_tokens) }}</div>
+            <span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] font-mono text-base-content/30" title="Estimated from prompt length (chars ÷ 4)">est</span>
           </div>
-          <div class="text-xs text-base-content/40 mt-1" v-if="m.runtime_mode === 'hosted-mcp'">
-            {{ m.session_requests }} req ·
-            <span :title="'Set AGENT007_HOST_MODEL env var to specify your model'">{{ m.model_provider }}</span>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-if="m.runtime_mode === 'hosted-mcp'">
+            {{ m.session_requests }}req ·
+            <span :title="'Set AGENT007_HOST_MODEL env var to specify your model'">{{ m.model_provider || '?' }}</span>
           </div>
-          <div class="text-xs text-base-content/40 mt-1" v-else>{{ m.session_requests }} requests</div>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-else>{{ m.session_requests }} requests</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Est. Cost</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-warning/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Est. Cost</div>
           <div class="flex items-baseline gap-2">
-            <div class="text-2xl font-bold text-warning">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
-            <span v-if="m.runtime_mode === 'hosted-mcp' && m.estimated_usd > 0" class="badge badge-xs badge-ghost text-base-content/40" title="Rough estimate at $0.002/1k tokens">est.</span>
+            <div class="text-3xl font-bold font-mono text-warning tabular-nums">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+            <span v-if="m.runtime_mode === 'hosted-mcp' && m.estimated_usd > 0" class="text-[10px] font-mono text-base-content/30" title="Rough estimate at $0.002/1k tokens">~</span>
           </div>
-          <div class="text-xs text-base-content/40 mt-1" v-if="m.runtime_mode === 'hosted-mcp'">
-            <span title="Set AGENT007_HOST_MODEL env var (e.g. claude-sonnet-4-6) for accurate model tracking">Tip: set AGENT007_HOST_MODEL</span>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-if="m.runtime_mode === 'hosted-mcp'">
+            <span title="Set AGENT007_HOST_MODEL env var for accurate tracking">set HOST_MODEL for accuracy</span>
           </div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Avg Reward</div>
-          <div class="text-2xl font-bold text-accent">{{ (m.avg_reward || 0).toFixed(3) }}</div>
-          <div class="text-xs text-base-content/40 mt-1">{{ m.feedback_count }} feedback · {{ m.prompt_improvements }} improvements</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-accent/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Reward</div>
+          <div class="text-3xl font-bold font-mono text-accent tabular-nums">{{ (m.avg_reward || 0).toFixed(3) }}</div>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.feedback_count }}fb · {{ m.prompt_improvements }}imp</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider mb-1">Uptime</div>
-          <div class="text-2xl font-bold text-base-content">{{ uptime }}</div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-base-content/20">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Uptime</div>
+          <div class="text-3xl font-bold font-mono text-base-content tabular-nums">{{ uptime }}</div>
         </div>
       </div>
 
       <!-- System Status -->
       <div class="bg-base-200 rounded-lg p-4">
-        <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-3">System Status</div>
+        <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-3 flex items-center gap-2">
+          <span class="w-3 h-px bg-base-content/20"></span>
+          System Status
+          <span class="flex-1 h-px bg-base-content/10"></span>
+        </div>
         <div class="flex flex-wrap gap-x-8 gap-y-2 text-sm">
           <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Execution:</span>
-            <span class="badge badge-sm" :class="{
+            <span class="text-[11px] font-mono text-base-content/40">exec</span>
+            <span class="badge badge-sm font-mono" :class="{
               'badge-warning': m.runtime_mode === 'hosted-mcp',
               'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
               'badge-info': m.runtime_mode === 'dry-run',
@@ -236,40 +242,40 @@ async function submitTask() {
             </span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Model:</span>
-            <span class="font-mono text-xs">{{ m.model_provider || '—' }}</span>
+            <span class="text-[11px] font-mono text-base-content/40">model</span>
+            <span class="font-mono text-xs text-base-content/70">{{ m.model_provider || '—' }}</span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="text-base-content/50">WebSocket:</span>
-            <span class="badge badge-sm" :class="connected ? 'badge-success' : 'badge-error'">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+            <span class="text-[11px] font-mono text-base-content/40">ws</span>
+            <span class="badge badge-sm font-mono" :class="connected ? 'badge-success' : 'badge-error'">{{ connected ? 'live' : 'off' }}</span>
           </div>
         </div>
-        <div class="divider my-2"></div>
-        <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Skills:</span>
-            <span class="badge badge-sm badge-primary badge-outline">{{ m.skills_count }}</span>
+        <div class="my-3 h-px bg-base-300/60"></div>
+        <div class="flex flex-wrap gap-x-6 gap-y-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-mono text-base-content/40">skills</span>
+            <span class="text-[11px] font-mono font-bold text-primary/80">{{ m.skills_count }}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Workflows:</span>
-            <span class="badge badge-sm badge-secondary badge-outline">{{ m.workflows_count }}</span>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-mono text-base-content/40">workflows</span>
+            <span class="text-[11px] font-mono font-bold text-secondary/80">{{ m.workflows_count }}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Personas:</span>
-            <span class="badge badge-sm badge-accent badge-outline">{{ m.personas_count }}</span>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-mono text-base-content/40">personas</span>
+            <span class="text-[11px] font-mono font-bold text-accent/80">{{ m.personas_count }}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="text-base-content/50">Memory Keys:</span>
-            <span class="badge badge-sm badge-info badge-outline">{{ m.memory_keys }}</span>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px] font-mono text-base-content/40">mem-keys</span>
+            <span class="text-[11px] font-mono font-bold text-info/80">{{ m.memory_keys }}</span>
           </div>
         </div>
       </div>
 
       <!-- Recent Tasks -->
       <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 36vh">
-        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
-          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Recent Tasks</span>
-          <span class="badge badge-sm badge-ghost">{{ m.recent_tasks?.length || 0 }} entries</span>
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Recent Tasks</span>
+          <span class="text-[10px] font-mono text-base-content/30">{{ m.recent_tasks?.length || 0 }} entries</span>
         </div>
         <div class="overflow-auto flex-1">
           <table class="table table-xs w-full" v-if="m.recent_tasks?.length">
@@ -326,11 +332,11 @@ async function submitTask() {
 
       <!-- Persisted Runs -->
       <div class="bg-base-200 rounded-lg overflow-hidden">
-        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
-          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Persisted Runs</span>
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
           <div class="flex items-center gap-2">
-            <span class="badge badge-sm badge-ghost">{{ runs.length }} runs</span>
-            <button class="btn btn-ghost btn-xs" @click="refreshRuns">Refresh</button>
+            <span class="text-[10px] font-mono text-base-content/30">{{ runs.length }} runs</span>
+            <button class="btn btn-ghost btn-xs text-[11px] font-mono" @click="refreshRuns">↺ refresh</button>
           </div>
         </div>
         <div class="grid grid-cols-[320px_1fr] min-h-[16rem]">
@@ -485,9 +491,9 @@ async function submitTask() {
 
       <!-- Event Log -->
       <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 35vh">
-        <div class="px-4 py-2 border-b border-base-300 flex justify-between items-center">
-          <span class="text-xs font-bold uppercase tracking-wider text-base-content/60">Event Log</span>
-          <span class="badge badge-sm badge-ghost">{{ events?.length || 0 }} events</span>
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Event Log</span>
+          <span class="text-[10px] font-mono text-base-content/30">{{ events?.length || 0 }} events</span>
         </div>
         <div class="overflow-auto flex-1 font-mono text-xs">
           <div
@@ -514,16 +520,16 @@ async function submitTask() {
     </div>
 
     <!-- Task input bar -->
-    <div class="p-3 border-t border-base-300 bg-base-200 flex items-center gap-3">
-      <span class="text-primary font-bold">&gt;_</span>
+    <div class="px-4 py-3 border-t border-base-300 bg-base-200 flex items-center gap-3">
+      <span class="text-primary font-bold font-mono text-sm shrink-0 select-none">›_</span>
       <input
         v-model="taskInput"
-        class="input input-sm input-bordered flex-1 font-mono text-sm"
-        placeholder="Describe a task for agent007..."
+        class="input input-sm flex-1 font-mono text-sm bg-base-300/50 border-base-300 focus:border-primary/50 placeholder:text-base-content/25"
+        placeholder="describe a task for agent007…"
         @keydown.enter="submitTask"
       />
-      <button class="btn btn-sm btn-success" @click="submitTask">Run</button>
-      <span v-if="taskStatus" class="text-xs text-base-content/60">{{ taskStatus }}</span>
+      <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="submitTask">run</button>
+      <span v-if="taskStatus" class="text-[11px] font-mono text-base-content/50 shrink-0">{{ taskStatus }}</span>
     </div>
   </div>
 </template>
