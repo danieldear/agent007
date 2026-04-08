@@ -2842,6 +2842,16 @@ fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Resul
                         "progress": &progress,
                     }),
                 )?;
+                // Estimate tokens from output length so dashboard metrics update.
+                let token_estimate = (output.len() / 4).max(1);
+                let _ = store.append_event(
+                    session,
+                    &AgentEvent::ModelRequest {
+                        provider: "hosted-mcp".to_string(),
+                        prompt_ref: PromptRef::new(),
+                        token_estimate,
+                    },
+                );
                 sync_hosted_run_metadata(&store, session, &progress)?;
                 hosted_workflow_response(session, &request, &progress, &state)
             }
