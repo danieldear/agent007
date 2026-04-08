@@ -461,11 +461,11 @@ async function loadTemplate(tplName) {
       </div>
     </div>
     <div class="border-b border-base-300 bg-base-200">
-      <div class="p-4 flex items-center justify-between">
-        <h2 class="text-lg font-bold">Workflow Designer</h2>
+      <div class="px-5 py-3.5 flex items-center justify-between">
+        <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Workflow Designer</span>
         <div class="flex gap-2 items-center">
           <div class="dropdown dropdown-end">
-            <label tabindex="0" class="btn btn-sm btn-ghost" @click.stop="showTemplateMenu = !showTemplateMenu">New ▾</label>
+            <label tabindex="0" class="btn btn-sm btn-ghost font-mono text-xs" @click.stop="showTemplateMenu = !showTemplateMenu">new ▾</label>
             <ul v-if="showTemplateMenu" tabindex="0" class="dropdown-content z-50 menu p-2 shadow bg-base-300 rounded-box w-56">
               <li><a @click="newWorkflow">Empty Canvas</a></li>
               <li class="menu-title"><span>Templates</span></li>
@@ -478,15 +478,15 @@ async function loadTemplate(tplName) {
             </ul>
           </div>
           <button
-            class="btn btn-sm btn-ghost border border-base-content/20 gap-1"
+            class="btn btn-sm btn-ghost border border-base-content/20 gap-1 font-mono text-xs"
             :class="{ 'loading loading-spinner': validating }"
             :disabled="!nodes.length || validating"
             @click="validateWorkflow"
           >
-            <span v-if="!validating">🔍 Validate</span>
-            <span v-else>Validating…</span>
+            <span v-if="!validating">⊙ validate</span>
+            <span v-else>validating…</span>
           </button>
-          <button class="btn btn-sm btn-primary" @click="openSaveDialog" :disabled="!nodes.length">Save</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="openSaveDialog" :disabled="!nodes.length">save</button>
         </div>
       </div>
 
@@ -569,7 +569,7 @@ async function loadTemplate(tplName) {
               <p class="text-primary/70 uppercase tracking-wider text-[10px] mb-1">Suggestions</p>
               <ul class="space-y-0.5">
                 <li v-for="s in validationResult.llm.suggestions" :key="s" class="text-primary/80 flex gap-1.5">
-                  <span class="shrink-0">💡</span><span>{{ s }}</span>
+                  <span class="shrink-0">→</span><span>{{ s }}</span>
                 </li>
               </ul>
             </div>
@@ -581,17 +581,17 @@ async function loadTemplate(tplName) {
     <div class="flex flex-1 overflow-hidden">
       <div class="w-56 bg-base-200 border-r border-base-300 flex flex-col shrink-0 overflow-auto">
         <div class="p-3 border-b border-base-300">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-base-content/50 mb-2">Workflows</h3>
+          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Workflows</div>
           <div class="space-y-1">
             <div v-for="w in workflows" :key="w.name" class="flex items-center gap-0.5 group/wf">
               <button
                 class="btn btn-ghost btn-xs justify-start flex-1 font-mono text-xs overflow-hidden"
-                :class="{ 'btn-active': selectedWorkflow === w.name }"
+                :class="{ 'border-l-2 border-primary text-primary': selectedWorkflow === w.name }"
                 @click="loadWorkflow(w.name)"
               >{{ w.name }}</button>
               <button
                 v-if="w.source === 'project'"
-                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-60 hover:!opacity-100 transition-opacity shrink-0"
+                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-60 hover:!opacity-100 transition-opacity shrink-0 font-mono"
                 :class="{ 'loading loading-spinner': promotingWorkflow === w.name }"
                 :disabled="promotingWorkflow === w.name"
                 title="Copy to global ~/.agent007/workflows/"
@@ -599,11 +599,11 @@ async function loadTemplate(tplName) {
               >↑</button>
             </div>
           </div>
-          <div v-if="!workflows.length" class="text-xs text-base-content/40">No workflows</div>
+          <div v-if="!workflows.length" class="text-[11px] font-mono text-base-content/30">no workflows</div>
         </div>
 
         <div class="p-3 border-b border-base-300">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-base-content/50 mb-2">Special Nodes</h3>
+          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Special Nodes</div>
           <div class="space-y-1">
             <button class="btn btn-ghost btn-xs justify-start w-full text-xs" @click="addEvaluatorNode">
               <span class="text-orange-400">↺</span> Evaluator
@@ -621,8 +621,8 @@ async function loadTemplate(tplName) {
         </div>
 
         <div class="p-3">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-base-content/50 mb-2">Agent Palette</h3>
-          <p class="text-xs text-base-content/40 mb-2">Click to add a node</p>
+          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Agent Palette</div>
+          <p class="text-[10px] font-mono text-base-content/30 mb-2">click to add a node</p>
           <div class="space-y-1">
             <button
               v-for="p in personas" :key="p.name"
@@ -674,29 +674,27 @@ async function loadTemplate(tplName) {
     >
       <button
         v-if="contextMenu.type === 'node'"
-        class="w-full text-left px-3 py-1.5 text-sm hover:bg-primary/10 text-base-content"
+        class="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-primary/10 text-base-content"
         @click="editFromContextMenu"
       >
-        ✏️ Edit Node
+        ◦ edit node
       </button>
       <div v-if="contextMenu.type === 'node'" class="divider my-0.5 h-px bg-base-content/10 mx-2"></div>
-      <button class="w-full text-left px-3 py-1.5 text-sm hover:bg-error/20 text-error" @click="deleteFromContextMenu">
-        🗑 Delete {{ contextMenu.type === 'node' ? 'Node' : 'Edge' }}
+      <button class="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-error/20 text-error" @click="deleteFromContextMenu">
+        ✕ delete {{ contextMenu.type === 'node' ? 'node' : 'edge' }}
       </button>
     </div>
 
     <!-- Node Editor Modal -->
     <dialog :open="showNodeEditor" class="modal" :class="{ 'modal-open': showNodeEditor }">
-      <div class="modal-box max-w-2xl bg-base-200">
-        <h3 class="font-bold text-lg">
-          Edit Node
-          <span class="text-sm font-normal text-base-content/50 ml-2">
-            <span v-if="editingNodeType === 'evaluator'" class="text-orange-400">evaluator</span>
-            <span v-else-if="editingNodeType === 'router'" class="text-purple-400">router</span>
-            <span v-else-if="editingNodeType === 'approval'" class="text-amber-400">approval gate</span>
-            <span v-else class="text-primary">agent</span>
-          </span>
-        </h3>
+      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
+        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 flex items-center gap-2 mb-4">
+          edit node ·
+          <span v-if="editingNodeType === 'evaluator'" class="text-orange-400">evaluator</span>
+          <span v-else-if="editingNodeType === 'router'" class="text-purple-400">router</span>
+          <span v-else-if="editingNodeType === 'approval'" class="text-amber-400">approval gate</span>
+          <span v-else class="text-primary">agent</span>
+        </div>
 
         <div class="mt-4 space-y-3">
           <!-- Agent -->
@@ -792,8 +790,8 @@ async function loadTemplate(tplName) {
         </div>
 
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="showNodeEditor = false">Cancel</button>
-          <button class="btn btn-sm btn-primary" @click="saveNodeEdit">Apply Changes</button>
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showNodeEditor = false">cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveNodeEdit">apply</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showNodeEditor = false">close</button></form>
@@ -801,21 +799,21 @@ async function loadTemplate(tplName) {
 
     <!-- Save dialog -->
     <dialog :open="showSaveDialog" class="modal" :class="{ 'modal-open': showSaveDialog }">
-      <div class="modal-box bg-base-200">
-        <h3 class="font-bold text-lg">Save Workflow</h3>
-        <div class="mt-4 space-y-3">
+      <div class="modal-box bg-base-200 border border-base-300">
+        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">save workflow</div>
+        <div class="space-y-3">
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Name</span></label>
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
             <input v-model="workflowName" class="input input-sm input-bordered font-mono" placeholder="my-workflow" />
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Description</span></label>
-            <input v-model="workflowDescription" class="input input-sm input-bordered" />
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
+            <input v-model="workflowDescription" class="input input-sm input-bordered font-mono" />
           </div>
         </div>
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="showSaveDialog = false">Cancel</button>
-          <button class="btn btn-sm btn-primary" @click="saveWorkflow">Save</button>
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showSaveDialog = false">cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveWorkflow">save</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showSaveDialog = false">close</button></form>

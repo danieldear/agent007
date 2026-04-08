@@ -221,19 +221,24 @@ async function importFromUrl() {
         <span class="text-sm">{{ toast.message }}</span>
       </div>
     </div>
-    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
-      <h2 class="text-lg font-bold">Skills</h2>
-      <button class="btn btn-sm btn-primary" @click="openCreate">+ New Skill</button>
+    <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
+      <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Skills</span>
+      <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="openCreate">+ new</button>
     </div>
 
     <!-- Tabs -->
-    <div class="tabs tabs-bordered px-4 pt-2 bg-base-200 border-b border-base-300">
-      <a class="tab" :class="{ 'tab-active': activeTab === 'installed' }" @click="switchTab('installed')">
-        Installed
-        <span class="badge badge-sm ml-1.5">{{ skills.length }}</span>
-      </a>
-      <a class="tab" :class="{ 'tab-active': activeTab === 'browse' }" @click="switchTab('browse')">Browse Registry</a>
-      <a class="tab" :class="{ 'tab-active': activeTab === 'import' }" @click="switchTab('import')">Import</a>
+    <div class="flex items-center gap-0 px-5 bg-base-200 border-b border-base-300">
+      <button
+        v-for="tab in ['installed', 'browse', 'import']"
+        :key="tab"
+        class="px-4 py-2.5 text-[11px] font-mono uppercase tracking-widest border-b-2 transition-colors"
+        :class="activeTab === tab
+          ? 'border-primary text-primary'
+          : 'border-transparent text-base-content/40 hover:text-base-content/70'"
+        @click="switchTab(tab)"
+      >
+        {{ tab }}<span v-if="tab === 'installed'" class="ml-1.5 text-[10px] text-base-content/30">({{ skills.length }})</span>
+      </button>
     </div>
 
     <div class="flex-1 overflow-auto p-4">
@@ -242,41 +247,55 @@ async function importFromUrl() {
       <div v-if="activeTab === 'installed'" class="space-y-6">
         <template v-for="cat in sortedCategories" :key="cat">
           <div>
-            <h3 class="text-sm font-bold text-base-content/60 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <span v-if="cat === 'dev'" class="text-blue-400">&#9672;</span>
-              <span v-else-if="cat === 'code'" class="text-green-400">&#9672;</span>
-              <span v-else-if="cat === 'project'" class="text-amber-400">&#9672;</span>
-              <span v-else-if="cat === 'meta'" class="text-purple-400">&#9672;</span>
-              <span v-else class="text-base-content/30">&#9672;</span>
-              {{ categoryLabels[cat] || cat }}
-            </h3>
+            <div class="flex items-center gap-2 mb-3">
+              <span
+                class="w-0.5 h-4 rounded-full shrink-0"
+                :class="{
+                  'bg-blue-400': cat === 'dev',
+                  'bg-green-400': cat === 'code',
+                  'bg-amber-400': cat === 'project',
+                  'bg-purple-400': cat === 'meta',
+                  'bg-base-content/30': !['dev','code','project','meta'].includes(cat),
+                }"
+              ></span>
+              <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">{{ categoryLabels[cat] || cat }}</span>
+              <span class="text-[10px] font-mono text-base-content/20">({{ grouped[cat].length }})</span>
+              <div class="flex-1 h-px bg-base-content/8"></div>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               <div
                 v-for="s in grouped[cat]"
                 :key="s.trigger"
-                class="card bg-base-200 border border-base-300 p-4 hover:border-primary/50 transition-colors cursor-pointer group"
+                class="bg-base-200 border border-base-300 rounded-lg p-4 hover:border-primary/40 transition-colors cursor-pointer group border-l-2"
+                :class="{
+                  'border-l-blue-400/50': cat === 'dev',
+                  'border-l-green-400/50': cat === 'code',
+                  'border-l-amber-400/50': cat === 'project',
+                  'border-l-purple-400/50': cat === 'meta',
+                  'border-l-base-content/20': !['dev','code','project','meta'].includes(cat),
+                }"
                 @click="openEdit(s)"
                 :title="'Click to view / edit prompt'"
               >
                 <div class="flex items-start gap-3">
                   <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <div class="font-medium text-sm">{{ s.name }}</div>
-                      <span class="badge badge-xs badge-primary font-mono">{{ s.trigger }}</span>
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <div class="font-mono text-sm font-semibold">{{ s.name }}</div>
+                      <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ s.trigger }}</span>
+                      <span v-if="s.source === 'global'" class="text-[10px] font-mono text-base-content/25">global</span>
                     </div>
-                    <div class="text-xs text-base-content/50 mt-1">{{ s.description }}</div>
+                    <div class="text-[11px] font-mono text-base-content/45 mt-1.5 leading-relaxed">{{ s.description }}</div>
                   </div>
-                  <!-- Actions shown on hover -->
                   <div class="flex flex-col items-end gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       v-if="s.source === 'project'"
-                      class="btn btn-xs btn-ghost text-xs px-1.5 h-6 min-h-0 leading-none"
+                      class="btn btn-xs btn-ghost font-mono text-[10px] px-1.5 h-6 min-h-0 leading-none"
                       :class="{ 'loading loading-spinner': promotingTrigger === s.trigger.replace(/^\//, '') }"
                       :disabled="promotingTrigger === s.trigger.replace(/^\//, '')"
                       title="Copy to global ~/.agent007/skills/"
                       @click.stop="promoteSkill(s)"
-                    >↑ Global</button>
-                    <span class="text-base-content/40 text-xs">✏️</span>
+                    >↑ global</button>
+                    <span class="text-base-content/30 font-mono text-[10px]">◦ edit</span>
                   </div>
                 </div>
               </div>
@@ -284,9 +303,10 @@ async function importFromUrl() {
           </div>
         </template>
 
-        <div v-if="!skills.length && !loading" class="text-center text-base-content/40 py-12">
-          <p class="text-lg mb-2">No skills installed yet</p>
-          <p class="text-sm">Run <code class="font-mono bg-base-300 px-1.5 py-0.5 rounded">agent007 init</code> to install built-in skills, or import from the registry.</p>
+        <div v-if="!skills.length && !loading" class="text-center py-12">
+          <div class="text-3xl mb-3 text-base-content/10">⚡</div>
+          <p class="text-sm font-mono text-base-content/40">no skills installed</p>
+          <p class="text-xs font-mono text-base-content/25 mt-1">run <code class="bg-base-300 px-1 rounded">agent007 init</code> or import from the registry</p>
         </div>
       </div>
 
@@ -295,41 +315,42 @@ async function importFromUrl() {
         <div class="form-control">
           <input
             v-model="searchQuery"
-            class="input input-sm input-bordered w-full max-w-md"
-            placeholder="Search registry skills..."
+            class="input input-sm input-bordered w-full max-w-md font-mono"
+            placeholder="search skills..."
           />
         </div>
 
-        <div v-if="!registry.length && !loading" class="text-center text-base-content/40 py-12">
-          <p class="text-lg mb-2">Registry is empty or unavailable</p>
-          <p class="text-sm">The community registry at GitHub is not yet populated. Use the Import tab to add skills from any URL.</p>
+        <div v-if="!registry.length && !loading" class="text-center py-12">
+          <div class="text-3xl mb-3 text-base-content/10">⬡</div>
+          <p class="text-sm font-mono text-base-content/40">registry unavailable</p>
+          <p class="text-xs font-mono text-base-content/25 mt-1">use the import tab to add skills from any URL</p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <div
             v-for="item in filteredRegistry"
             :key="item.trigger || item.name"
-            class="card bg-base-200 border border-base-300 p-4"
+            class="bg-base-200 border border-base-300 rounded-lg p-4 border-l-2 border-l-base-content/15"
           >
             <div class="flex items-start justify-between">
               <div class="flex-1 min-w-0">
-                <div class="font-medium text-sm">{{ item.name }}</div>
-                <div class="text-xs text-base-content/50 mt-0.5">{{ item.description }}</div>
-                <div class="flex gap-1 mt-2">
-                  <span v-if="item.trigger" class="badge badge-xs font-mono">{{ item.trigger }}</span>
-                  <span v-if="item.category" class="badge badge-xs badge-ghost">{{ item.category }}</span>
+                <div class="font-mono text-sm font-semibold">{{ item.name }}</div>
+                <div class="text-[11px] font-mono text-base-content/45 mt-1">{{ item.description }}</div>
+                <div class="flex gap-1.5 mt-2">
+                  <span v-if="item.trigger" class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ item.trigger }}</span>
+                  <span v-if="item.category" class="text-[10px] font-mono text-base-content/30">{{ item.category }}</span>
                 </div>
               </div>
               <button
                 v-if="installedTriggers.has(item.trigger)"
-                class="btn btn-xs btn-disabled"
+                class="btn btn-xs btn-disabled font-mono text-[10px]"
                 disabled
-              >Installed</button>
+              >installed</button>
               <button
                 v-else
-                class="btn btn-xs btn-primary"
+                class="btn btn-xs btn-primary font-mono text-[10px]"
                 @click="installFromRegistry(item)"
-              >Install</button>
+              >install</button>
             </div>
           </div>
         </div>
@@ -338,9 +359,9 @@ async function importFromUrl() {
       <!-- Tab: Import -->
       <div v-if="activeTab === 'import'" class="space-y-6 max-w-2xl">
         <div>
-          <h3 class="text-sm font-bold mb-2">Import from URL</h3>
-          <p class="text-xs text-base-content/50 mb-3">
-            Paste a GitHub URL to a skill <code>.md</code> file. Supports raw URLs and blob URLs (auto-converted).
+          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">import from url</div>
+          <p class="text-[11px] font-mono text-base-content/40 mb-3">
+            Paste a GitHub URL to a skill <code class="bg-base-300 px-1 rounded">.md</code> file. Supports raw and blob URLs.
           </p>
           <div class="flex gap-2">
             <input
@@ -348,8 +369,8 @@ async function importFromUrl() {
               class="input input-sm input-bordered flex-1 font-mono"
               placeholder="https://github.com/user/repo/blob/main/skills/my-skill.md"
             />
-            <button class="btn btn-sm btn-primary" @click="importFromUrl" :disabled="!importUrl.trim()">
-              Import
+            <button class="btn btn-sm btn-primary font-mono text-xs" @click="importFromUrl" :disabled="!importUrl.trim()">
+              import
             </button>
           </div>
         </div>
@@ -359,13 +380,17 @@ async function importFromUrl() {
           'alert-success': importStatus.type === 'success',
           'alert-error': importStatus.type === 'error',
         }">
-          <span>{{ importStatus.message }}</span>
+          <span class="font-mono text-xs">{{ importStatus.message }}</span>
         </div>
 
-        <div class="divider text-xs text-base-content/30">SUPPORTED FORMATS</div>
-        <div class="text-xs text-base-content/50 space-y-2">
+        <div class="flex items-center gap-2 my-4">
+          <div class="flex-1 h-px bg-base-content/10"></div>
+          <span class="text-[10px] font-mono text-base-content/25 uppercase tracking-widest">format</span>
+          <div class="flex-1 h-px bg-base-content/10"></div>
+        </div>
+        <div class="text-[11px] font-mono text-base-content/45 space-y-2">
           <p>Skill files must be Markdown with YAML frontmatter:</p>
-          <pre class="bg-base-300 p-3 rounded-lg font-mono text-xs overflow-x-auto">---
+          <pre class="bg-base-300 p-3 rounded-lg overflow-x-auto text-[11px]">---
 name: My Skill
 trigger: /my-skill
 description: What this skill does
@@ -380,19 +405,19 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
 
     <!-- Create / Edit modal -->
     <dialog :open="showForm" class="modal" :class="{ 'modal-open': showForm }">
-      <div class="modal-box max-w-2xl bg-base-200">
-        <h3 class="font-bold text-lg">
-          {{ editingTrigger ? `Edit Skill — ${editingTrigger}` : 'Create Skill' }}
-        </h3>
+      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
+        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">
+          {{ editingTrigger ? `edit · ${editingTrigger}` : 'create skill' }}
+        </div>
 
-        <div class="mt-4 space-y-3">
+        <div class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div class="form-control">
-              <label class="label"><span class="label-text text-xs">Name</span></label>
-              <input v-model="form.name" class="input input-sm input-bordered" :placeholder="editingTrigger ? '' : 'PR Reviewer'" />
+              <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
+              <input v-model="form.name" class="input input-sm input-bordered font-mono" :placeholder="editingTrigger ? '' : 'PR Reviewer'" />
             </div>
             <div class="form-control">
-              <label class="label"><span class="label-text text-xs">Trigger</span></label>
+              <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">trigger</span></label>
               <input
                 v-model="form.trigger"
                 class="input input-sm input-bordered font-mono"
@@ -403,12 +428,12 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
             </div>
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Description</span></label>
-            <input v-model="form.description" class="input input-sm input-bordered" placeholder="What this skill does" />
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
+            <input v-model="form.description" class="input input-sm input-bordered font-mono" placeholder="What this skill does" />
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Model</span></label>
-            <select v-model="form.model" class="select select-sm select-bordered">
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">model</span></label>
+            <select v-model="form.model" class="select select-sm select-bordered font-mono">
               <option>codex</option>
               <option>gpt-5.3-codex</option>
               <option>claude</option>
@@ -417,13 +442,13 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
             </select>
           </div>
           <div class="form-control">
-            <label class="label">
-              <span class="label-text text-xs">Prompt Template</span>
-              <span class="label-text-alt text-xs text-base-content/40">
-                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code> user input &nbsp;·&nbsp;
-                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> workflow context &nbsp;·&nbsp;
-                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;memory.project&#125;&#125;</code> project memory &nbsp;·&nbsp;
-                <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code> related memory hits
+            <label class="label py-1">
+              <span class="label-text text-[11px] font-mono text-base-content/50">prompt template</span>
+              <span class="label-text-alt text-[10px] font-mono text-base-content/30">
+                <code class="bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code> ·
+                <code class="bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> ·
+                <code class="bg-base-300 px-1 rounded">&#123;&#123;memory.project&#125;&#125;</code> ·
+                <code class="bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code>
               </span>
             </label>
             <textarea
@@ -435,9 +460,9 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
         </div>
 
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="showForm = false; editingTrigger = null">Cancel</button>
-          <button class="btn btn-sm btn-primary" @click="saveSkill" :disabled="!form.name || !form.trigger || !form.template">
-            {{ editingTrigger ? 'Save Changes' : 'Save Skill' }}
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showForm = false; editingTrigger = null">cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveSkill" :disabled="!form.name || !form.trigger || !form.template">
+            {{ editingTrigger ? 'save changes' : 'save skill' }}
           </button>
         </div>
       </div>

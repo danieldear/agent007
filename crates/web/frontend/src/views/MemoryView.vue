@@ -10,7 +10,7 @@ marked.setOptions({ gfm: true, breaks: true })
 const { api } = useApi()
 
 const SCOPES = ['global', 'project', 'user', 'learning']
-const SCOPE_ICONS = { global: '🌐', project: '📁', user: '👤', learning: '📈' }
+const SCOPE_ICONS = { global: '◎', project: '⬡', user: '◉', learning: '◈' }
 
 const activeScope = ref('project')
 const keys = ref([])

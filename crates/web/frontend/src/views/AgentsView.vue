@@ -59,72 +59,77 @@ async function deletePersona(name) {
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
-      <h2 class="text-lg font-bold">Agents / Personas</h2>
-      <button class="btn btn-sm btn-primary" @click="openCreate">+ New Agent</button>
+    <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
+      <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Agents · Personas</span>
+      <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="openCreate">+ new</button>
     </div>
 
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-auto p-5">
       <!-- Agent cards grid -->
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <div
           v-for="p in personas"
           :key="p.name"
-          class="card bg-base-200 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          class="bg-base-200 border border-base-300 rounded-lg border-l-2 border-l-primary/50 hover:border-l-primary transition-colors"
         >
-          <div class="card-body p-4">
-            <div class="flex items-start justify-between">
-              <h3 class="card-title text-sm text-primary">{{ p.name }}</h3>
-              <div class="flex gap-1">
-                <button class="btn btn-ghost btn-xs" @click="openEdit(p)">Edit</button>
-                <button class="btn btn-ghost btn-xs text-error" @click="deletePersona(p.name)">Del</button>
+          <div class="p-4">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="font-mono text-sm font-bold text-primary truncate">{{ p.name }}</div>
+                <p class="text-[11px] font-mono text-base-content/45 mt-1 leading-relaxed">{{ p.description }}</p>
+              </div>
+              <div class="flex gap-1 shrink-0">
+                <button class="btn btn-ghost btn-xs font-mono text-[11px]" @click="openEdit(p)">edit</button>
+                <button class="btn btn-ghost btn-xs font-mono text-[11px] text-error/70 hover:text-error" @click="deletePersona(p.name)">del</button>
               </div>
             </div>
-            <p class="text-xs text-base-content/60 mt-1">{{ p.description }}</p>
-            <div class="mt-2 flex flex-wrap gap-1">
-              <span class="badge badge-xs badge-outline badge-info">{{ p.preferred_model }}</span>
+            <div class="mt-3 flex flex-wrap gap-1.5">
+              <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-info/30 text-info/70 bg-info/5">{{ p.preferred_model }}</span>
               <span
                 v-for="tool in (p.allowed_tools || []).slice(0, 5)"
                 :key="tool"
-                class="badge badge-xs badge-outline"
+                class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-base-300 text-base-content/40"
               >{{ tool }}</span>
               <span
                 v-if="(p.allowed_tools || []).length > 5"
-                class="badge badge-xs badge-ghost"
-              >+{{ p.allowed_tools.length - 5 }}</span>
+                class="text-[10px] font-mono text-base-content/30"
+              >+{{ p.allowed_tools.length - 5 }} more</span>
             </div>
-            <details class="mt-2">
-              <summary class="text-xs cursor-pointer text-base-content/40 hover:text-base-content/70">
-                System prompt
+            <details class="mt-3">
+              <summary class="text-[10px] font-mono cursor-pointer text-base-content/30 hover:text-base-content/60 uppercase tracking-wider">
+                ▸ system prompt
               </summary>
-              <pre class="mt-1 text-xs bg-base-300 p-2 rounded max-h-32 overflow-auto whitespace-pre-wrap">{{ p.system_prompt }}</pre>
+              <pre class="mt-2 text-[11px] font-mono bg-base-300/50 p-3 rounded border border-base-300/60 max-h-32 overflow-auto whitespace-pre-wrap text-base-content/70">{{ p.system_prompt }}</pre>
             </details>
           </div>
         </div>
       </div>
 
-      <div v-if="!personas.length && !loading" class="text-center text-base-content/40 py-16">
-        No agents found. Click "+ New Agent" to create one.
+      <div v-if="!personas.length && !loading" class="text-center font-mono text-base-content/30 py-16 text-sm">
+        <div class="text-3xl mb-3 text-base-content/10">◉</div>
+        no agents found — click <span class="text-primary">+ new</span> to create one
       </div>
     </div>
 
     <!-- Create/Edit modal -->
     <dialog :open="showForm" class="modal" :class="{ 'modal-open': showForm }">
-      <div class="modal-box max-w-2xl bg-base-200">
-        <h3 class="font-bold text-lg">{{ editTarget ? `Edit: ${editTarget}` : 'Create New Agent' }}</h3>
+      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
+        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">
+          {{ editTarget ? `edit · ${editTarget}` : 'create agent' }}
+        </div>
 
-        <div class="mt-4 space-y-3">
+        <div class="space-y-3">
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Name</span></label>
-            <input v-model="form.name" class="input input-sm input-bordered" :disabled="!!editTarget" />
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
+            <input v-model="form.name" class="input input-sm input-bordered font-mono" :disabled="!!editTarget" />
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Description</span></label>
-            <input v-model="form.description" class="input input-sm input-bordered" />
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
+            <input v-model="form.description" class="input input-sm input-bordered font-mono" />
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Preferred Model</span></label>
-            <select v-model="form.preferred_model" class="select select-sm select-bordered">
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">preferred model</span></label>
+            <select v-model="form.preferred_model" class="select select-sm select-bordered font-mono">
               <option>codex</option>
               <option>gpt-5.3-codex</option>
               <option>claude</option>
@@ -133,18 +138,18 @@ async function deletePersona(name) {
             </select>
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">Allowed Tools (comma-separated)</span></label>
-            <input v-model="form.allowed_tools" class="input input-sm input-bordered" placeholder="bash, file_read, file_write" />
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">allowed tools (comma-separated)</span></label>
+            <input v-model="form.allowed_tools" class="input input-sm input-bordered font-mono" placeholder="bash, file_read, file_write" />
           </div>
           <div class="form-control">
-            <label class="label"><span class="label-text text-xs">System Prompt</span></label>
+            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">system prompt</span></label>
             <textarea v-model="form.system_prompt" class="textarea textarea-bordered text-sm font-mono" rows="8" />
           </div>
         </div>
 
         <div class="modal-action">
-          <button class="btn btn-sm btn-ghost" @click="showForm = false">Cancel</button>
-          <button class="btn btn-sm btn-primary" @click="savePersona">Save Agent</button>
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showForm = false">cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="savePersona">save</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showForm = false">close</button></form>
