@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 
 use agent007_web::WebServer;
 use crate::commands::run::{
+    agent007_global_home,
     build_stack, runtime_mode_label, selected_runtime_model, selected_runtime_provider,
     standalone_mode_available,
 };
@@ -24,8 +26,11 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         }
     });
 
-    let actual_port = find_free_port(port).await;
-    persist_dashboard_port(actual_port);
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let registry = PortRegistry::load();
+    let actual_port = registry.resolve_port(&cwd, port).await;
+    PortRegistry::register(&cwd, actual_port);
+
     tracing::info!("agent007 web dashboard starting on http://0.0.0.0:{actual_port}");
     let standalone_mode = standalone_mode_available(&config);
     let runtime_mode = runtime_mode_label(&config).to_string();
@@ -49,32 +54,98 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         provider_label,
     );
 
-    web.run(actual_port)
+    let result = web.run(actual_port)
         .await
-        .map_err(|e| anyhow::anyhow!("web server error: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("web server error: {e}"));
+
+    // Clean up registry entry when server stops
+    PortRegistry::unregister(&cwd);
 
     stack.tracker.close();
     stack.tracker.wait().await;
-    Ok(())
+    result
 }
 
-async fn find_free_port(preferred: u16) -> u16 {
-    for offset in 0u16..50 {
-        let port = preferred.wrapping_add(offset);
-        let addr = format!("0.0.0.0:{port}");
-        if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
-            drop(listener);
-            return port;
-        }
+/// Global port registry stored at ~/.agent007/ports.toml.
+/// Maps project directory → assigned port so multiple projects can
+/// coexist without port collisions.
+struct PortRegistry {
+    entries: HashMap<String, u16>,
+}
+
+impl PortRegistry {
+    fn registry_path() -> std::path::PathBuf {
+        agent007_global_home().join("ports.toml")
     }
-    preferred
-}
 
-fn persist_dashboard_port(port: u16) {
-    let memory_dir = crate::commands::run::agent007_home().join("memory");
-    let store = Arc::new(agent007_memory::store::MemoryStore::new(memory_dir));
-    let scoped = store.scoped("project");
-    let _ = scoped.write("dashboard_port", &port.to_string());
+    fn load() -> Self {
+        let path = Self::registry_path();
+        let entries = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str::<HashMap<String, HashMap<String, u16>>>(&s).ok())
+            .and_then(|t| t.get("projects").cloned())
+            .unwrap_or_default();
+        Self { entries }
+    }
+
+    fn save(entries: &HashMap<String, u16>) {
+        let path = Self::registry_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let table = toml::Value::Table({
+            let mut root = toml::map::Map::new();
+            let mut projects = toml::map::Map::new();
+            for (k, v) in entries {
+                projects.insert(k.clone(), toml::Value::Integer(*v as i64));
+            }
+            root.insert("projects".to_string(), toml::Value::Table(projects));
+            root
+        });
+        let _ = std::fs::write(path, toml::to_string_pretty(&table).unwrap_or_default());
+    }
+
+    /// Resolve the port to use for the given project directory:
+    /// 1. If a port is registered for this project and it's free → reuse it
+    /// 2. If a port is registered but occupied by something else → reuse it anyway
+    ///    (it's ours — the old process may have just died)
+    /// 3. If not registered → find a free port not used by any other project
+    async fn resolve_port(&self, cwd: &std::path::Path, preferred: u16) -> u16 {
+        let key = cwd.to_string_lossy().to_string();
+        let used_ports: std::collections::HashSet<u16> = self.entries.values().copied().collect();
+
+        if let Some(&registered) = self.entries.get(&key) {
+            return registered;
+        }
+
+        // Find a free port not already assigned to another project
+        for offset in 0u16..50 {
+            let port = preferred.wrapping_add(offset);
+            if used_ports.contains(&port) {
+                continue;
+            }
+            let addr = format!("0.0.0.0:{port}");
+            if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
+                drop(listener);
+                return port;
+            }
+        }
+        preferred
+    }
+
+    /// Write (or update) the registry entry for this project.
+    fn register(cwd: &std::path::Path, port: u16) {
+        let mut reg = Self::load();
+        reg.entries.insert(cwd.to_string_lossy().to_string(), port);
+        Self::save(&reg.entries);
+    }
+
+    /// Remove the registry entry when the dashboard exits.
+    fn unregister(cwd: &std::path::Path) {
+        let mut reg = Self::load();
+        reg.entries.remove(&cwd.to_string_lossy().to_string());
+        Self::save(&reg.entries);
+    }
 }
 
 #[cfg(test)]
@@ -87,8 +158,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_free_port_returns_requested_port_when_available() {
-        let port = find_free_port(8007).await;
-        assert!(port >= 8007);
+    async fn resolve_port_returns_registered_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = PortRegistry { entries: HashMap::new() };
+        registry.entries.insert(dir.path().to_string_lossy().to_string(), 9001);
+        let port = registry.resolve_port(dir.path(), 8007).await;
+        assert_eq!(port, 9001);
+    }
+
+    #[tokio::test]
+    async fn resolve_port_skips_ports_used_by_other_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        // Bind 8007 so it's occupied
+        let _listener = tokio::net::TcpListener::bind("0.0.0.0:19999").await.unwrap();
+        let mut registry = PortRegistry { entries: HashMap::new() };
+        // Mark 19999 as used by another project
+        registry.entries.insert("/other/project".to_string(), 19999);
+        let port = registry.resolve_port(dir.path(), 19999).await;
+        // Should skip 19999 (used by another project) and find a different port
+        assert_ne!(port, 19999);
     }
 }
