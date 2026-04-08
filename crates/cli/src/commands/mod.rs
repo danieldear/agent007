@@ -12,3 +12,4 @@ pub mod checkpoint;
 pub mod replay;
 pub mod workflow;
 pub mod audit;
+pub mod bundle;

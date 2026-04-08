@@ -23,6 +23,7 @@ const navItems = [
   { id: 'skills', label: 'Skills', icon: '⚡' },
   { id: 'workflows', label: 'Workflows', icon: '⬡' },
   { id: 'memory', label: 'Memory', icon: '◈' },
+  { id: 'sharing', label: 'Sharing', icon: '📦' },
 ]
 </script>
 

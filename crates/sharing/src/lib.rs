@@ -69,17 +69,18 @@ impl BundleBuilder {
         skill_triggers: &[&str],
         workflow_names: &[&str],
     ) -> Result<Bundle> {
-        let skills = self.collect_assets(&self.skills_dir, "md", skill_triggers)?;
-        let workflows = self.collect_assets(&self.workflows_dir, "yaml", workflow_names)?;
+        let skills = self.collect_assets(&self.skills_dir, &["md"], skill_triggers)?;
+        let workflows = self.collect_assets(&self.workflows_dir, &["yaml", "yml"], workflow_names)?;
         Ok(Bundle::new(skills, workflows))
     }
 
-    fn collect_assets(&self, dir: &Path, ext: &str, filter: &[&str]) -> Result<Vec<BundleAsset>> {
+    fn collect_assets(&self, dir: &Path, exts: &[&str], filter: &[&str]) -> Result<Vec<BundleAsset>> {
         if !dir.exists() { return Ok(vec![]); }
         let mut assets = Vec::new();
         for entry in std::fs::read_dir(dir)?.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some(ext) { continue; }
+            let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !exts.contains(&file_ext) { continue; }
             let filename = path.file_name().unwrap().to_string_lossy().to_string();
             if !filter.is_empty() {
                 let stem = path.file_stem().unwrap_or_default().to_string_lossy();

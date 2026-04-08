@@ -140,30 +140,44 @@ pub async fn run_handler(
     }
 }
 
-/// `GET /api/skills` — list skills from `.agent007/skills/` (project-local or global home).
+/// `GET /api/skills` — list skills from project-local and global `.agent007/skills/`.
+/// Each skill includes a `source` field: `"project"` or `"global"`.
 pub async fn skills_handler(
     State(_state): State<AppState>,
 ) -> impl IntoResponse {
-    let skills_dir = agent007_home().join("skills");
-
-    if !skills_dir.exists() {
-        return Json(serde_json::json!([])).into_response();
-    }
-
-    let read = std::fs::read_dir(&skills_dir);
-    let Ok(entries) = read else {
-        return Json(serde_json::json!([])).into_response();
-    };
+    let project_dir = agent007_project_home().map(|p| p.join("skills"));
+    let global_dir = agent007_global_home().join("skills");
 
     let mut skills: Vec<Value> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
+    let mut seen_triggers: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let dirs: Vec<(std::path::PathBuf, &str)> = {
+        let mut v: Vec<(std::path::PathBuf, &str)> = Vec::new();
+        if let Some(p) = project_dir {
+            v.push((p, "project"));
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Some(fm) = parse_frontmatter(&content) {
-                skills.push(fm);
+        v.push((global_dir, "global"));
+        v
+    };
+
+    for (dir, source) in &dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Some(mut fm) = parse_frontmatter(&content) {
+                    let trigger = fm.get("trigger")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if seen_triggers.insert(trigger) {
+                        fm["source"] = Value::String(source.to_string());
+                        skills.push(fm);
+                    }
+                }
             }
         }
     }
@@ -796,9 +810,11 @@ fn workflow_dirs() -> Vec<std::path::PathBuf> {
 pub async fn workflows_list_handler(
     State(_state): State<AppState>,
 ) -> impl IntoResponse {
+    let global = agent007_global_home().join("workflows");
     let mut seen = std::collections::HashSet::new();
-    let mut names = Vec::new();
+    let mut result: Vec<Value> = Vec::new();
     for wf_dir in workflow_dirs() {
+        let source = if wf_dir == global { "global" } else { "project" };
         if let Ok(entries) = std::fs::read_dir(&wf_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -806,15 +822,20 @@ pub async fn workflows_list_handler(
                 if ext == Some("yaml") || ext == Some("yml") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         if seen.insert(stem.to_string()) {
-                            names.push(stem.to_string());
+                            result.push(serde_json::json!({
+                                "name": stem,
+                                "source": source,
+                            }));
                         }
                     }
                 }
             }
         }
     }
-    names.sort();
-    Json(names).into_response()
+    result.sort_by(|a, b| {
+        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+    });
+    Json(result).into_response()
 }
 
 pub async fn workflow_get_handler(
@@ -1539,7 +1560,10 @@ pub async fn skill_promote_handler(
 ) -> impl IntoResponse {
     let target_trigger = format!("/{}", trigger.trim_start_matches('/'));
 
-    let project_skills = agent007_home().join("skills");
+    let project_skills = match agent007_project_home() {
+        Some(p) => p.join("skills"),
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "no project-local .agent007 found" }))).into_response(),
+    };
     let global_skills = agent007_global_home().join("skills");
 
     let found = std::fs::read_dir(&project_skills).ok()

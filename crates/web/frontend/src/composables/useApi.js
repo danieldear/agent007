@@ -80,6 +80,30 @@ export function useApi() {
 
     // Run task
     runTask: (task) => fetchJson('/api/run', { method: 'POST', body: JSON.stringify({ task }) }),
+
+    // Sharing — promote
+    promoteSkill: async (trigger) => {
+      const res = await fetch(BASE + `/api/skills/${encodeURIComponent(trigger)}/promote`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      return { ok: res.ok, status: res.status, body }
+    },
+    promoteWorkflow: async (name) => {
+      const res = await fetch(BASE + `/api/workflows/${encodeURIComponent(name)}/promote`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      return { ok: res.ok, status: res.status, body }
+    },
+
+    // Sharing — bundle export (returns raw Response so caller can stream blob)
+    exportBundle: (skills, workflows) => {
+      const params = new URLSearchParams()
+      if (skills?.length) params.set('skills', skills.join(','))
+      if (workflows?.length) params.set('workflows', workflows.join(','))
+      return fetch(BASE + `/api/bundle/export?${params}`)
+    },
+
+    // Sharing — bundle import
+    importBundle: (bundle, overwrite) =>
+      fetchJson('/api/bundle/import', { method: 'POST', body: JSON.stringify({ bundle, overwrite }) }),
   }
 
   return { api, loading, error, call }

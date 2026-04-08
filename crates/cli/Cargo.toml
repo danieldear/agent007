@@ -20,6 +20,7 @@ agent007-tui      = { path = "../tui" }
 agent007-personas = { path = "../personas" }
 agent007-workflows = { path = "../workflows" }
 agent007-web = { path = "../web" }
+agent007-sharing  = { path = "../sharing" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }

@@ -133,6 +133,8 @@ pub enum Commands {
         #[arg(long, default_value_t = 3000)]
         port: u16,
     },
+    /// Export or import skill/workflow bundles (.a7bundle), promote to global
+    Bundle(BundleArgs),
     /// Start the agent007 Language Server Protocol server.
     #[command(name = "serve-lsp")]
     ServeLsp {
@@ -192,6 +194,51 @@ pub enum PersonaAction {
     Show {
         /// Exact persona name, e.g. Researcher
         name: String,
+    },
+}
+
+#[derive(Parser, Debug)]
+pub struct BundleArgs {
+    #[command(subcommand)]
+    pub action: BundleAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BundleAction {
+    /// Export skills and/or workflows as a portable .a7bundle file
+    Export {
+        /// Output file path (default: agent007-bundle.a7bundle)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
+        /// Skill triggers to include (default: all). E.g. --skill code-review --skill refactor
+        #[arg(long, value_name = "TRIGGER")]
+        skills: Vec<String>,
+        /// Workflow names to include (default: all). E.g. --workflow tdd
+        #[arg(long, value_name = "NAME")]
+        workflows: Vec<String>,
+    },
+    /// Import a .a7bundle file into the current project
+    Import {
+        /// Path to the .a7bundle file
+        file: String,
+        /// Overwrite existing skills/workflows
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+        /// Import into global ~/.agent007/ instead of project-local
+        #[arg(long, default_value_t = false)]
+        global: bool,
+    },
+    /// Promote a project-local skill or workflow to ~/.agent007/ (global)
+    Promote {
+        /// Skill trigger to promote (e.g. code-review or /code-review)
+        #[arg(long)]
+        skill: Option<String>,
+        /// Workflow name to promote (e.g. tdd)
+        #[arg(long)]
+        workflow: Option<String>,
+        /// Target global home (always ~/.agent007/, flag reserved for future use)
+        #[arg(long, default_value_t = true)]
+        global: bool,
     },
 }
 
@@ -276,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Workflow(w) => commands::workflow::execute(config, w.action).await,
+        Commands::Bundle(b) => commands::bundle::execute(config, b.action).await,
         Commands::Audit { last, agent, path, blocked } => {
             commands::audit::execute(config, last, agent, path, blocked).await
         }

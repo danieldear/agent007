@@ -11,6 +11,34 @@ const editingTrigger = ref(null) // null = creating, string = editing existing
 const importUrl = ref('')
 const importStatus = ref(null)
 const searchQuery = ref('')
+const toast = ref(null)
+const promotingTrigger = ref(null)
+
+let toastTimer = null
+function showToast(message, type = 'success') {
+  clearTimeout(toastTimer)
+  toast.value = { message, type }
+  toastTimer = setTimeout(() => { toast.value = null }, 3500)
+}
+
+async function promoteSkill(skill) {
+  const trigger = skill.trigger.replace(/^\//, '')
+  promotingTrigger.value = trigger
+  try {
+    const { ok, status, body } = await api.promoteSkill(trigger)
+    if (status === 409) {
+      showToast('Already exists globally', 'info')
+    } else if (ok) {
+      showToast('Promoted to global!', 'success')
+    } else {
+      showToast(body?.error || `Error ${status}`, 'error')
+    }
+  } catch (e) {
+    showToast(e.message || 'Promote failed', 'error')
+  } finally {
+    promotingTrigger.value = null
+  }
+}
 
 const DEFAULT_TEMPLATE = `You are a helpful AI assistant.
 
@@ -183,6 +211,16 @@ async function importFromUrl() {
 
 <template>
   <div class="flex flex-col h-full">
+    <!-- Toast -->
+    <div v-if="toast" class="toast toast-top toast-end z-50 pointer-events-none">
+      <div class="alert alert-sm shadow-lg" :class="{
+        'alert-success': toast.type === 'success',
+        'alert-info': toast.type === 'info',
+        'alert-error': toast.type === 'error',
+      }">
+        <span class="text-sm">{{ toast.message }}</span>
+      </div>
+    </div>
     <div class="p-4 border-b border-base-300 bg-base-200 flex items-center justify-between">
       <h2 class="text-lg font-bold">Skills</h2>
       <button class="btn btn-sm btn-primary" @click="openCreate">+ New Skill</button>
@@ -228,9 +266,17 @@ async function importFromUrl() {
                     </div>
                     <div class="text-xs text-base-content/50 mt-1">{{ s.description }}</div>
                   </div>
-                  <!-- Edit hint shown on hover -->
-                  <div class="opacity-0 group-hover:opacity-100 transition-opacity text-base-content/40 text-xs flex items-center gap-1 shrink-0">
-                    <span>✏️</span>
+                  <!-- Actions shown on hover -->
+                  <div class="flex flex-col items-end gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      v-if="s.source === 'project'"
+                      class="btn btn-xs btn-ghost text-xs px-1.5 h-6 min-h-0 leading-none"
+                      :class="{ 'loading loading-spinner': promotingTrigger === s.trigger.replace(/^\//, '') }"
+                      :disabled="promotingTrigger === s.trigger.replace(/^\//, '')"
+                      title="Copy to global ~/.agent007/skills/"
+                      @click.stop="promoteSkill(s)"
+                    >↑ Global</button>
+                    <span class="text-base-content/40 text-xs">✏️</span>
                   </div>
                 </div>
               </div>

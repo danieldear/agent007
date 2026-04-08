@@ -21,6 +21,35 @@ const validating = ref(false)
 const validationResult = ref(null)
 const workflowName = ref('')
 const workflowDescription = ref('')
+const wfToast = ref(null)
+const promotingWorkflow = ref(null)
+
+let wfToastTimer = null
+function showWfToast(message, type = 'success') {
+  clearTimeout(wfToastTimer)
+  wfToast.value = { message, type }
+  wfToastTimer = setTimeout(() => { wfToast.value = null }, 3500)
+}
+
+async function promoteWorkflow(name) {
+  promotingWorkflow.value = name
+  try {
+    const { ok, status, body } = await api.promoteWorkflow(name)
+    if (status === 409) {
+      showWfToast('Already exists globally', 'info')
+    } else if (status === 404) {
+      showWfToast('Not a project-local workflow', 'error')
+    } else if (ok) {
+      showWfToast('Promoted to global!', 'success')
+    } else {
+      showWfToast(body?.error || `Error ${status}`, 'error')
+    }
+  } catch (e) {
+    showWfToast(e.message || 'Promote failed', 'error')
+  } finally {
+    promotingWorkflow.value = null
+  }
+}
 
 const { onConnect, addEdges, getNodes, getEdges } = useVueFlow()
 
@@ -421,6 +450,16 @@ async function loadTemplate(tplName) {
 
 <template>
   <div class="flex flex-col h-full" @click="hideContextMenu">
+    <!-- Toast -->
+    <div v-if="wfToast" class="toast toast-top toast-end z-50 pointer-events-none">
+      <div class="alert alert-sm shadow-lg" :class="{
+        'alert-success': wfToast.type === 'success',
+        'alert-info': wfToast.type === 'info',
+        'alert-error': wfToast.type === 'error',
+      }">
+        <span class="text-sm">{{ wfToast.message }}</span>
+      </div>
+    </div>
     <div class="border-b border-base-300 bg-base-200">
       <div class="p-4 flex items-center justify-between">
         <h2 class="text-lg font-bold">Workflow Designer</h2>
@@ -544,12 +583,21 @@ async function loadTemplate(tplName) {
         <div class="p-3 border-b border-base-300">
           <h3 class="text-xs font-bold uppercase tracking-wider text-base-content/50 mb-2">Workflows</h3>
           <div class="space-y-1">
-            <button
-              v-for="w in workflows" :key="w"
-              class="btn btn-ghost btn-xs justify-start w-full font-mono text-xs"
-              :class="{ 'btn-active': selectedWorkflow === w }"
-              @click="loadWorkflow(w)"
-            >{{ w }}</button>
+            <div v-for="w in workflows" :key="w.name" class="flex items-center gap-0.5 group/wf">
+              <button
+                class="btn btn-ghost btn-xs justify-start flex-1 font-mono text-xs overflow-hidden"
+                :class="{ 'btn-active': selectedWorkflow === w.name }"
+                @click="loadWorkflow(w.name)"
+              >{{ w.name }}</button>
+              <button
+                v-if="w.source === 'project'"
+                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-60 hover:!opacity-100 transition-opacity shrink-0"
+                :class="{ 'loading loading-spinner': promotingWorkflow === w.name }"
+                :disabled="promotingWorkflow === w.name"
+                title="Copy to global ~/.agent007/workflows/"
+                @click.stop="promoteWorkflow(w.name)"
+              >↑</button>
+            </div>
           </div>
           <div v-if="!workflows.length" class="text-xs text-base-content/40">No workflows</div>
         </div>
