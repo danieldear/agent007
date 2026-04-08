@@ -19,6 +19,7 @@ members = [
     "crates/simulation",
     "crates/workflows",
     "crates/lsp-client",
+    "crates/sharing",
 ]
 resolver = "2"
 

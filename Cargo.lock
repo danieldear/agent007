@@ -21,6 +21,7 @@ dependencies = [
  "agent007-memory",
  "agent007-models",
  "agent007-personas",
+ "agent007-sharing",
  "agent007-simulation",
  "agent007-skills",
  "agent007-testing",
@@ -228,6 +229,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent007-sharing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "agent007-simulation"
 version = "0.1.0"
 dependencies = [
@@ -309,6 +323,7 @@ dependencies = [
  "agent007-memory",
  "agent007-models",
  "agent007-personas",
+ "agent007-sharing",
  "agent007-skills",
  "agent007-workflows",
  "async-trait",

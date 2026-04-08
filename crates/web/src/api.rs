@@ -14,6 +14,7 @@ use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project
 use agent007_workflows::{
     WorkflowError, WorkflowLoader, WorkflowRunRequest, WorkflowRunState, WorkflowSourceRef,
 };
+use agent007_sharing;
 
 use crate::server::AppState;
 
@@ -1527,6 +1528,174 @@ fn get_workflow_templates() -> Vec<serde_json::Value> {
             ]
         }),
     ]
+}
+
+// ── Promote to global ─────────────────────────────────────────────────────────
+
+/// `POST /api/skills/{trigger}/promote` — copy a project-local skill to ~/.agent007/skills/.
+pub async fn skill_promote_handler(
+    State(_state): State<AppState>,
+    Path(trigger): Path<String>,
+) -> impl IntoResponse {
+    let target_trigger = format!("/{}", trigger.trim_start_matches('/'));
+
+    let project_skills = agent007_home().join("skills");
+    let global_skills = agent007_global_home().join("skills");
+
+    let found = std::fs::read_dir(&project_skills).ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+        .find(|e| {
+            std::fs::read_to_string(e.path()).ok()
+                .and_then(|c| parse_frontmatter(&c))
+                .and_then(|fm| fm.get("trigger").and_then(|v| v.as_str()).map(|t| t == target_trigger))
+                .unwrap_or(false)
+        });
+
+    let Some(entry) = found else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skill not found in project" }))).into_response();
+    };
+
+    let src = entry.path();
+    let filename = src.file_name().unwrap().to_string_lossy().to_string();
+    let _ = std::fs::create_dir_all(&global_skills);
+    let dest = global_skills.join(&filename);
+
+    if dest.exists() {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "error": "skill already exists globally",
+            "path": dest.display().to_string()
+        }))).into_response();
+    }
+
+    match std::fs::copy(&src, &dest) {
+        Ok(_) => Json(serde_json::json!({
+            "ok": true,
+            "promoted_to": dest.display().to_string()
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+/// `POST /api/workflows/{name}/promote` — copy a project-local workflow to ~/.agent007/workflows/.
+pub async fn workflow_promote_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let project_wf = agent007_project_home().map(|p| p.join("workflows"));
+    let global_wf = agent007_global_home().join("workflows");
+
+    let src = project_wf.and_then(|dir| {
+        [dir.join(format!("{name}.yaml")), dir.join(format!("{name}.yml"))]
+            .into_iter()
+            .find(|p| p.exists())
+    });
+
+    let Some(src) = src else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "workflow not found in project" }))).into_response();
+    };
+
+    let filename = src.file_name().unwrap().to_string_lossy().to_string();
+    let _ = std::fs::create_dir_all(&global_wf);
+    let dest = global_wf.join(&filename);
+
+    if dest.exists() {
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "error": "workflow already exists globally",
+            "path": dest.display().to_string()
+        }))).into_response();
+    }
+
+    match std::fs::copy(&src, &dest) {
+        Ok(_) => Json(serde_json::json!({
+            "ok": true,
+            "promoted_to": dest.display().to_string()
+        })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+// ── Bundle export / import ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct BundleExportQuery {
+    pub skills: Option<String>,
+    pub workflows: Option<String>,
+}
+
+/// `GET /api/bundle/export` — export selected (or all) skills+workflows as JSON bundle.
+pub async fn bundle_export_handler(
+    State(_state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<BundleExportQuery>,
+) -> impl IntoResponse {
+    let skills_dir = agent007_home().join("skills");
+    let workflows_dir = agent007_home().join("workflows");
+
+    let skill_filters: Vec<&str> = params.skills.as_deref()
+        .map(|s| s.split(',').collect())
+        .unwrap_or_default();
+    let wf_filters: Vec<&str> = params.workflows.as_deref()
+        .map(|s| s.split(',').collect())
+        .unwrap_or_default();
+
+    let builder = agent007_sharing::BundleBuilder::new(&skills_dir, &workflows_dir);
+    match builder.build(&skill_filters, &wf_filters) {
+        Ok(bundle) => match bundle.to_json() {
+            Ok(json) => (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json"),
+                 (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"agent007-bundle.a7bundle\"")],
+                json,
+            ).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BundleImportRequest {
+    pub bundle: serde_json::Value,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// `POST /api/bundle/import` — import a bundle JSON into the current project.
+pub async fn bundle_import_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<BundleImportRequest>,
+) -> impl IntoResponse {
+    let bundle_json = match serde_json::to_string(&payload.bundle) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    };
+
+    let bundle = match agent007_sharing::Bundle::from_json(&bundle_json) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("invalid bundle: {e}") }))).into_response(),
+    };
+
+    let skills_dir = agent007_write_home().join("skills");
+    let workflows_dir = agent007_write_home().join("workflows");
+    let importer = agent007_sharing::BundleImporter::new(&skills_dir, &workflows_dir);
+
+    match importer.import(&bundle, payload.overwrite) {
+        Ok(results) => {
+            let imported = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Imported).count();
+            let skipped = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Skipped).count();
+            let overwritten = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Overwritten).count();
+            Json(serde_json::json!({
+                "ok": true,
+                "results": results,
+                "imported": imported,
+                "skipped": skipped,
+                "overwritten": overwritten,
+            })).into_response()
+        },
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

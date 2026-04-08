@@ -11,6 +11,7 @@ agent007-models   = { path = "../models" }
 agent007-memory   = { path = "../memory" }
 agent007-personas = { path = "../personas" }
 agent007-workflows = { path = "../workflows" }
+agent007-sharing   = { path = "../sharing" }
 axum              = { workspace = true }
 tower             = { workspace = true }
 tower-http        = { version = "0.6", features = ["fs"] }
