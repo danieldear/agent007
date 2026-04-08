@@ -282,19 +282,27 @@ async function importFromUrl() {
                     <div class="flex items-center gap-2 flex-wrap">
                       <div class="font-mono text-sm font-semibold">{{ s.name }}</div>
                       <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ s.trigger }}</span>
-                      <span v-if="s.source === 'global'" class="text-[10px] font-mono text-base-content/25">global</span>
+                      <!-- Source badge — always visible -->
+                      <span
+                        v-if="s.source === 'global'"
+                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-success/30 text-success/70 bg-success/5"
+                      >global</span>
+                      <span
+                        v-else
+                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-warning/30 text-warning/70 bg-warning/5"
+                      >proj</span>
                     </div>
                     <div class="text-[11px] font-mono text-base-content/45 mt-1.5 leading-relaxed">{{ s.description }}</div>
                   </div>
                   <div class="flex flex-col items-end gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       v-if="s.source === 'project'"
-                      class="btn btn-xs btn-ghost font-mono text-[10px] px-1.5 h-6 min-h-0 leading-none"
+                      class="btn btn-xs btn-ghost font-mono text-[10px] px-1.5 h-6 min-h-0 leading-none text-warning/70 hover:text-success"
                       :class="{ 'loading loading-spinner': promotingTrigger === s.trigger.replace(/^\//, '') }"
                       :disabled="promotingTrigger === s.trigger.replace(/^\//, '')"
-                      title="Copy to global ~/.agent007/skills/"
+                      title="Promote to global ~/.agent007/skills/"
                       @click.stop="promoteSkill(s)"
-                    >↑ global</button>
+                    >↑ promote</button>
                     <span class="text-base-content/30 font-mono text-[10px]">◦ edit</span>
                   </div>
                 </div>
@@ -405,68 +413,116 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
 
     <!-- Create / Edit modal -->
     <dialog :open="showForm" class="modal" :class="{ 'modal-open': showForm }">
-      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
-        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">
-          {{ editingTrigger ? `edit · ${editingTrigger}` : 'create skill' }}
+      <div class="modal-box max-w-2xl bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden">
+        <!-- Header bar -->
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">
+            {{ editingTrigger ? `edit · ${editingTrigger}` : 'create skill' }}
+          </span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showForm = false; editingTrigger = null">✕</button>
         </div>
 
-        <div class="space-y-3">
-          <div class="grid grid-cols-2 gap-3">
-            <div class="form-control">
-              <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
-              <input v-model="form.name" class="input input-sm input-bordered font-mono" :placeholder="editingTrigger ? '' : 'PR Reviewer'" />
+        <!-- Body -->
+        <div class="p-5 space-y-4">
+          <!-- Name + Trigger row -->
+          <div class="grid grid-cols-5 gap-3">
+            <div class="col-span-3">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">name</div>
+              <input
+                v-model="form.name"
+                class="skill-input w-full"
+                :placeholder="editingTrigger ? '' : 'PR Reviewer'"
+              />
             </div>
-            <div class="form-control">
-              <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">trigger</span></label>
+            <div class="col-span-2">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">trigger</div>
               <input
                 v-model="form.trigger"
-                class="input input-sm input-bordered font-mono"
+                class="skill-input w-full font-mono"
                 placeholder="/my-skill"
                 :disabled="!!editingTrigger"
-                :class="{ 'opacity-60': !!editingTrigger }"
+                :class="{ 'opacity-40 cursor-not-allowed': !!editingTrigger }"
               />
             </div>
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
-            <input v-model="form.description" class="input input-sm input-bordered font-mono" placeholder="What this skill does" />
+
+          <!-- Description -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">description</div>
+            <input v-model="form.description" class="skill-input w-full" placeholder="What this skill does" />
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">model</span></label>
-            <select v-model="form.model" class="select select-sm select-bordered font-mono">
-              <option>codex</option>
-              <option>gpt-5.3-codex</option>
-              <option>claude</option>
-              <option>claude-sonnet-4-6</option>
-              <option>ollama</option>
-            </select>
+
+          <!-- Model -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">model</div>
+            <div class="flex gap-1.5 flex-wrap">
+              <button
+                v-for="m in ['codex', 'gpt-5.3-codex', 'claude', 'claude-sonnet-4-6', 'ollama']"
+                :key="m"
+                type="button"
+                class="px-3 py-1 text-[11px] font-mono rounded border transition-colors"
+                :class="form.model === m
+                  ? 'bg-primary/15 border-primary/50 text-primary'
+                  : 'bg-base-200 border-base-300 text-base-content/50 hover:border-base-content/30'"
+                @click="form.model = m"
+              >{{ m }}</button>
+            </div>
           </div>
-          <div class="form-control">
-            <label class="label py-1">
-              <span class="label-text text-[11px] font-mono text-base-content/50">prompt template</span>
-              <span class="label-text-alt text-[10px] font-mono text-base-content/30">
-                <code class="bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code> ·
-                <code class="bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> ·
-                <code class="bg-base-300 px-1 rounded">&#123;&#123;memory.project&#125;&#125;</code> ·
-                <code class="bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code>
-              </span>
-            </label>
+
+          <!-- Prompt template -->
+          <div class="flex-1">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest">prompt template</div>
+              <div class="flex items-center gap-1.5 text-[10px] font-mono text-base-content/25">
+                <code class="bg-base-200 px-1 py-0.5 rounded border border-base-300">&#123;&#123;args&#125;&#125;</code>
+                <span>·</span>
+                <code class="bg-base-200 px-1 py-0.5 rounded border border-base-300">&#123;&#123;task&#125;&#125;</code>
+                <span>·</span>
+                <code class="bg-base-200 px-1 py-0.5 rounded border border-base-300">&#123;&#123;memory.project&#125;&#125;</code>
+                <span>·</span>
+                <code class="bg-base-200 px-1 py-0.5 rounded border border-base-300">&#123;&#123;rag_context&#125;&#125;</code>
+              </div>
+            </div>
             <textarea
               v-model="form.template"
-              class="textarea textarea-bordered text-sm font-mono h-64 resize-y"
+              class="w-full bg-base-200 border border-base-300 rounded text-[13px] font-mono text-base-content/80 p-3 h-64 resize-y focus:outline-none focus:border-primary/50 transition-colors leading-relaxed"
               :placeholder="DEFAULT_TEMPLATE"
             />
           </div>
         </div>
 
-        <div class="modal-action">
-          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showForm = false; editingTrigger = null">cancel</button>
-          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveSkill" :disabled="!form.name || !form.trigger || !form.template">
-            {{ editingTrigger ? 'save changes' : 'save skill' }}
-          </button>
+        <!-- Footer -->
+        <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-ghost font-mono text-xs px-4" @click="showForm = false; editingTrigger = null">cancel</button>
+          <button
+            class="btn btn-sm btn-primary font-mono text-xs px-4"
+            @click="saveSkill"
+            :disabled="!form.name || !form.trigger || !form.template"
+          >{{ editingTrigger ? 'save changes' : 'save skill' }}</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showForm = false; editingTrigger = null">close</button></form>
     </dialog>
   </div>
 </template>
+
+<style scoped>
+.skill-input {
+  background: oklch(var(--b3));
+  border: 1px solid oklch(var(--b3) / 0.8);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  color: oklch(var(--bc));
+  outline: none;
+  transition: border-color 0.15s;
+}
+.skill-input:focus {
+  border-color: oklch(var(--p) / 0.5);
+}
+.skill-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+</style>
