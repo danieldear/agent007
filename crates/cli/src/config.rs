@@ -278,6 +278,64 @@ pub struct ZonesConfig {
     pub unrestricted: Vec<String>,
 }
 
+fn default_lsp_enabled() -> bool { true }
+fn default_lsp_inject_categories() -> Vec<String> {
+    vec!["code_completion".to_string(), "reasoning".to_string()]
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LspConfig {
+    #[serde(default = "default_lsp_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub servers: HashMap<String, String>,
+    #[serde(default = "default_lsp_inject_categories")]
+    pub inject_for_categories: Vec<String>,
+}
+
+impl Default for LspConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            servers: HashMap::new(),
+            inject_for_categories: default_lsp_inject_categories(),
+        }
+    }
+}
+
+impl LspConfig {
+    /// Auto-detect LSP servers available on PATH.
+    pub fn detect() -> Self {
+        let mut servers = HashMap::new();
+        if which_on_path("rust-analyzer") {
+            servers.insert("rust".to_string(), "rust-analyzer".to_string());
+        }
+        if which_on_path("typescript-language-server") {
+            servers.insert("typescript".to_string(), "typescript-language-server --stdio".to_string());
+            servers.insert("javascript".to_string(), "typescript-language-server --stdio".to_string());
+        }
+        if which_on_path("pyright") {
+            servers.insert("python".to_string(), "pyright --stdio".to_string());
+        }
+        if which_on_path("gopls") {
+            servers.insert("go".to_string(), "gopls".to_string());
+        }
+        Self {
+            enabled: true,
+            servers,
+            inject_for_categories: default_lsp_inject_categories(),
+        }
+    }
+}
+
+fn which_on_path(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -292,6 +350,8 @@ pub struct Config {
     pub learning: LearningConfig,
     #[serde(default)]
     pub zones: ZonesConfig,
+    #[serde(default)]
+    pub lsp: Option<LspConfig>,
 }
 
 impl Config {
@@ -367,6 +427,7 @@ impl Default for Config {
             ide: IdeConfig::default(),
             learning: LearningConfig::default(),
             zones: ZonesConfig::default(),
+            lsp: None,
         }
     }
 }

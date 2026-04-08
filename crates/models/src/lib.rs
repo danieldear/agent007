@@ -15,3 +15,4 @@ pub use router::ModelRouter;
 pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
 pub use ollama::OllamaProvider;
+pub use ollama::OllamaEmbeddingProvider;

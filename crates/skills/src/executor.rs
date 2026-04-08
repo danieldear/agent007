@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use agent007_lsp_client::LspClient;
 use agent007_memory::{Retriever, ScopedMemoryStore};
-use agent007_models::{CompletionRequest, Message, ModelProvider, Role};
+use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
 use crate::error::SkillError;
 use crate::types::Skill;
 
@@ -9,6 +10,8 @@ pub struct SkillExecutor {
     retriever: Arc<Retriever>,
     memory: ScopedMemoryStore,
     global_memory: Option<ScopedMemoryStore>,
+    router: Option<Arc<ModelRouter>>,
+    lsp_inject_categories: Vec<String>,
 }
 
 impl SkillExecutor {
@@ -17,11 +20,28 @@ impl SkillExecutor {
         retriever: Arc<Retriever>,
         memory: ScopedMemoryStore,
     ) -> Self {
-        Self { provider, retriever, memory, global_memory: None }
+        Self {
+            provider,
+            retriever,
+            memory,
+            global_memory: None,
+            router: None,
+            lsp_inject_categories: vec!["code_completion".to_string(), "reasoning".to_string()],
+        }
     }
 
     pub fn with_global_memory(mut self, global: ScopedMemoryStore) -> Self {
         self.global_memory = Some(global);
+        self
+    }
+
+    pub fn with_router(mut self, router: Arc<ModelRouter>) -> Self {
+        self.router = Some(router);
+        self
+    }
+
+    pub fn with_lsp_categories(mut self, categories: Vec<String>) -> Self {
+        self.lsp_inject_categories = categories;
         self
     }
 
@@ -41,11 +61,27 @@ impl SkillExecutor {
             None => String::new(),
         };
 
-        // 3. Build Tera context
+        // 3. LSP context — auto-detect language server and inject diagnostics/symbols
+        let lsp_context_str = if self.lsp_inject_categories.iter().any(|c| c == skill.category()) {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            if let Some((_lang, server_cmd)) = LspClient::detect_language(&cwd) {
+                let client = LspClient::new(server_cmd);
+                client.query(&cwd, &[]).await
+                    .map(|ctx| ctx.to_prompt_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // 4. Build Tera context
         let mut ctx = tera::Context::new();
         ctx.insert("args", args);
         ctx.insert("task", args);
         ctx.insert("rag_context", &rag_context);
+        ctx.insert("lsp_context", &lsp_context_str);
         ctx.insert("memory", &serde_json::json!({
             "user": memory_user,
             "project": memory_project,
@@ -57,7 +93,13 @@ impl SkillExecutor {
         let rendered = tera::Tera::one_off(skill.template(), &ctx, false)
             .map_err(|e| SkillError::TemplateRender { name: skill.name().to_string(), source: e })?;
 
-        // 5. Call model with skill's specified model
+        // 5. Resolve provider: use category-based routing if router is available
+        let provider: Arc<dyn ModelProvider> = if let Some(router) = &self.router {
+            router.route(skill.category())
+        } else {
+            Arc::clone(&self.provider)
+        };
+
         let request = CompletionRequest {
             model: skill.model().to_string(),
             messages: vec![Message { role: Role::User, content: rendered }],
@@ -66,7 +108,7 @@ impl SkillExecutor {
             system: None,
         };
 
-        let response = self.provider.complete(request).await
+        let response = provider.complete(request).await
             .map_err(|e| SkillError::Model { name: skill.name().to_string(), source: e })?;
 
         Ok(response.content)

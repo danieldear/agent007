@@ -134,3 +134,61 @@ mod tests {
         assert_eq!(v["options"]["temperature"], 0.5);
     }
 }
+
+use crate::provider::EmbeddingProvider;
+
+pub struct OllamaEmbeddingProvider {
+    base_url: String,
+    model: String,
+}
+
+impl OllamaEmbeddingProvider {
+    pub fn new(base_url: &str, model: &str) -> Self {
+        Self {
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OllamaEmbeddingProvider {
+    fn name(&self) -> &str {
+        "ollama-embed"
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, ModelError> {
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/embeddings", self.base_url);
+
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "model": self.model,
+                "prompt": text,
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(ModelError::Api {
+                provider: "ollama-embed".to_string(),
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        let json: Value = response.json().await?;
+        let embedding = json["embedding"]
+            .as_array()
+            .ok_or_else(|| ModelError::Api {
+                provider: "ollama-embed".to_string(),
+                message: "missing embedding field".to_string(),
+            })?
+            .iter()
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect();
+
+        Ok(embedding)
+    }
+}

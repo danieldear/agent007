@@ -20,7 +20,7 @@ use agent007_mcp::{McpClient, McpServerConfig};
 use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
 use agent007_learning::scorer::RewardWeights;
 use agent007_learning::store::LearningStore;
-use agent007_models::{ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter, OllamaProvider};
+use agent007_models::{ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter, OllamaEmbeddingProvider, OllamaProvider};
 use agent007_skills::SkillExecutor;
 use agent007_tui::{App, EventLoop};
 use agent007_personas::PersonaRegistry;
@@ -230,6 +230,19 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
                 }
             }
         }
+    } else {
+        // Smart defaults: route code tasks to codex if available, reasoning/sensitive to claude,
+        // fast local tasks to ollama.
+        if available.contains(&"codex".to_string()) {
+            router.add_rule("code_completion", "codex");
+        }
+        if available.contains(&"claude".to_string()) {
+            router.add_rule("reasoning", "claude");
+            router.add_rule("sensitive", "claude");
+        }
+        if available.contains(&"ollama".to_string()) {
+            router.add_rule("fast_local", "ollama");
+        }
     }
 
     let (default_provider_name, default_model_name) =
@@ -318,14 +331,20 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     // Use the model router as the embedding provider (MockProvider implements EmbeddingProvider)
     // For the vector DB, use LanceDB with a local path.
     // In dry-run, the VectorDB may fail — use a fallback no-op if unavailable.
+    let lsp_categories = config.lsp.as_ref()
+        .map(|l| l.inject_for_categories.clone())
+        .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
     let skill_executor = build_skill_executor(
         model_router.clone() as Arc<dyn ModelProvider>,
+        config,
         &vectordb_path_str,
         &memory_store,
         &skills_dir,
         is_dry_run,
     )
-    .await?;
+    .await?
+    .with_router(model_router.clone())
+    .with_lsp_categories(lsp_categories);
     let skill_executor = Arc::new(skill_executor);
 
     // 11. PersonaRegistry — load built-ins + user overrides from ~/.agent007/personas/
@@ -406,20 +425,27 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
 /// Build a SkillExecutor backed by LanceDB (or a no-op VectorDB in dry-run if LanceDB fails).
 async fn build_skill_executor(
     provider: Arc<dyn ModelProvider>,
+    config: &Config,
     vectordb_path: &str,
     memory_store: &Arc<MemoryStore>,
     _skills_dir: &std::path::Path,
     is_dry_run: bool,
 ) -> Result<SkillExecutor> {
-    // Use MockProvider as the embedding provider (dim=384 as a reasonable default).
-    let embedder = Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384))
-        as Arc<dyn agent007_models::EmbeddingProvider>;
+    // Use OllamaEmbeddingProvider if Ollama is configured, else fall back to mock (all-zeros).
+    let (embedder, embed_dim): (Arc<dyn agent007_models::EmbeddingProvider>, usize) =
+        if let Some(ollama) = &config.models.ollama {
+            let ep = OllamaEmbeddingProvider::new(&ollama.base_url, "nomic-embed-text");
+            (Arc::new(ep), 768)
+        } else {
+            let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
+            (Arc::new(ep) as Arc<dyn agent007_models::EmbeddingProvider>, 384)
+        };
 
     // Try to build LanceDB; in dry-run, fall back to a no-op VectorDB if it fails.
     let db: Arc<dyn agent007_memory::VectorDB> = if is_dry_run {
         Arc::new(NoOpVectorDB)
     } else {
-        let store = LanceDBStore::new(vectordb_path, "skills", 384).await
+        let store = LanceDBStore::new(vectordb_path, "skills", embed_dim).await
             .map_err(|e| anyhow::anyhow!("failed to open LanceDB at {}: {}", vectordb_path, e))?;
         Arc::new(store)
     };

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 agent007-models = { path = "../models" }
 agent007-memory = { path = "../memory" }
+agent007-lsp-client = { path = "../lsp-client" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
