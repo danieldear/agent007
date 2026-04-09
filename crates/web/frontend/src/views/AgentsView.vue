@@ -7,11 +7,22 @@ const personas = ref([])
 const showForm = ref(false)
 const editTarget = ref(null)
 
+const KNOWN_TOOLS = [
+  { name: 'bash',       desc: 'shell execution' },
+  { name: 'file_read',  desc: 'read files' },
+  { name: 'file_write', desc: 'create files' },
+  { name: 'file_edit',  desc: 'modify files' },
+  { name: 'web_search', desc: 'search the web' },
+  { name: 'web_fetch',  desc: 'fetch URLs' },
+]
+const KNOWN_TOOL_NAMES = KNOWN_TOOLS.map(t => t.name)
+
 const form = ref({
   name: '',
   description: '',
   preferred_model: 'codex',
-  allowed_tools: '',
+  allowed_tools: [],
+  custom_tools: '',
   system_prompt: '',
 })
 
@@ -24,26 +35,32 @@ async function loadPersonas() {
 
 function openCreate() {
   editTarget.value = null
-  form.value = { name: '', description: '', preferred_model: 'codex', allowed_tools: '', system_prompt: '' }
+  form.value = { name: '', description: '', preferred_model: 'codex', allowed_tools: [], custom_tools: '', system_prompt: '' }
   showForm.value = true
 }
 
 function openEdit(p) {
   editTarget.value = p.name
+  const all = p.allowed_tools || []
   form.value = {
     name: p.name,
     description: p.description || '',
     preferred_model: p.preferred_model || 'codex',
-    allowed_tools: (p.allowed_tools || []).join(', '),
+    allowed_tools: all.filter(t => KNOWN_TOOL_NAMES.includes(t)),
+    custom_tools: all.filter(t => !KNOWN_TOOL_NAMES.includes(t)).join(', '),
     system_prompt: p.system_prompt || '',
   }
   showForm.value = true
 }
 
 async function savePersona() {
+  const custom = form.value.custom_tools.split(',').map(s => s.trim()).filter(Boolean)
   const payload = {
-    ...form.value,
-    allowed_tools: form.value.allowed_tools.split(',').map(s => s.trim()).filter(Boolean),
+    name: form.value.name,
+    description: form.value.description,
+    preferred_model: form.value.preferred_model,
+    system_prompt: form.value.system_prompt,
+    allowed_tools: [...form.value.allowed_tools, ...custom],
   }
   await api.savePersona(payload)
   showForm.value = false
@@ -54,6 +71,14 @@ async function deletePersona(name) {
   if (!confirm(`Delete agent "${name}"?`)) return
   await api.deletePersona(name)
   await loadPersonas()
+}
+
+function selectAllTools() {
+  form.value.allowed_tools = [...KNOWN_TOOL_NAMES]
+}
+
+function clearAllTools() {
+  form.value.allowed_tools = []
 }
 </script>
 
@@ -161,8 +186,42 @@ async function deletePersona(name) {
 
           <!-- Allowed tools -->
           <div>
-            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">allowed tools <span class="normal-case text-base-content/25">(comma-separated)</span></div>
-            <input v-model="form.allowed_tools" class="persona-input w-full font-mono" placeholder="bash, file_read, file_write" />
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest">allowed tools</div>
+              <div class="flex gap-2 items-center">
+                <button type="button" class="text-[10px] font-mono text-primary/60 hover:text-primary transition-colors" @click="selectAllTools">all</button>
+                <span class="text-base-content/20 text-[10px]">·</span>
+                <button type="button" class="text-[10px] font-mono text-base-content/35 hover:text-base-content/70 transition-colors" @click="clearAllTools">none</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              <label
+                v-for="tool in KNOWN_TOOLS"
+                :key="tool.name"
+                class="flex items-center gap-2 px-2.5 py-2 rounded border cursor-pointer transition-all select-none"
+                :class="form.allowed_tools.includes(tool.name)
+                  ? 'bg-primary/10 border-primary/40 text-primary'
+                  : 'bg-base-200 border-base-300 text-base-content/50 hover:border-base-content/30'"
+              >
+                <input type="checkbox" class="hidden" :value="tool.name" v-model="form.allowed_tools" />
+                <span
+                  class="w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center text-[8px] leading-none transition-colors"
+                  :class="form.allowed_tools.includes(tool.name)
+                    ? 'bg-primary border-primary text-primary-content'
+                    : 'bg-base-300 border-base-content/20'"
+                >{{ form.allowed_tools.includes(tool.name) ? '✓' : '' }}</span>
+                <span class="text-[11px] font-mono font-semibold">{{ tool.name }}</span>
+                <span class="text-[9px] font-mono text-base-content/30 ml-auto truncate">{{ tool.desc }}</span>
+              </label>
+            </div>
+            <!-- Custom tools fallback -->
+            <div class="mt-2">
+              <input
+                v-model="form.custom_tools"
+                class="persona-input w-full text-[11px]"
+                placeholder="+ additional tools (comma-separated)"
+              />
+            </div>
           </div>
 
           <!-- System prompt -->
