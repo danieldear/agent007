@@ -3054,6 +3054,8 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
              After completing, call agent007_record_tokens with run_id={run_id}, actual tokens used, and your model name.\n\
              Task: {description}"
         );
+        // task-submit semantics: the submission itself completed — finish immediately.
+        let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
 }
