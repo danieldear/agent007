@@ -241,16 +241,16 @@ async function importBundle() {
             <!-- Selection summary + export button -->
             <div class="card-actions mt-5 items-center justify-between flex-wrap gap-2">
               <div class="flex gap-2 flex-wrap">
-                <span v-if="selectedSkills.length" class="badge badge-primary badge-sm">
+                <span v-if="selectedSkills.length" class="badge badge-primary badge-xs">
                   {{ selectedSkills.length }} skill{{ selectedSkills.length !== 1 ? 's' : '' }}
                 </span>
-                <span v-if="selectedWorkflows.length" class="badge badge-secondary badge-sm">
+                <span v-if="selectedWorkflows.length" class="badge badge-secondary badge-xs">
                   {{ selectedWorkflows.length }} workflow{{ selectedWorkflows.length !== 1 ? 's' : '' }}
                 </span>
                 <span v-if="!selectedSkills.length && !selectedWorkflows.length"
                   class="text-[11px] font-mono text-base-content/30">nothing selected</span>
               </div>
-              <button class="btn btn-sm btn-primary font-mono"
+              <button class="btn btn-xs btn-primary font-mono"
                 :disabled="exporting || (selectedSkills.length === 0 && selectedWorkflows.length === 0)"
                 @click="exportBundle">
                 <span v-if="exporting" class="loading loading-spinner loading-xs"></span>

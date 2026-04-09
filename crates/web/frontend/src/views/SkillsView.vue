@@ -508,18 +508,18 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
 
 <style scoped>
 .skill-input {
-  background: oklch(var(--b3));
-  border: 1px solid oklch(var(--bc) / 0.18);
+  background: var(--color-base-300, var(--b3));
+  border: 1px solid color-mix(in oklch, var(--color-base-content, var(--bc)) 20%, transparent);
   border-radius: 0.375rem;
   padding: 0.375rem 0.625rem;
   font-size: 0.8125rem;
   font-family: ui-monospace, 'Cascadia Code', monospace;
-  color: oklch(var(--bc));
+  color: var(--color-base-content, var(--bc));
   outline: none;
   transition: border-color 0.15s;
 }
 .skill-input:focus {
-  border-color: oklch(var(--p) / 0.5);
+  border-color: color-mix(in oklch, var(--color-primary, var(--p)) 50%, transparent);
 }
 .skill-input:disabled {
   opacity: 0.4;

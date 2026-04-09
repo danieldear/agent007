@@ -322,7 +322,7 @@ const promptVars = [
                 <p class="text-xs text-base-content/60 leading-relaxed mb-3">
                   The standard step. Runs a single persona with a prompt and stores the result in an output variable. Most workflow steps are agents.
                 </p>
-                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                   <div>- <span class="text-primary">id</span>: analyze</div>
                   <div class="pl-2"><span class="text-primary">agent</span>: Researcher</div>
                   <div class="pl-2"><span class="text-primary">prompt</span>: Analyze &#123;&#123;task&#125;&#125;</div>
@@ -346,7 +346,7 @@ const promptVars = [
                 <p class="text-xs text-base-content/60 leading-relaxed mb-3">
                   Runs a step and checks its JSON output for a decision field. If the verdict is <code class="bg-base-300 px-1 rounded">pass</code>, the workflow moves forward; otherwise it retries up to <strong>max_retries</strong> times.
                 </p>
-                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                   <div>- <span class="text-orange-400">id</span>: check</div>
                   <div class="pl-2"><span class="text-orange-400">type</span>: evaluator</div>
                   <div class="pl-2"><span class="text-orange-400">evaluate</span>:</div>
@@ -373,7 +373,7 @@ const promptVars = [
                 <p class="text-xs text-base-content/60 leading-relaxed mb-3">
                   Classifies input and branches to a different step based on named routes. The prompt should output a classification string that matches a <code class="bg-base-300 px-1 rounded">when</code> condition.
                 </p>
-                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                   <div>- <span class="text-purple-400">id</span>: classify</div>
                   <div class="pl-2"><span class="text-purple-400">type</span>: router</div>
                   <div class="pl-2"><span class="text-purple-400">routes</span>:</div>
@@ -400,7 +400,7 @@ const promptVars = [
                 <p class="text-xs text-base-content/60 leading-relaxed mb-3">
                   Pauses the workflow and waits for a human decision before continuing. The run stays in <code class="bg-base-300 px-1 rounded">pending_approval</code> state until approved or denied via the API.
                 </p>
-                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                   <div>- <span class="text-amber-400">id</span>: gate</div>
                   <div class="pl-2"><span class="text-amber-400">agent</span>: Architect</div>
                   <div class="pl-2"><span class="text-amber-400">requires_approval</span>: true</div>
@@ -425,7 +425,7 @@ const promptVars = [
                   A fan-out coordinator. Dispatches the same task to multiple named <strong>worker steps</strong> in parallel and aggregates their results into a single output. Useful when you want several specialists to tackle the same problem independently.
                 </p>
                 <div class="grid grid-cols-2 gap-3">
-                  <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                  <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                     <div>- <span class="text-teal-400">id</span>: orchestrate</div>
                     <div class="pl-2"><span class="text-teal-400">type</span>: orchestrator</div>
                     <div class="pl-2"><span class="text-teal-400">agent</span>: Planner</div>
