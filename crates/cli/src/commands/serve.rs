@@ -2067,6 +2067,11 @@ fn hosted_model_label() -> String {
 /// Called via the `agent007_record_tokens` MCP tool after the host finishes its LLM work.
 fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option<&str>) -> Result<()> {
     let store = load_run_store();
+    // Idempotency guard: if the run is already finished, a host retry would
+    // double-count tokens (append_event succeeds before finish_run is reached).
+    if store.load_run(run_id).map(|d| d.metadata.finished_at.is_some()).unwrap_or(false) {
+        return Ok(());
+    }
     store.append_event(
         run_id,
         &AgentEvent::ModelRequest {
