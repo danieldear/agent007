@@ -204,7 +204,7 @@ async function importBundle() {
                       :class="s.source === 'global'
                         ? 'badge-ghost text-base-content/35'
                         : 'badge-warning text-warning-content'">
-                      {{ s.source === 'global' ? 'G' : 'P' }}
+                      {{ s.source === 'global' ? 'Global' : 'Proj' }}
                     </span>
                   </label>
                 </div>
@@ -231,7 +231,7 @@ async function importBundle() {
                       :class="w.source === 'global'
                         ? 'badge-ghost text-base-content/35'
                         : 'badge-warning text-warning-content'">
-                      {{ w.source === 'global' ? 'G' : 'P' }}
+                      {{ w.source === 'global' ? 'Global' : 'Proj' }}
                     </span>
                   </label>
                 </div>

@@ -113,46 +113,101 @@ async function deletePersona(name) {
 
     <!-- Create/Edit modal -->
     <dialog :open="showForm" class="modal" :class="{ 'modal-open': showForm }">
-      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
-        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">
-          {{ editTarget ? `edit · ${editTarget}` : 'create agent' }}
+      <div class="modal-box max-w-2xl bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden">
+        <!-- Header bar -->
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">
+            {{ editTarget ? `edit · ${editTarget}` : 'create agent' }}
+          </span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showForm = false; editTarget = null">✕</button>
         </div>
 
-        <div class="space-y-3">
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
-            <input v-model="form.name" class="input input-sm input-bordered font-mono" :disabled="!!editTarget" />
+        <!-- Body -->
+        <div class="p-5 space-y-4">
+          <!-- Name -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">name</div>
+            <input
+              v-model="form.name"
+              class="persona-input w-full"
+              placeholder="My Agent"
+              :disabled="!!editTarget"
+              :class="{ 'opacity-40 cursor-not-allowed': !!editTarget }"
+            />
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
-            <input v-model="form.description" class="input input-sm input-bordered font-mono" />
+
+          <!-- Description -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">description</div>
+            <input v-model="form.description" class="persona-input w-full" placeholder="What this agent specialises in" />
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">preferred model</span></label>
-            <select v-model="form.preferred_model" class="select select-sm select-bordered font-mono">
-              <option>codex</option>
-              <option>gpt-5.3-codex</option>
-              <option>claude</option>
-              <option>claude-sonnet-4-6</option>
-              <option>ollama</option>
-            </select>
+
+          <!-- Preferred model (pill buttons) -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">preferred model</div>
+            <div class="flex gap-1.5 flex-wrap">
+              <button
+                v-for="m in ['codex', 'gpt-5.3-codex', 'claude', 'claude-sonnet-4-6', 'ollama']"
+                :key="m"
+                type="button"
+                class="px-3 py-1 text-[11px] font-mono rounded border transition-colors"
+                :class="form.preferred_model === m
+                  ? 'bg-primary/15 border-primary/50 text-primary'
+                  : 'bg-base-200 border-base-300 text-base-content/50 hover:border-base-content/30'"
+                @click="form.preferred_model = m"
+              >{{ m }}</button>
+            </div>
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">allowed tools (comma-separated)</span></label>
-            <input v-model="form.allowed_tools" class="input input-sm input-bordered font-mono" placeholder="bash, file_read, file_write" />
+
+          <!-- Allowed tools -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">allowed tools <span class="normal-case text-base-content/25">(comma-separated)</span></div>
+            <input v-model="form.allowed_tools" class="persona-input w-full font-mono" placeholder="bash, file_read, file_write" />
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">system prompt</span></label>
-            <textarea v-model="form.system_prompt" class="textarea textarea-bordered text-sm font-mono" rows="8" />
+
+          <!-- System prompt -->
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">system prompt</div>
+            <textarea
+              v-model="form.system_prompt"
+              class="w-full bg-base-200 border border-base-content/15 rounded text-[13px] font-mono text-base-content/80 p-3 h-52 resize-y focus:outline-none focus:border-primary/50 transition-colors leading-relaxed"
+              placeholder="You are a specialized agent that..."
+            />
           </div>
         </div>
 
-        <div class="modal-action">
-          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showForm = false">cancel</button>
-          <button class="btn btn-sm btn-primary font-mono text-xs" @click="savePersona">save</button>
+        <!-- Footer -->
+        <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-ghost font-mono text-xs px-4" @click="showForm = false; editTarget = null">cancel</button>
+          <button
+            class="btn btn-sm btn-primary font-mono text-xs px-4"
+            @click="savePersona"
+            :disabled="!form.name"
+          >{{ editTarget ? 'save changes' : 'save agent' }}</button>
         </div>
       </div>
-      <form method="dialog" class="modal-backdrop"><button @click="showForm = false">close</button></form>
+      <form method="dialog" class="modal-backdrop"><button @click="showForm = false; editTarget = null">close</button></form>
     </dialog>
   </div>
 </template>
+
+<style scoped>
+.persona-input {
+  background: oklch(var(--b3));
+  border: 1px solid oklch(var(--bc) / 0.18);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  color: oklch(var(--bc));
+  outline: none;
+  transition: border-color 0.15s;
+}
+.persona-input:focus {
+  border-color: oklch(var(--p) / 0.5);
+}
+.persona-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+</style>

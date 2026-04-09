@@ -509,7 +509,7 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
 <style scoped>
 .skill-input {
   background: oklch(var(--b3));
-  border: 1px solid oklch(var(--b3) / 0.8);
+  border: 1px solid oklch(var(--bc) / 0.18);
   border-radius: 0.375rem;
   padding: 0.375rem 0.625rem;
   font-size: 0.8125rem;
