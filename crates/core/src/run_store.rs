@@ -204,7 +204,11 @@ impl RunStore {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            if matches!(metadata.status, RunStatus::Running | RunStatus::AwaitingApproval)
+            // Only fail truly stale Running runs. AwaitingApproval runs with
+            // finished_at=None come from the hosted workflow path (update_run_status)
+            // and represent legitimate human-in-the-loop pauses — failing them on
+            // restart is incorrect. They persist so the user can resume or cancel manually.
+            if matches!(metadata.status, RunStatus::Running)
                 && metadata.finished_at.is_none()
             {
                 metadata.status = RunStatus::Failed;
