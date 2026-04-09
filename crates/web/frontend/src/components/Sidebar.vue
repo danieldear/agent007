@@ -19,7 +19,7 @@ onMounted(async () => {
 
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
-  { id: 'agents',    label: 'Agents',    symbol: '◉' },
+  { id: 'agents',    label: 'Personas',  symbol: '◉' },
   { id: 'skills',    label: 'Skills',    symbol: '⚡' },
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
   { id: 'memory',    label: 'Memory',    symbol: '◈' },

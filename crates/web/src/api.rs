@@ -148,6 +148,26 @@ pub async fn skills_handler(
     let project_dir = agent007_project_home().map(|p| p.join("skills"));
     let global_dir = agent007_global_home().join("skills");
 
+    // Pre-compute triggers available in the global dir so we can detect built-in skills
+    // that were seeded into the project dir during `init` — those should show as "global".
+    let global_triggers: std::collections::HashSet<String> = {
+        let mut s = std::collections::HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(&global_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(fm) = parse_frontmatter(&content) {
+                        if let Some(t) = fm.get("trigger").and_then(|v| v.as_str()) {
+                            s.insert(t.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        s
+    };
+
     let mut skills: Vec<Value> = Vec::new();
     let mut seen_triggers: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -173,8 +193,15 @@ pub async fn skills_handler(
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    if seen_triggers.insert(trigger) {
-                        fm["source"] = Value::String(source.to_string());
+                    if seen_triggers.insert(trigger.clone()) {
+                        // A project-local skill that also exists in the global dir is a built-in
+                        // seeded by `init`; show it as "global" to avoid PROJ badge confusion.
+                        let effective_source = if *source == "project" && global_triggers.contains(&trigger) {
+                            "global"
+                        } else {
+                            source
+                        };
+                        fm["source"] = Value::String(effective_source.to_string());
                         skills.push(fm);
                     }
                 }
@@ -210,17 +237,7 @@ pub async fn skills_run_handler(
     let db = Arc::new(NoOpVectorDB) as Arc<dyn agent007_memory::VectorDB>;
     let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
 
-    let tmp = match tempfile::TempDir::new() {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    };
-    let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(tmp.path()));
+    let memory_store = memory_store_for_web();
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
         agent007_global_home().join("memory")
@@ -807,14 +824,49 @@ fn workflow_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
+    let sanitized = raw
+        .trim()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
 pub async fn workflows_list_handler(
     State(_state): State<AppState>,
 ) -> impl IntoResponse {
     let global = agent007_global_home().join("workflows");
+
+    // Pre-compute workflow names present in the global dir so project-local copies
+    // of built-in workflows (seeded by `init`) are shown as "global", not "project".
+    let global_names: std::collections::HashSet<String> = {
+        let mut s = std::collections::HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(&global) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str());
+                if ext == Some("yaml") || ext == Some("yml") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        s.insert(stem.to_string());
+                    }
+                }
+            }
+        }
+        s
+    };
+
     let mut seen = std::collections::HashSet::new();
     let mut result: Vec<Value> = Vec::new();
     for wf_dir in workflow_dirs() {
-        let source = if wf_dir == global { "global" } else { "project" };
+        let is_global = wf_dir == global;
         if let Ok(entries) = std::fs::read_dir(&wf_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -822,6 +874,11 @@ pub async fn workflows_list_handler(
                 if ext == Some("yaml") || ext == Some("yml") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         if seen.insert(stem.to_string()) {
+                            let source = if is_global || global_names.contains(stem) {
+                                "global"
+                            } else {
+                                "project"
+                            };
                             result.push(serde_json::json!({
                                 "name": stem,
                                 "source": source,
@@ -842,9 +899,19 @@ pub async fn workflow_get_handler(
     State(_state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let requested = name.trim();
+    let safe_name = sanitize_file_stem(requested, "");
+    if safe_name.is_empty() || safe_name != requested {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid workflow name" })),
+        )
+            .into_response();
+    }
+
     let path = workflow_dirs()
         .into_iter()
-        .flat_map(|dir| [dir.join(format!("{name}.yaml")), dir.join(format!("{name}.yml"))])
+        .flat_map(|dir| [dir.join(format!("{safe_name}.yaml")), dir.join(format!("{safe_name}.yml"))])
         .find(|p| p.exists());
     let Some(path) = path else {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response();
@@ -1129,7 +1196,10 @@ pub async fn workflow_save_handler(
     State(_state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> impl IntoResponse {
-    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("untitled");
+    let name = sanitize_file_stem(
+        payload.get("name").and_then(|v| v.as_str()).unwrap_or("untitled"),
+        "untitled",
+    );
     let wf_dir = agent007_write_home().join("workflows");
     if let Err(e) = std::fs::create_dir_all(&wf_dir) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
@@ -1139,7 +1209,11 @@ pub async fn workflow_save_handler(
     match serde_yaml::to_string(&payload) {
         Ok(yaml) => {
             match std::fs::write(&path, &yaml) {
-                Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() })).into_response(),
+                Ok(()) => Json(serde_json::json!({
+                    "ok": true,
+                    "name": name,
+                    "path": path.display().to_string()
+                })).into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
             }
         }
@@ -1163,6 +1237,14 @@ pub struct SkillGenerateRequest {
     pub name: String,
     pub description: String,
     pub category: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SkillFrontmatter<'a> {
+    name: &'a str,
+    trigger: &'a str,
+    description: &'a str,
+    model: &'a str,
 }
 
 /// Generate a skill prompt template from the name + description.
@@ -1243,15 +1325,32 @@ pub async fn skill_save_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
 
-    let filename = payload.name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect::<String>();
+    let filename = sanitize_file_stem(&payload.name, "skill");
     let path = skills_dir.join(format!("{filename}.md"));
     let model = payload.model.as_deref().unwrap_or("codex");
 
+    let mut frontmatter_yaml = match serde_yaml::to_string(&SkillFrontmatter {
+        name: &payload.name,
+        trigger: &payload.trigger,
+        description: &payload.description,
+        model,
+    }) {
+        Ok(yaml) => yaml,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    if let Some(stripped) = frontmatter_yaml.strip_prefix("---\n") {
+        frontmatter_yaml = stripped.to_string();
+    }
     let content = format!(
-        "---\nname: {}\ntrigger: {}\ndescription: {}\nmodel: {}\n---\n{}\n",
-        payload.name, payload.trigger, payload.description, model, payload.template,
+        "---\n{}---\n{}\n",
+        frontmatter_yaml,
+        payload.template.trim_end()
     );
 
     match std::fs::write(&path, &content) {
@@ -1583,7 +1682,13 @@ pub async fn skill_promote_handler(
     };
 
     let src = entry.path();
-    let filename = src.file_name().unwrap().to_string_lossy().to_string();
+    let Some(filename) = src.file_name().map(|f| f.to_string_lossy().to_string()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "invalid skill filename" })),
+        )
+            .into_response();
+    };
     let _ = std::fs::create_dir_all(&global_skills);
     let dest = global_skills.join(&filename);
 
@@ -1595,10 +1700,14 @@ pub async fn skill_promote_handler(
     }
 
     match std::fs::copy(&src, &dest) {
-        Ok(_) => Json(serde_json::json!({
-            "ok": true,
-            "promoted_to": dest.display().to_string()
-        })).into_response(),
+        Ok(_) => {
+            // Remove the project-local copy so the skill no longer appears as PROJ
+            let _ = std::fs::remove_file(&src);
+            Json(serde_json::json!({
+                "ok": true,
+                "promoted_to": dest.display().to_string()
+            })).into_response()
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }
 }
@@ -1608,11 +1717,21 @@ pub async fn workflow_promote_handler(
     State(_state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let requested = name.trim();
+    let safe_name = sanitize_file_stem(requested, "");
+    if safe_name.is_empty() || safe_name != requested {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid workflow name" })),
+        )
+            .into_response();
+    }
+
     let project_wf = agent007_project_home().map(|p| p.join("workflows"));
     let global_wf = agent007_global_home().join("workflows");
 
     let src = project_wf.and_then(|dir| {
-        [dir.join(format!("{name}.yaml")), dir.join(format!("{name}.yml"))]
+        [dir.join(format!("{safe_name}.yaml")), dir.join(format!("{safe_name}.yml"))]
             .into_iter()
             .find(|p| p.exists())
     });
@@ -1621,7 +1740,13 @@ pub async fn workflow_promote_handler(
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "workflow not found in project" }))).into_response();
     };
 
-    let filename = src.file_name().unwrap().to_string_lossy().to_string();
+    let Some(filename) = src.file_name().map(|f| f.to_string_lossy().to_string()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "invalid workflow filename" })),
+        )
+            .into_response();
+    };
     let _ = std::fs::create_dir_all(&global_wf);
     let dest = global_wf.join(&filename);
 
@@ -1633,10 +1758,14 @@ pub async fn workflow_promote_handler(
     }
 
     match std::fs::copy(&src, &dest) {
-        Ok(_) => Json(serde_json::json!({
-            "ok": true,
-            "promoted_to": dest.display().to_string()
-        })).into_response(),
+        Ok(_) => {
+            // Remove the project-local copy so the workflow no longer appears as PROJ
+            let _ = std::fs::remove_file(&src);
+            Json(serde_json::json!({
+                "ok": true,
+                "promoted_to": dest.display().to_string()
+            })).into_response()
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }
 }

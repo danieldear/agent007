@@ -9,6 +9,7 @@ import AgentNode from '../components/AgentNode.vue'
 import EvaluatorNode from '../components/EvaluatorNode.vue'
 import RouterNode from '../components/RouterNode.vue'
 import ApprovalNode from '../components/ApprovalNode.vue'
+import OrchestratorNode from '../components/OrchestratorNode.vue'
 
 const { api } = useApi()
 const workflows = ref([])
@@ -61,6 +62,7 @@ const nodeTypes = {
   evaluator: EvaluatorNode,
   router: RouterNode,
   approval: ApprovalNode,
+  orchestrator: OrchestratorNode,
 }
 
 const contextMenu = ref({ show: false, x: 0, y: 0, type: null, targetId: null })
@@ -106,6 +108,8 @@ const nodeEditorForm = ref({
   evaluate: { decision_field: 'verdict', on_pass: '', on_fail: '', max_retries: 3 },
   // router fields
   routes: [],
+  // orchestrator fields
+  workers: [],
 })
 const editingNodeType = ref('agent')
 
@@ -199,6 +203,7 @@ function openNodeEditor(nodeId) {
     routes: node.data.routes
       ? node.data.routes.map(r => ({ ...r }))
       : [{ when: '', goto: '' }, { goto: '', default: true }],
+    workers: node.data.workers ? [...node.data.workers] : [],
   }
   showNodeEditor.value = true
 }
@@ -219,6 +224,8 @@ function saveNodeEdit() {
     updated.data.evaluate = { ...nodeEditorForm.value.evaluate }
   } else if (editingNodeType.value === 'router') {
     updated.data.routes = nodeEditorForm.value.routes.map(r => ({ ...r }))
+  } else if (editingNodeType.value === 'orchestrator') {
+    updated.data.workers = [...(nodeEditorForm.value.workers || [])]
   }
 
   nodes.value = [
@@ -368,6 +375,23 @@ function addApprovalNode() {
   })
 }
 
+function addOrchestratorNode() {
+  nodeCounter++
+  const id = `orchestrator-${nodeCounter}`
+  nodes.value.push({
+    id,
+    type: 'orchestrator',
+    position: { x: 150 + (nodeCounter % 4) * 250, y: 100 + Math.floor(nodeCounter / 4) * 180 },
+    data: {
+      label: id,
+      agent: 'Planner',
+      prompt: 'Coordinate the following task across your workers: {{task}}',
+      output: `${id}_result`,
+      workers: [],
+    },
+  })
+}
+
 function exportYaml() {
   const currentNodes = getNodes.value
   const currentEdges = getEdges.value
@@ -391,6 +415,9 @@ function exportYaml() {
       step.routes = n.data.routes
     } else if (n.type === 'approval') {
       step.requires_approval = true
+    } else if (n.type === 'orchestrator') {
+      step.type = 'orchestrator'
+      if (n.data.workers?.length) step.workers = n.data.workers
     }
 
     return step
@@ -617,6 +644,37 @@ async function loadTemplate(tplName) {
               <span class="text-amber-400">⏸</span> Approval Gate
               <span class="ml-auto text-base-content/30 text-[10px]">human</span>
             </button>
+            <button class="btn btn-ghost btn-xs justify-start w-full text-xs" @click="addOrchestratorNode">
+              <span class="text-teal-400">⬡</span> Orchestrator
+              <span class="ml-auto text-base-content/30 text-[10px]">fan-out</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Node Legend / Documentation -->
+        <div class="p-3 border-b border-base-300">
+          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Node Guide</div>
+          <div class="space-y-2 text-[10px] font-mono text-base-content/50">
+            <div>
+              <span class="text-primary font-bold">◉ Agent</span>
+              <p class="mt-0.5">Runs a single persona step. Connects via <code class="text-base-content/70">depends_on</code> edges. Output stored in the named variable.</p>
+            </div>
+            <div>
+              <span class="text-orange-400 font-bold">↺ Evaluator</span>
+              <p class="mt-0.5">Runs a step and checks its JSON verdict. On <span class="text-green-400">pass</span> continues; on <span class="text-orange-400">fail</span> retries up to <code class="text-base-content/70">max_retries</code> times.</p>
+            </div>
+            <div>
+              <span class="text-purple-400 font-bold">⑂ Router</span>
+              <p class="mt-0.5">Classifies input and branches to a different step based on named <code class="text-base-content/70">routes</code>. Each route has a <code class="text-base-content/70">when</code> condition and <code class="text-base-content/70">goto</code> target.</p>
+            </div>
+            <div>
+              <span class="text-amber-400 font-bold">⏸ Approval Gate</span>
+              <p class="mt-0.5">Pauses the workflow and waits for a human to approve or deny before continuing.</p>
+            </div>
+            <div>
+              <span class="text-teal-400 font-bold">⬡ Orchestrator</span>
+              <p class="mt-0.5">Fan-out coordinator: dispatches subtasks to named <code class="text-base-content/70">workers</code> in parallel and aggregates their results.</p>
+            </div>
           </div>
         </div>
 
@@ -693,6 +751,7 @@ async function loadTemplate(tplName) {
           <span v-if="editingNodeType === 'evaluator'" class="text-orange-400">evaluator</span>
           <span v-else-if="editingNodeType === 'router'" class="text-purple-400">router</span>
           <span v-else-if="editingNodeType === 'approval'" class="text-amber-400">approval gate</span>
+          <span v-else-if="editingNodeType === 'orchestrator'" class="text-teal-400">orchestrator</span>
           <span v-else class="text-primary">agent</span>
         </div>
 
@@ -786,6 +845,26 @@ async function loadTemplate(tplName) {
           <div v-if="editingNodeType === 'approval'" class="border border-amber-500/30 rounded-lg p-3 bg-amber-500/5">
             <h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Approval Gate</h4>
             <p class="text-xs text-base-content/40">This node will pause the workflow and wait for a human decision via <code class="font-mono bg-base-300 px-1 rounded">POST /api/runs/&#123;id&#125;/approval</code> before continuing.</p>
+          </div>
+
+          <!-- Orchestrator config -->
+          <div v-if="editingNodeType === 'orchestrator'" class="space-y-3 border border-teal-500/30 rounded-lg p-3 bg-teal-500/5">
+            <div class="flex items-center justify-between">
+              <h4 class="text-xs font-bold text-teal-400 uppercase tracking-wider">Worker Steps</h4>
+              <button class="btn btn-xs btn-ghost text-teal-400" @click="nodeEditorForm.workers = [...(nodeEditorForm.workers || []), '']">+ Add Worker</button>
+            </div>
+            <p class="text-xs text-base-content/40">List the step IDs that this orchestrator will fan-out to in parallel. Results are aggregated and passed to the next step.</p>
+            <div class="space-y-2">
+              <div v-for="(w, i) in (nodeEditorForm.workers || [])" :key="i" class="flex gap-2 items-center">
+                <input
+                  :value="w"
+                  @input="nodeEditorForm.workers[i] = $event.target.value"
+                  class="input input-xs input-bordered font-mono flex-1"
+                  placeholder="worker-step-id"
+                />
+                <button class="btn btn-xs btn-ghost text-error" @click="nodeEditorForm.workers.splice(i, 1)">✕</button>
+              </div>
+            </div>
           </div>
         </div>
 
