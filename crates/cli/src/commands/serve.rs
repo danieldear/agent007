@@ -2098,7 +2098,8 @@ fn record_estimated_tokens(run_id: &str, prompt_chars: usize, model: &str) {
 }
 
 /// Cost per token in USD (blended input+output at Claude Sonnet rates).
-const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_006;
+// Keep in sync with TOKEN_PRICE_PER_TOKEN_USD in crates/web/src/metrics.rs
+const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_002;
 
 /// Load a HookExecutor by trying the project-local hooks.toml first, then the global one.
 /// Returns None if neither file exists or both fail to parse.

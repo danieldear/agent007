@@ -55,6 +55,7 @@ pub struct TaskLogEntry {
 }
 
 const MAX_RECENT_TASKS: usize = 50;
+// Keep in sync with STATUSLINE_PRICE_PER_TOKEN in crates/cli/src/commands/serve.rs
 const TOKEN_PRICE_PER_TOKEN_USD: f64 = 0.000_002;
 
 impl DashboardMetrics {
