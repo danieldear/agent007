@@ -1124,7 +1124,7 @@ impl ServerHandler for Agent007Server {
                     .and_then(|a| a.get("output"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                match record_actual_tokens(&run_id, tokens, &model) {
+                match record_actual_tokens(&run_id, tokens, &model, output.as_deref()) {
                     Ok(()) => {
                         // If the host passes back the skill output, persist it to project memory
                         if let Some(ref out) = output {
@@ -2064,9 +2064,10 @@ fn hosted_model_label() -> String {
 /// Appends an estimated ModelRequest event so token counts appear in the dashboard.
 /// Estimate: 1 token ≈ 4 characters (GPT/Claude tokenizer rule of thumb).
 /// `model` is the declared model (from skill frontmatter or env var).
-/// Appends an exact ModelRequest event with the actual token count reported by the host LLM.
+/// Appends an exact ModelRequest event with the actual token count reported by the host LLM,
+/// then finishes the run so it transitions from "Running" → "completed" in the dashboard.
 /// Called via the `agent007_record_tokens` MCP tool after the host finishes its LLM work.
-fn record_actual_tokens(run_id: &str, tokens: usize, model: &str) -> Result<()> {
+fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option<&str>) -> Result<()> {
     load_run_store().append_event(
         run_id,
         &AgentEvent::ModelRequest {
@@ -2075,6 +2076,9 @@ fn record_actual_tokens(run_id: &str, tokens: usize, model: &str) -> Result<()> 
             token_estimate: tokens,
         },
     ).map_err(|e| anyhow::anyhow!("{}", e))?;
+    // Transition the run from Running → Succeeded now that the host LLM has finished.
+    let preview = output.unwrap_or("completed");
+    let _ = load_run_store().finish_run(run_id, true, preview);
     write_statusline();
     Ok(())
 }
@@ -2293,7 +2297,6 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
              the actual total tokens you used (input+output), and your model name — this records real token counts in the dashboard.\"}}"
         );
         record_estimated_tokens(&run_id, task.len(), &hosted_model_label());
-        let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
 }
@@ -2348,7 +2351,6 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| skill.model().to_string());
         record_estimated_tokens(&run_id, rendered.len(), &model_label);
-        let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
 }
@@ -2491,7 +2493,6 @@ async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String>
         let run_id = create_delegate_run("workflow", &format!("{name}: {task}"))?;
         let output = workflow_plan(config, name, task).await?;
         record_estimated_tokens(&run_id, output.len(), &hosted_model_label());
-        let _ = load_run_store().finish_run(&run_id, true, &output);
         return Ok(output);
     }
 
@@ -3050,7 +3051,6 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
              After completing, call agent007_record_tokens with run_id={run_id}, actual tokens used, and your model name.\n\
              Task: {description}"
         );
-        let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
 }
