@@ -2296,7 +2296,6 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
              IMPORTANT: After you finish, call agent007_record_tokens with run_id={run_id}, \
              the actual total tokens you used (input+output), and your model name — this records real token counts in the dashboard.\"}}"
         );
-        record_estimated_tokens(&run_id, task.len(), &hosted_model_label());
         Ok(output)
     }
 }
@@ -2344,13 +2343,8 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
              so future invocations have context and use fewer tokens).\n",
             skill.name(), trigger, run_id, rendered, run_id,
         );
-        // Use the model declared in the skill's frontmatter (e.g. "claude-sonnet-4-6").
-        // If the user set AGENT007_HOST_MODEL it overrides.
-        let model_label = std::env::var("AGENT007_HOST_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| skill.model().to_string());
-        record_estimated_tokens(&run_id, rendered.len(), &model_label);
+        // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
+        // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
         Ok(output)
     }
 }
@@ -2491,8 +2485,17 @@ fn workflow_list() -> Result<Vec<String>> {
 async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String> {
     if !standalone_mode_available(config) {
         let run_id = create_delegate_run("workflow", &format!("{name}: {task}"))?;
-        let output = workflow_plan(config, name, task).await?;
-        record_estimated_tokens(&run_id, output.len(), &hosted_model_label());
+        let plan = workflow_plan(config, name, task).await?;
+        // Append run_id + completion instructions so the host LLM can call record_tokens
+        // when done — matching the same pattern used by run_skill_mcp and run_task.
+        let output = format!(
+            "{plan}\n\n\
+             [HOSTED-MCP] Workflow run_id: {run_id}\n\
+             After completing all workflow steps, call agent007_record_tokens with \
+             run_id={run_id}, actual total tokens used (input+output), and your model name."
+        );
+        // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
+        // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
         return Ok(output);
     }
 
