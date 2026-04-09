@@ -167,6 +167,17 @@ impl RunStore {
         Ok(metadata)
     }
 
+    /// Update the provider field in a run's metadata so the dashboard shows
+    /// the real model name (e.g. "claude-sonnet-4-6") instead of "hosted-mcp".
+    /// Silently succeeds if the run does not exist.
+    pub fn set_provider(&self, run_id: &str, provider: &str) -> Result<(), CoreError> {
+        if let Ok(mut metadata) = self.load_metadata(run_id) {
+            metadata.provider = Some(provider.to_string());
+            self.write_metadata(&metadata)?;
+        }
+        Ok(())
+    }
+
     /// On server startup, mark any runs that are still in `Running` or
     /// `AwaitingApproval` state as `Failed` with `finished_at = now`.
     /// This prevents stale runs (left open by a crash or SIGKILL) from

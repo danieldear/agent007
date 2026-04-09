@@ -2061,14 +2061,13 @@ fn hosted_model_label() -> String {
     std::env::var("AGENT007_HOST_MODEL").unwrap_or_else(|_| "hosted-mcp".to_string())
 }
 
-/// Appends an estimated ModelRequest event so token counts appear in the dashboard.
-/// Estimate: 1 token ≈ 4 characters (GPT/Claude tokenizer rule of thumb).
-/// `model` is the declared model (from skill frontmatter or env var).
 /// Appends an exact ModelRequest event with the actual token count reported by the host LLM,
+/// updates RunMetadata.provider with the real model name so the dashboard shows it correctly,
 /// then finishes the run so it transitions from "Running" → "completed" in the dashboard.
 /// Called via the `agent007_record_tokens` MCP tool after the host finishes its LLM work.
 fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option<&str>) -> Result<()> {
-    load_run_store().append_event(
+    let store = load_run_store();
+    store.append_event(
         run_id,
         &AgentEvent::ModelRequest {
             provider: model.to_string(),
@@ -2076,9 +2075,11 @@ fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option
             token_estimate: tokens,
         },
     ).map_err(|e| anyhow::anyhow!("{}", e))?;
+    // Stamp the real model name into metadata so the dashboard shows it (not "hosted-mcp").
+    let _ = store.set_provider(run_id, model);
     // Transition the run from Running → Succeeded now that the host LLM has finished.
     let preview = output.unwrap_or("completed");
-    let _ = load_run_store().finish_run(run_id, true, preview);
+    let _ = store.finish_run(run_id, true, preview);
     write_statusline();
     Ok(())
 }
@@ -3049,12 +3050,14 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
         let run_id = create_delegate_run("task-submit", &description)?;
         let output = format!(
             "Task accepted in hosted MCP mode. ID: {task_id}\n\
-             run_id: {run_id}\n\
-             Host instruction: execute the task directly and persist important results with agent007_memory_write. \
-             After completing, call agent007_record_tokens with run_id={run_id}, actual tokens used, and your model name.\n\
+             Host instruction: execute the task directly and persist important results \
+             with agent007_memory_write.\n\
              Task: {description}"
         );
-        // task-submit semantics: the submission itself completed — finish immediately.
+        // task-submit semantics: the submission is the terminal event — finish immediately.
+        // Do NOT instruct the host to call agent007_record_tokens; this run is already
+        // closed. Calling record_tokens would create a second ModelRequest on top of the
+        // hosted token fallback written by finish_run, double-counting tokens.
         let _ = load_run_store().finish_run(&run_id, true, &output);
         Ok(output)
     }
