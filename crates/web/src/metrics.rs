@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 
 use agent007_core::{
     events::AgentEvent,
-    run_store::{RunStatus, RunStore},
+    run_store::{RunStatus, RunStore, RunTokenSummary},
 };
 use agent007_learning::LearningEvent;
 
@@ -254,6 +254,12 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
 }
 
 fn load_run_token_totals(store: &RunStore, run_id: &str) -> (u64, u32) {
+    if let Ok(Some(summary)) =
+        store.read_json_artifact_optional::<RunTokenSummary>(run_id, "token-summary.json")
+    {
+        return (summary.tokens, summary.requests);
+    }
+
     let detail = match store.load_run(run_id) {
         Ok(detail) => detail,
         Err(_) => return (0, 0),

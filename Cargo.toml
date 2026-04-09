@@ -52,3 +52,8 @@ globset = "0.4"
 axum  = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 petgraph = "0.6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

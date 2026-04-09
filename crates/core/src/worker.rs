@@ -33,7 +33,11 @@ impl WorkerAgent {
         }
 
         // Store prompt in shared PromptStore, emit opaque ref on event bus
-        let prompt_ref = self.prompt_store.lock().unwrap().insert(task.description.clone());
+        let prompt_ref = self
+            .prompt_store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(task.description.clone());
 
         self.dispatcher.publish(AgentEvent::ModelRequest {
             provider: self.provider.name().to_string(),

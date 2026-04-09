@@ -24,6 +24,7 @@ const navItems = [
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
   { id: 'memory',    label: 'Memory',    symbol: '◈' },
   { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },
+  { id: 'help',      label: 'Guide',     symbol: '?' },
 ]
 </script>
 

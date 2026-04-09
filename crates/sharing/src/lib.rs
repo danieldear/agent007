@@ -81,7 +81,9 @@ impl BundleBuilder {
             let path = entry.path();
             let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if !exts.contains(&file_ext) { continue; }
-            let filename = path.file_name().unwrap().to_string_lossy().to_string();
+            let Some(filename) = path.file_name().map(|f| f.to_string_lossy().to_string()) else {
+                continue;
+            };
             if !filter.is_empty() {
                 let stem = path.file_stem().unwrap_or_default().to_string_lossy();
                 if !filter.iter().any(|f| stem.trim_start_matches('/') == f.trim_start_matches('/') || *f == stem.as_ref()) {

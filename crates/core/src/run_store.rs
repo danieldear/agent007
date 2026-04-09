@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
 use crate::events::AgentEvent;
+use crate::types::PromptRef;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -50,15 +51,27 @@ pub struct RunDetail {
     pub artifacts: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunTokenSummary {
+    pub tokens: u64,
+    pub requests: u32,
+}
+
+const TOKEN_SUMMARY_ARTIFACT: &str = "token-summary.json";
+
 #[derive(Debug, Clone)]
 pub struct RunStore {
     base_dir: Arc<PathBuf>,
+    token_summary_lock: Arc<Mutex<()>>,
 }
 
 impl RunStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        let base_dir = base_dir.into();
+        let lock_key = std::fs::canonicalize(&base_dir).unwrap_or_else(|_| base_dir.clone());
         Self {
-            base_dir: Arc::new(base_dir.into()),
+            base_dir: Arc::new(base_dir),
+            token_summary_lock: shared_token_summary_lock(&lock_key),
         }
     }
 
@@ -95,7 +108,11 @@ impl RunStore {
             run_id,
             "agent-event",
             serde_json::to_value(event)?,
-        )
+        )?;
+        if let AgentEvent::ModelRequest { token_estimate, .. } = event {
+            self.bump_token_summary(run_id, *token_estimate)?;
+        }
+        Ok(())
     }
 
     pub fn append_note(&self, run_id: &str, kind: &str, payload: Value) -> Result<(), CoreError> {
@@ -122,10 +139,13 @@ impl RunStore {
         status: RunStatus,
         output_preview: impl AsRef<str>,
     ) -> Result<RunMetadata, CoreError> {
+        let output_preview = output_preview.as_ref();
         let mut metadata = self.load_metadata(run_id)?;
+        self.ensure_hosted_token_fallback(&metadata, output_preview)?;
+        self.ensure_token_summary_artifact(run_id)?;
         metadata.finished_at = Some(Utc::now());
         metadata.status = status;
-        metadata.output_preview = Some(truncate_preview(output_preview.as_ref()));
+        metadata.output_preview = Some(truncate_preview(output_preview));
         self.write_metadata(&metadata)?;
         Ok(metadata)
     }
@@ -352,6 +372,114 @@ impl RunStore {
         }))
     }
 
+    fn ensure_hosted_token_fallback(
+        &self,
+        metadata: &RunMetadata,
+        output_preview: &str,
+    ) -> Result<(), CoreError> {
+        if metadata.mode != "hosted-mcp" || output_preview.trim().is_empty() {
+            return Ok(());
+        }
+        if self.has_model_request_event(&metadata.id)? {
+            return Ok(());
+        }
+        let token_estimate = (output_preview.chars().count() / 4).max(1);
+        let provider = metadata
+            .provider
+            .clone()
+            .unwrap_or_else(|| metadata.mode.clone());
+        self.append_event(
+            &metadata.id,
+            &AgentEvent::ModelRequest {
+                provider,
+                prompt_ref: PromptRef::new(),
+                token_estimate,
+            },
+        )
+    }
+
+    fn has_model_request_event(&self, run_id: &str) -> Result<bool, CoreError> {
+        let log_path = self.events_path(run_id);
+        if !log_path.exists() {
+            return Ok(false);
+        }
+        let file = std::fs::File::open(&log_path)
+            .map_err(|error| CoreError::io(&log_path, error))?;
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            let line = line.map_err(|error| CoreError::io(&log_path, error))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: RunLogEntry = serde_json::from_str(&line)?;
+            if entry.kind != "agent-event" {
+                continue;
+            }
+            if let Ok(AgentEvent::ModelRequest { .. }) =
+                serde_json::from_value::<AgentEvent>(entry.payload)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn bump_token_summary(&self, run_id: &str, token_estimate: usize) -> Result<(), CoreError> {
+        let _guard = self
+            .token_summary_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut summary = self
+            .read_json_artifact_optional::<RunTokenSummary>(run_id, TOKEN_SUMMARY_ARTIFACT)?
+            .unwrap_or_default();
+        summary.tokens += token_estimate as u64;
+        summary.requests += 1;
+        self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
+    }
+
+    fn ensure_token_summary_artifact(&self, run_id: &str) -> Result<(), CoreError> {
+        let _guard = self
+            .token_summary_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self
+            .read_json_artifact_optional::<RunTokenSummary>(run_id, TOKEN_SUMMARY_ARTIFACT)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let summary = self.compute_token_summary(run_id)?;
+        self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
+    }
+
+    fn compute_token_summary(&self, run_id: &str) -> Result<RunTokenSummary, CoreError> {
+        let log_path = self.events_path(run_id);
+        if !log_path.exists() {
+            return Ok(RunTokenSummary::default());
+        }
+        let file = std::fs::File::open(&log_path)
+            .map_err(|error| CoreError::io(&log_path, error))?;
+        let reader = BufReader::new(file);
+        let mut summary = RunTokenSummary::default();
+        for line in reader.lines() {
+            let line = line.map_err(|error| CoreError::io(&log_path, error))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: RunLogEntry = serde_json::from_str(&line)?;
+            if entry.kind != "agent-event" {
+                continue;
+            }
+            if let Ok(AgentEvent::ModelRequest { token_estimate, .. }) =
+                serde_json::from_value::<AgentEvent>(entry.payload)
+            {
+                summary.tokens += token_estimate as u64;
+                summary.requests += 1;
+            }
+        }
+        Ok(summary)
+    }
+
     fn ensure_base_dir(&self) -> Result<(), CoreError> {
         std::fs::create_dir_all(self.base_dir.as_ref())
             .map_err(|error| CoreError::io(self.base_dir.as_ref(), error))
@@ -421,11 +549,21 @@ fn truncate_preview(output: &str) -> String {
     }
 }
 
+fn shared_token_summary_lock(base_dir: &PathBuf) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .entry(base_dir.clone())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dispatcher::{Dispatcher, LocalDispatcher};
-    use crate::types::PromptRef;
 
     #[test]
     fn create_and_finish_run_round_trips() {
@@ -599,5 +737,96 @@ mod tests {
         // The already-finished run should not be touched
         let still_ok = store.load_run(&finished.id).unwrap().metadata;
         assert_eq!(still_ok.status, RunStatus::Succeeded);
+    }
+
+    #[test]
+    fn append_event_updates_token_summary_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("task", "track tokens", "standalone", Some("mock"))
+            .unwrap();
+
+        store
+            .append_event(
+                &run.id,
+                &AgentEvent::ModelRequest {
+                    provider: "mock".to_string(),
+                    prompt_ref: PromptRef::new(),
+                    token_estimate: 42,
+                },
+            )
+            .unwrap();
+
+        let summary: RunTokenSummary = store
+            .read_json_artifact(&run.id, TOKEN_SUMMARY_ARTIFACT)
+            .unwrap();
+        assert_eq!(summary.tokens, 42);
+        assert_eq!(summary.requests, 1);
+    }
+
+    #[test]
+    fn finish_run_adds_hosted_token_fallback_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("workflow", "hosted", "hosted-mcp", None)
+            .unwrap();
+
+        store
+            .finish_run(&run.id, true, "hosted workflow output")
+            .unwrap();
+
+        let summary: RunTokenSummary = store
+            .read_json_artifact(&run.id, TOKEN_SUMMARY_ARTIFACT)
+            .unwrap();
+        assert_eq!(summary.requests, 1);
+        assert!(summary.tokens > 0);
+    }
+
+    #[test]
+    fn token_summary_lock_is_shared_across_store_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_a = RunStore::new(dir.path());
+        let run = store_a
+            .create_run("task", "concurrent tokens", "hosted-mcp", None)
+            .unwrap();
+        let run_id = run.id.clone();
+        let store_b = RunStore::new(dir.path());
+
+        let threads: Vec<_> = (0..2)
+            .map(|idx| {
+                let run_id = run_id.clone();
+                let store = if idx % 2 == 0 {
+                    store_a.clone()
+                } else {
+                    store_b.clone()
+                };
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        store
+                            .append_event(
+                                &run_id,
+                                &AgentEvent::ModelRequest {
+                                    provider: "hosted-mcp".to_string(),
+                                    prompt_ref: PromptRef::new(),
+                                    token_estimate: 1,
+                                },
+                            )
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            thread.join().unwrap();
+        }
+
+        let summary: RunTokenSummary = store_a
+            .read_json_artifact(&run_id, TOKEN_SUMMARY_ARTIFACT)
+            .unwrap();
+        assert_eq!(summary.tokens, 200);
+        assert_eq!(summary.requests, 200);
     }
 }

@@ -2490,6 +2490,7 @@ async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String>
     if !standalone_mode_available(config) {
         let run_id = create_delegate_run("workflow", &format!("{name}: {task}"))?;
         let output = workflow_plan(config, name, task).await?;
+        record_estimated_tokens(&run_id, output.len(), &hosted_model_label());
         let _ = load_run_store().finish_run(&run_id, true, &output);
         return Ok(output);
     }
