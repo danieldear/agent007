@@ -2076,10 +2076,10 @@ fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option
         },
     ).map_err(|e| anyhow::anyhow!("{}", e))?;
     // Stamp the real model name into metadata so the dashboard shows it (not "hosted-mcp").
-    let _ = store.set_provider(run_id, model);
+    store.set_provider(run_id, model).map_err(|e| anyhow::anyhow!("{}", e))?;
     // Transition the run from Running → Succeeded now that the host LLM has finished.
     let preview = output.unwrap_or("completed");
-    let _ = store.finish_run(run_id, true, preview);
+    store.finish_run(run_id, true, preview).map_err(|e| anyhow::anyhow!("{}", e))?;
     write_statusline();
     Ok(())
 }
