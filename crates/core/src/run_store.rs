@@ -418,7 +418,7 @@ impl RunStore {
         )
     }
 
-    fn has_model_request_event(&self, run_id: &str) -> Result<bool, CoreError> {
+    pub fn has_model_request_event(&self, run_id: &str) -> Result<bool, CoreError> {
         let log_path = self.events_path(run_id);
         if !log_path.exists() {
             return Ok(false);
