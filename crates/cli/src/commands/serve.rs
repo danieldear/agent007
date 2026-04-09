@@ -2486,7 +2486,15 @@ fn workflow_list() -> Result<Vec<String>> {
 async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String> {
     if !standalone_mode_available(config) {
         let run_id = create_delegate_run("workflow", &format!("{name}: {task}"))?;
-        let plan = workflow_plan(config, name, task).await?;
+        // workflow_plan can fail (bad YAML, unknown workflow, etc.). Finish the run as
+        // Failed so it never gets left stuck in Running until the next server restart.
+        let plan = match workflow_plan(config, name, task).await {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = load_run_store().finish_run(&run_id, false, e.to_string());
+                return Err(e);
+            }
+        };
         // Append run_id + completion instructions so the host LLM can call record_tokens
         // when done — matching the same pattern used by run_skill_mcp and run_task.
         let output = format!(

@@ -209,9 +209,14 @@ impl RunStore {
             {
                 metadata.status = RunStatus::Failed;
                 metadata.finished_at = Some(Utc::now());
-                metadata.output_preview = Some("terminated: server restarted".to_string());
+                let preview = "terminated: server restarted";
+                metadata.output_preview = Some(preview.to_string());
                 if let Ok(json) = serde_json::to_string_pretty(&metadata) {
                     let _ = std::fs::write(&meta_path, json);
+                    // Synthesize a token fallback and summary so orphaned hosted-mcp runs
+                    // don't show 0 tokens / 0 requests in the dashboard after cleanup.
+                    let _ = self.ensure_hosted_token_fallback(&metadata, preview);
+                    let _ = self.ensure_token_summary_artifact(&metadata.id);
                     cleaned += 1;
                 }
             }
