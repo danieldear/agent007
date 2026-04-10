@@ -217,6 +217,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent007-p2p"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "agent007-personas"
 version = "0.1.0"
 dependencies = [
@@ -325,6 +334,7 @@ dependencies = [
  "agent007-personas",
  "agent007-sharing",
  "agent007-skills",
+ "agent007-testing",
  "agent007-workflows",
  "async-trait",
  "axum",

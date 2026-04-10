@@ -45,10 +45,11 @@ watch(() => props.stats, (v) => {
 const m = computed(() => metrics.value || {
   active_agents: 0, running_tasks: 0, completed_tasks: 0, failed_tasks: 0,
   total_tokens: 0, estimated_usd: 0, avg_reward: 0, session_requests: 0,
+  scorecard_run_count: 0, success_rate: 0, avg_cost_usd: 0, avg_latency_ms: 0, total_retries: 0, avg_retries_per_run: 0,
   feedback_count: 0, prompt_improvements: 0,
   skills_count: 0, workflows_count: 0, personas_count: 0, memory_keys: 0,
   started_at: null, local_execution_available: false, runtime_mode: 'hosted-mcp', model_provider: 'unknown',
-  recent_tasks: [],
+  recent_tasks: [], recent_scorecards: [],
 })
 
 const uptime = computed(() => {
@@ -64,6 +65,13 @@ function fmtTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
   return String(n)
+}
+
+function fmtMs(ms) {
+  if (!ms) return '0ms'
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.round(ms)}ms`
 }
 
 const recentEvents = computed(() => [...(props.events || [])].reverse().slice(0, 50))
@@ -220,6 +228,28 @@ async function submitTask() {
         <div class="bg-base-200 rounded-lg p-4 border-l-2 border-base-content/20">
           <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Uptime</div>
           <div class="text-3xl font-bold font-mono text-base-content tabular-nums">{{ uptime }}</div>
+        </div>
+      </div>
+
+      <!-- Stats Row 3: Scorecard KPIs -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-success/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Success Rate</div>
+          <div class="text-3xl font-bold font-mono text-success tabular-nums">{{ ((m.success_rate || 0) * 100).toFixed(1) }}%</div>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.scorecard_run_count || 0 }} scorecards</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-info/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Latency</div>
+          <div class="text-3xl font-bold font-mono text-info tabular-nums">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-warning/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Cost / Run</div>
+          <div class="text-3xl font-bold font-mono text-warning tabular-nums">${{ (m.avg_cost_usd || 0).toFixed(4) }}</div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-secondary/60">
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Retries</div>
+          <div class="text-3xl font-bold font-mono text-secondary tabular-nums">{{ (m.avg_retries_per_run || 0).toFixed(2) }}</div>
+          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.total_retries || 0 }} total retries</div>
         </div>
       </div>
 

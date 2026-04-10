@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -14,6 +14,7 @@ use agent007_core::paths::{
     agent007_global_home, agent007_home, agent007_project_home, agent007_write_home,
 };
 use agent007_sharing;
+use agent007_testing::{evaluate_kpi_regression, summarize_scorecards, RegressionThresholds};
 use agent007_workflows::{
     WorkflowError, WorkflowLoader, WorkflowRunRequest, WorkflowRunState, WorkflowSourceRef,
 };
@@ -72,6 +73,26 @@ pub struct StatusResponse {
     #[ts(type = "unknown[]")]
     pub tasks: Vec<Value>,
     pub avg_reward: f64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ScorecardsQuery {
+    #[serde(default = "default_scorecards_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RegressionEvaluateQuery {
+    #[serde(default = "default_scorecards_limit")]
+    pub limit: usize,
+    pub min_success_rate: Option<f64>,
+    pub max_avg_cost_usd: Option<f64>,
+    pub max_avg_latency_ms: Option<f64>,
+    pub max_avg_retries: Option<f64>,
+}
+
+fn default_scorecards_limit() -> usize {
+    100
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -469,6 +490,80 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
         }
     }
     Json(snapshot).into_response()
+}
+
+/// `GET /api/scorecards` — recent run scorecards (newest first).
+pub async fn scorecards_handler(Query(query): Query<ScorecardsQuery>) -> impl IntoResponse {
+    let limit = query.limit.clamp(1, 500);
+    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    match store.list_runs(limit) {
+        Ok(runs) => {
+            let mut scorecards = Vec::new();
+            for run in runs {
+                if let Ok(scorecard) = store.ensure_run_scorecard_artifact(&run.id) {
+                    scorecards.push(scorecard);
+                }
+            }
+            Json(serde_json::to_value(scorecards).unwrap_or_else(|_| serde_json::json!([])))
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/regression/evaluate` — compare current KPI snapshot against thresholds.
+pub async fn regression_evaluate_handler(
+    Query(query): Query<RegressionEvaluateQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.clamp(1, 500);
+    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let runs = match store.list_runs(limit) {
+        Ok(runs) => runs,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let mut scorecards = Vec::new();
+    for run in runs {
+        if let Ok(scorecard) = store.ensure_run_scorecard_artifact(&run.id) {
+            scorecards.push(scorecard);
+        }
+    }
+
+    let summary = summarize_scorecards(&scorecards);
+    let mut thresholds = RegressionThresholds::default();
+    if let Some(value) = query.min_success_rate {
+        thresholds.min_success_rate = value;
+    }
+    if let Some(value) = query.max_avg_cost_usd {
+        thresholds.max_avg_cost_usd = value;
+    }
+    if let Some(value) = query.max_avg_latency_ms {
+        thresholds.max_avg_latency_ms = value;
+    }
+    if let Some(value) = query.max_avg_retries {
+        thresholds.max_avg_retries = value;
+    }
+
+    let evaluation = evaluate_kpi_regression(summary.clone(), thresholds.clone());
+    Json(serde_json::json!({
+        "window": limit,
+        "sample_size": scorecards.len(),
+        "summary": summary,
+        "thresholds": thresholds,
+        "passed": evaluation.passed,
+        "violations": evaluation.violations,
+    }))
+    .into_response()
 }
 
 pub async fn runs_handler(State(_state): State<AppState>) -> impl IntoResponse {
@@ -2597,6 +2692,146 @@ mod tests {
             body.get("total_tokens").and_then(|value| value.as_u64()),
             Some(222)
         );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn api_scorecards_returns_recent_scorecards() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        let now = chrono::Utc::now();
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "workflow",
+                "task": "ship scorecards",
+                "mode": "hosted-mcp",
+                "provider": "codex",
+                "started_at": now,
+                "finished_at": now,
+                "status": "succeeded",
+                "output_preview": "done"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("run-scorecard.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "run_id": "session-1",
+                "kind": "workflow",
+                "mode": "hosted-mcp",
+                "provider": "codex",
+                "status": "succeeded",
+                "completed": true,
+                "success": true,
+                "started_at": now,
+                "finished_at": now,
+                "duration_ms": 1500,
+                "tokens": 1000,
+                "requests": 1,
+                "estimated_usd": 0.002,
+                "retry_count": 0,
+                "tool_calls": 0,
+                "tool_errors": 0,
+                "quality_score": 99.0,
+                "updated_at": now
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts.get("/api/scorecards?limit=5").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(body.is_array());
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("run_id").and_then(|v| v.as_str()),
+            Some("session-1")
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn api_regression_evaluate_reports_threshold_failures() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        let now = chrono::Utc::now();
+        for (id, success, cost, retries) in [
+            ("session-1", true, 0.4, 1u32),
+            ("session-2", false, 1.2, 4u32),
+        ] {
+            let session_dir = home.path().join("sessions").join(id);
+            std::fs::create_dir_all(&session_dir).unwrap();
+            std::fs::write(
+                session_dir.join("meta.json"),
+                serde_json::json!({
+                    "id": id,
+                    "kind": "workflow",
+                    "task": "regression sample",
+                    "mode": "hosted-mcp",
+                    "provider": "codex",
+                    "started_at": now,
+                    "finished_at": now,
+                    "status": if success { "succeeded" } else { "failed" },
+                    "output_preview": "done"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(
+                session_dir.join("run-scorecard.json"),
+                serde_json::json!({
+                    "schema_version": 1,
+                    "run_id": id,
+                    "kind": "workflow",
+                    "mode": "hosted-mcp",
+                    "provider": "codex",
+                    "status": if success { "succeeded" } else { "failed" },
+                    "completed": true,
+                    "success": success,
+                    "started_at": now,
+                    "finished_at": now,
+                    "duration_ms": 10_000,
+                    "tokens": 2_000,
+                    "requests": 1,
+                    "estimated_usd": cost,
+                    "retry_count": retries,
+                    "tool_calls": 1,
+                    "tool_errors": if success { 0 } else { 1 },
+                    "quality_score": if success { 90.0 } else { 20.0 },
+                    "updated_at": now
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let ts = test_server();
+        let response = ts
+            .get("/api/regression/evaluate?min_success_rate=0.8&max_avg_cost_usd=0.5&max_avg_retries=1.5")
+            .await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("passed").and_then(|v| v.as_bool()), Some(false));
+        assert!(body
+            .get("violations")
+            .and_then(|v| v.as_array())
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
 
         std::env::remove_var("AGENT007_HOME");
     }

@@ -13,6 +13,11 @@ use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Ro
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind, ApprovalGate};
 use crate::dag::DagValidator;
 use crate::error::WorkflowError;
+use crate::reliability::{
+    apply_degradation, evaluate_budget_decision, evaluate_confidence, evaluate_guardrail,
+    BudgetDecision, EscalationDecision, GuardrailDecision, ReliabilityPolicy,
+    ReliabilityTransition, ReliabilityTransitionKind,
+};
 use crate::state::WorkflowRunState;
 use crate::types::{BudgetUsed, StepType, WorkflowDef, WorkflowResult};
 
@@ -115,12 +120,15 @@ impl WorkflowRunner {
 
         let mut skipped_steps: HashSet<String> = state.skipped_steps.iter().cloned().collect();
         let mut completed_steps: HashSet<String> = state.completed_steps.iter().cloned().collect();
-        let mut retry_counts: HashMap<String, u32> = state.retry_counts.clone();
+        let mut evaluator_retry_counts: HashMap<String, u32> = state.retry_counts.clone();
+        let mut recovery_retry_counts: HashMap<String, u32> = state.recovery_retry_counts.clone();
 
         // Shared output artifact store, protected by a Mutex for concurrent batch steps.
         let outputs: Arc<Mutex<HashMap<String, String>>> =
             Arc::new(Mutex::new(state.outputs.clone()));
         let budget_used: Arc<Mutex<BudgetUsed>> = Arc::new(Mutex::new(state.budget_used.clone()));
+        let reliability_policy = ReliabilityPolicy::from_workflow(def);
+        let mut degradation_count = state.degradation_count;
         let mut steps_completed = state.steps_completed;
 
         // Build a lookup: step_id → StepDef
@@ -180,13 +188,65 @@ impl WorkflowRunner {
                 let mut step_futures = Vec::new();
                 for step_id in &ready {
                     let step = step_map.get(step_id).unwrap().clone();
+                    let guardrail_input = step
+                        .prompt
+                        .as_deref()
+                        .and_then(|template| render_prompt(template, task_input, &snapshot).ok())
+                        .or_else(|| step.prompt.clone())
+                        .or_else(|| step.skill.clone())
+                        .unwrap_or_default();
+                    match evaluate_guardrail(&step.id, &guardrail_input, &reliability_policy) {
+                        GuardrailDecision::Allow { .. } => {}
+                        GuardrailDecision::Block {
+                            reason_code,
+                            category,
+                            rationale,
+                        } => {
+                            let transition = ReliabilityTransition::new(
+                                step.id.clone(),
+                                ReliabilityTransitionKind::GuardrailBlocked,
+                                reason_code.clone(),
+                                Some(rationale.clone()),
+                            );
+                            state.record_reliability_transition(transition.clone());
+                            state.sync_degradation_count(degradation_count);
+                            self.trace_note(
+                                "workflow-guardrail-decision",
+                                serde_json::json!({
+                                    "workflow": def.name,
+                                    "step_id": step.id,
+                                    "decision": "block",
+                                    "reason_code": reason_code,
+                                    "category": category,
+                                    "rationale": rationale,
+                                }),
+                            );
+                            self.trace_note(
+                                "workflow-reliability-transition",
+                                serde_json::json!({
+                                    "workflow": def.name,
+                                    "transition": transition,
+                                }),
+                            );
+                            return fail_workflow(
+                                self,
+                                &mut state,
+                                Some(step.id.clone()),
+                                WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!("guardrail blocked step '{}'", step.id),
+                                },
+                            );
+                        }
+                    }
                     let pending_approval_content = state
                         .pending_approval
                         .as_ref()
                         .filter(|pending| pending.step_id == step.id)
                         .map(|pending| pending.content.clone());
                     state.mark_step_running(&step);
-                    state.retry_counts = retry_counts.clone();
+                    state.retry_counts = evaluator_retry_counts.clone();
+                    state.recovery_retry_counts = recovery_retry_counts.clone();
                     self.persist_workflow_artifacts(&state);
                     self.trace_note(
                         "workflow-step-dispatched",
@@ -364,9 +424,113 @@ impl WorkflowRunner {
                         Ok(Ok(result)) => result,
                         Ok(Err(error)) => {
                             let step_id = workflow_error_step_id(&error);
+                            if reliability_policy.recovery_enabled {
+                                if let Some(ref failed_step_id) = step_id {
+                                    let attempt = {
+                                        let count = recovery_retry_counts
+                                            .entry(failed_step_id.clone())
+                                            .or_insert(0);
+                                        *count += 1;
+                                        *count
+                                    };
+                                    let max = reliability_policy.max_step_retries.max(1);
+
+                                    self.trace_note(
+                                        "workflow-step-retry",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "step_id": failed_step_id,
+                                            "attempt": attempt,
+                                            "max_retries": max,
+                                            "reason": "step-execution-error",
+                                            "error": error.to_string(),
+                                        }),
+                                    );
+                                    let retry_transition = ReliabilityTransition::new(
+                                        failed_step_id.clone(),
+                                        ReliabilityTransitionKind::Retry,
+                                        "step-execution-error-retry",
+                                        Some(format!("attempt {attempt} of {max}")),
+                                    );
+                                    state.record_reliability_transition(retry_transition.clone());
+                                    self.trace_note(
+                                        "workflow-reliability-transition",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "transition": retry_transition,
+                                        }),
+                                    );
+                                    state.mark_step_recovery_retry(failed_step_id, attempt);
+                                    state.retry_counts = evaluator_retry_counts.clone();
+                                    state.recovery_retry_counts = recovery_retry_counts.clone();
+                                    state.sync_degradation_count(degradation_count);
+                                    self.persist_workflow_artifacts(&state);
+
+                                    if attempt <= max {
+                                        rewind_target = Some(failed_step_id.clone());
+                                        rewind_to_batch = step_batches.get(failed_step_id).copied();
+                                        continue;
+                                    }
+
+                                    let abort_transition = ReliabilityTransition::new(
+                                        failed_step_id.clone(),
+                                        ReliabilityTransitionKind::Abort,
+                                        "step-execution-max-retries-exceeded",
+                                        Some(error.to_string()),
+                                    );
+                                    state.record_reliability_transition(abort_transition.clone());
+                                    self.trace_note(
+                                        "workflow-reliability-transition",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "transition": abort_transition,
+                                        }),
+                                    );
+                                    return fail_workflow(
+                                        self,
+                                        &mut state,
+                                        Some(failed_step_id.clone()),
+                                        WorkflowError::MaxRetriesExceeded {
+                                            id: failed_step_id.clone(),
+                                            max,
+                                        },
+                                    );
+                                }
+                            }
+
+                            if let Some(ref failed_step_id) = step_id {
+                                let transition = ReliabilityTransition::new(
+                                    failed_step_id.clone(),
+                                    ReliabilityTransitionKind::Abort,
+                                    "step-execution-error",
+                                    Some(error.to_string()),
+                                );
+                                state.record_reliability_transition(transition.clone());
+                                self.trace_note(
+                                    "workflow-reliability-transition",
+                                    serde_json::json!({
+                                        "workflow": def.name,
+                                        "transition": transition,
+                                    }),
+                                );
+                            }
                             return fail_workflow(self, &mut state, step_id, error);
                         }
                         Err(error) => {
+                            let transition = ReliabilityTransition::new(
+                                "unknown",
+                                ReliabilityTransitionKind::Abort,
+                                "step-task-join-error",
+                                Some(error.to_string()),
+                            );
+                            state.record_reliability_transition(transition.clone());
+                            self.trace_note(
+                                "workflow-reliability-transition",
+                                serde_json::json!({
+                                    "workflow": def.name,
+                                    "transition": transition,
+                                }),
+                            );
                             return fail_workflow(
                                 self,
                                 &mut state,
@@ -388,9 +552,38 @@ impl WorkflowRunner {
                         })
                         .await;
 
+                    let escalation = evaluate_confidence(&content, &reliability_policy);
+                    let force_approval =
+                        matches!(escalation, EscalationDecision::RequestApproval { .. });
+                    if let EscalationDecision::RequestApproval { reason_code } = &escalation {
+                        let transition = ReliabilityTransition::new(
+                            step.id.clone(),
+                            ReliabilityTransitionKind::EscalateApproval,
+                            reason_code.clone(),
+                            Some("confidence policy requested approval".to_string()),
+                        );
+                        state.record_reliability_transition(transition.clone());
+                        self.trace_note(
+                            "workflow-confidence-escalation",
+                            serde_json::json!({
+                                "workflow": def.name,
+                                "step_id": step.id,
+                                "decision": "request-approval",
+                                "reason_code": reason_code,
+                            }),
+                        );
+                        self.trace_note(
+                            "workflow-reliability-transition",
+                            serde_json::json!({
+                                "workflow": def.name,
+                                "transition": transition,
+                            }),
+                        );
+                    }
+
                     // Handle approval gate (sequential after the step completes)
-                    let final_content = match self
-                        .resolve_approval_decision(&mut state, &step, &content)
+                    let mut final_content = match self
+                        .resolve_approval_decision(&mut state, &step, &content, force_approval)
                         .await
                     {
                         Ok(content) => content,
@@ -399,16 +592,139 @@ impl WorkflowRunner {
                         }
                     };
 
-                    // Enforce budget if configured
+                    // Enforce budget and apply graceful degradation when configured.
                     if let Some(budget) = &def.budget {
+                        let mut used = budget_used.lock().await;
                         let token_estimate = estimate_tokens(&final_content);
                         let usd_estimate = token_estimate as f64 * 0.000_002; // $2 per 1M tokens placeholder
-                        let mut used = budget_used.lock().await;
-                        used.tokens += token_estimate;
-                        used.estimated_usd += usd_estimate;
-                        if let Err(error) = check_budget(budget, &used) {
-                            drop(used);
-                            return fail_workflow(self, &mut state, Some(step.id.clone()), error);
+
+                        match evaluate_budget_decision(
+                            budget,
+                            &used,
+                            token_estimate,
+                            usd_estimate,
+                            degradation_count,
+                            &reliability_policy,
+                        ) {
+                            BudgetDecision::Continue { .. } => {
+                                used.tokens += token_estimate;
+                                used.estimated_usd += usd_estimate;
+                                if let Err(error) = check_budget(budget, &used) {
+                                    let transition = ReliabilityTransition::new(
+                                        step.id.clone(),
+                                        ReliabilityTransitionKind::Abort,
+                                        "budget-limit-exceeded",
+                                        Some(error.to_string()),
+                                    );
+                                    state.record_reliability_transition(transition.clone());
+                                    self.trace_note(
+                                        "workflow-reliability-transition",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "transition": transition,
+                                        }),
+                                    );
+                                    drop(used);
+                                    return fail_workflow(
+                                        self,
+                                        &mut state,
+                                        Some(step.id.clone()),
+                                        error,
+                                    );
+                                }
+                            }
+                            BudgetDecision::Degrade {
+                                reason_code,
+                                target_chars,
+                            } => {
+                                let degraded = apply_degradation(&final_content, target_chars);
+                                let degraded_tokens = estimate_tokens(&degraded);
+                                let degraded_usd = degraded_tokens as f64 * 0.000_002;
+
+                                let mut projected = used.clone();
+                                projected.tokens += degraded_tokens;
+                                projected.estimated_usd += degraded_usd;
+
+                                if let Err(error) = check_budget(budget, &projected) {
+                                    let transition = ReliabilityTransition::new(
+                                        step.id.clone(),
+                                        ReliabilityTransitionKind::Abort,
+                                        "budget-degrade-failed",
+                                        Some(error.to_string()),
+                                    );
+                                    state.record_reliability_transition(transition.clone());
+                                    self.trace_note(
+                                        "workflow-reliability-transition",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "transition": transition,
+                                        }),
+                                    );
+                                    drop(used);
+                                    return fail_workflow(
+                                        self,
+                                        &mut state,
+                                        Some(step.id.clone()),
+                                        error,
+                                    );
+                                }
+
+                                final_content = degraded;
+                                *used = projected;
+                                degradation_count = degradation_count.saturating_add(1);
+                                state.sync_degradation_count(degradation_count);
+
+                                let transition = ReliabilityTransition::new(
+                                    step.id.clone(),
+                                    ReliabilityTransitionKind::Degrade,
+                                    reason_code,
+                                    Some(format!(
+                                        "output truncated to {} chars to remain within budget",
+                                        target_chars
+                                    )),
+                                );
+                                state.record_reliability_transition(transition.clone());
+                                self.trace_note(
+                                    "workflow-budget-decision",
+                                    serde_json::json!({
+                                        "workflow": def.name,
+                                        "step_id": step.id,
+                                        "decision": "degrade",
+                                        "degradation_count": degradation_count,
+                                        "target_chars": target_chars,
+                                    }),
+                                );
+                                self.trace_note(
+                                    "workflow-reliability-transition",
+                                    serde_json::json!({
+                                        "workflow": def.name,
+                                        "transition": transition,
+                                    }),
+                                );
+                            }
+                            BudgetDecision::Abort { reason_code } => {
+                                let transition = ReliabilityTransition::new(
+                                    step.id.clone(),
+                                    ReliabilityTransitionKind::Abort,
+                                    reason_code.clone(),
+                                    Some("budget governor aborted execution".to_string()),
+                                );
+                                state.record_reliability_transition(transition.clone());
+                                self.trace_note(
+                                    "workflow-reliability-transition",
+                                    serde_json::json!({
+                                        "workflow": def.name,
+                                        "transition": transition,
+                                    }),
+                                );
+                                drop(used);
+                                return fail_workflow(
+                                    self,
+                                    &mut state,
+                                    Some(step.id.clone()),
+                                    WorkflowError::BudgetExceeded(reason_code),
+                                );
+                            }
                         }
                     }
 
@@ -422,6 +738,14 @@ impl WorkflowRunner {
                     state.mark_step_completed(&step, &final_content);
                     state.sync_outputs(outputs.lock().await.clone());
                     state.sync_budget(budget_used.lock().await.clone());
+                    state.sync_degradation_count(degradation_count);
+                    let transition = ReliabilityTransition::new(
+                        step.id.clone(),
+                        ReliabilityTransitionKind::Continue,
+                        "step-completed",
+                        None,
+                    );
+                    state.record_reliability_transition(transition.clone());
                     self.trace_note(
                         "workflow-step-completed",
                         serde_json::json!({
@@ -430,6 +754,13 @@ impl WorkflowRunner {
                             "output": step.output,
                             "output_preview": preview(&final_content),
                             "requires_approval": step.requires_approval.unwrap_or(false),
+                        }),
+                    );
+                    self.trace_note(
+                        "workflow-reliability-transition",
+                        serde_json::json!({
+                            "workflow": def.name,
+                            "transition": transition,
                         }),
                     );
 
@@ -462,8 +793,9 @@ impl WorkflowRunner {
                                 );
                                 if !passed {
                                     let attempt = {
-                                        let count =
-                                            retry_counts.entry(step.id.clone()).or_insert(0);
+                                        let count = evaluator_retry_counts
+                                            .entry(step.id.clone())
+                                            .or_insert(0);
                                         *count += 1;
                                         *count
                                     };
@@ -477,10 +809,41 @@ impl WorkflowRunner {
                                             "max_retries": max,
                                         }),
                                     );
+                                    let retry_transition = ReliabilityTransition::new(
+                                        step.id.clone(),
+                                        ReliabilityTransitionKind::Retry,
+                                        "evaluator-failed-retry",
+                                        Some(format!("attempt {attempt} of {max}")),
+                                    );
+                                    state.record_reliability_transition(retry_transition.clone());
+                                    self.trace_note(
+                                        "workflow-reliability-transition",
+                                        serde_json::json!({
+                                            "workflow": def.name,
+                                            "transition": retry_transition,
+                                        }),
+                                    );
                                     state.mark_step_retry(&step.id, attempt);
-                                    state.retry_counts = retry_counts.clone();
+                                    state.retry_counts = evaluator_retry_counts.clone();
+                                    state.recovery_retry_counts = recovery_retry_counts.clone();
                                     self.persist_workflow_artifacts(&state);
                                     if attempt >= max {
+                                        let abort_transition = ReliabilityTransition::new(
+                                            step.id.clone(),
+                                            ReliabilityTransitionKind::Abort,
+                                            "max-retries-exceeded",
+                                            Some(format!("attempt {attempt} reached max {max}")),
+                                        );
+                                        state.record_reliability_transition(
+                                            abort_transition.clone(),
+                                        );
+                                        self.trace_note(
+                                            "workflow-reliability-transition",
+                                            serde_json::json!({
+                                                "workflow": def.name,
+                                                "transition": abort_transition,
+                                            }),
+                                        );
                                         return fail_workflow(
                                             self,
                                             &mut state,
@@ -551,9 +914,11 @@ impl WorkflowRunner {
                     state.steps_completed = steps_completed;
                     state.skipped_steps = skipped_steps.iter().cloned().collect();
                     state.skipped_steps.sort();
-                    state.retry_counts = retry_counts.clone();
+                    state.retry_counts = evaluator_retry_counts.clone();
+                    state.recovery_retry_counts = recovery_retry_counts.clone();
                     state.sync_outputs(outputs.lock().await.clone());
                     state.sync_budget(budget_used.lock().await.clone());
+                    state.sync_degradation_count(degradation_count);
                     self.persist_workflow_artifacts(&state);
                 }
 
@@ -578,6 +943,7 @@ impl WorkflowRunner {
                     state.steps_completed = steps_completed;
                     state.sync_outputs(outputs.lock().await.clone());
                     state.sync_budget(budget_used.lock().await.clone());
+                    state.sync_degradation_count(degradation_count);
                     self.persist_workflow_artifacts(&state);
                     self.trace_note(
                         "workflow-rewind",
@@ -611,6 +977,7 @@ impl WorkflowRunner {
         state.mark_succeeded();
         state.sync_outputs(final_outputs.clone());
         state.sync_budget(final_budget.clone());
+        state.sync_degradation_count(degradation_count);
         self.persist_workflow_artifacts(&state);
         self.trace_note(
             "workflow-complete",
@@ -643,8 +1010,9 @@ impl WorkflowRunner {
         state: &mut WorkflowRunState,
         step: &crate::types::StepDef,
         content: &str,
+        force_approval: bool,
     ) -> Result<String, WorkflowError> {
-        if !step.requires_approval.unwrap_or(false) {
+        if !step.requires_approval.unwrap_or(false) && !force_approval {
             return Ok(content.to_string());
         }
 
@@ -671,6 +1039,7 @@ impl WorkflowRunner {
                     "agent": step.agent,
                     "output": step.output,
                     "output_preview": preview(content),
+                    "trigger": if force_approval { "confidence-escalation" } else { "step-config" },
                 }),
             );
             return Err(WorkflowError::ApprovalRequired {
@@ -1090,6 +1459,7 @@ mod tests {
                 workflow: None,
             }],
             budget: None,
+            reliability: None,
         }
     }
 
@@ -1130,6 +1500,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         }
     }
 
@@ -1216,6 +1587,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
         let runner = mock_runner("x");
         let err = runner.validate(&def).unwrap_err();
@@ -1245,6 +1617,7 @@ mod tests {
                 workflow: None,
             }],
             budget: None,
+            reliability: None,
         };
         runner.run(&def, "my task").await.unwrap();
     }
@@ -1283,6 +1656,7 @@ mod tests {
                 alert_at_percent: None,
                 on_exceed: Some("stop".to_string()),
             }),
+            reliability: None,
         };
         let err = runner.run(&def, "task").await.unwrap_err();
         assert!(matches!(
@@ -1320,6 +1694,7 @@ mod tests {
                 alert_at_percent: None,
                 on_exceed: Some("stop".to_string()),
             }),
+            reliability: None,
         };
         let err = runner.run(&def, "task").await.unwrap_err();
         assert!(matches!(
@@ -1355,6 +1730,7 @@ mod tests {
                 alert_at_percent: None,
                 on_exceed: Some("alert-only".to_string()),
             }),
+            reliability: None,
         };
         // Should succeed despite exceeding the token limit
         let result = runner.run(&def, "task").await.unwrap();
@@ -1421,6 +1797,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
         let result = runner.run(&def, "build auth").await.unwrap();
         assert!(result.outputs.contains_key("deployment"));
@@ -1486,6 +1863,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
         let err = runner.run(&def, "build auth").await.unwrap_err();
         assert!(matches!(
@@ -1560,6 +1938,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
 
         let result = runner.run(&def, "build auth").await.unwrap();
@@ -1605,6 +1984,7 @@ mod tests {
                 workflow: None,
             }],
             budget: None,
+            reliability: None,
         };
 
         let err = runner.run(&def, "ship auth").await.unwrap_err();
@@ -1699,6 +2079,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
         let result = runner.run(&def, "build api").await.unwrap();
         assert!(
@@ -1709,5 +2090,148 @@ mod tests {
             !result.outputs.contains_key("ui_result"),
             "unselected branch should be skipped"
         );
+    }
+
+    #[tokio::test]
+    async fn budget_governor_degrades_output_before_abort() {
+        let _guard = crate::reliability::test_env_lock();
+        std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
+        std::env::set_var("AGENT007_RELIABILITY_BUDGET_GOVERNOR", "1");
+        std::env::set_var("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS", "4");
+        std::env::set_var("AGENT007_RELIABILITY_MAX_DEGRADATIONS", "1");
+
+        let runner = mock_runner("abcdefghijklmnopqrstuvwxyz-0123456789");
+        let def = WorkflowDef {
+            name: "budget-degrade".to_string(),
+            description: None,
+            steps: vec![StepDef {
+                id: "s1".to_string(),
+                agent: "A".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("do {{task}}".to_string()),
+                skill: None,
+                output: Some("out".to_string()),
+                requires_approval: None,
+                r#type: StepType::Execute,
+                evaluate: None,
+                routes: None,
+                workflow: None,
+            }],
+            budget: Some(BudgetConfig {
+                max_tokens_per_session: Some(6),
+                max_usd_per_task: None,
+                alert_at_percent: None,
+                on_exceed: Some("stop".to_string()),
+            }),
+            reliability: None,
+        };
+        let result = runner.run(&def, "task").await.unwrap();
+        let out = result.outputs.get("out").cloned().unwrap_or_default();
+        assert!(out.contains("[degraded]"));
+
+        std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
+        std::env::remove_var("AGENT007_RELIABILITY_BUDGET_GOVERNOR");
+        std::env::remove_var("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS");
+        std::env::remove_var("AGENT007_RELIABILITY_MAX_DEGRADATIONS");
+    }
+
+    #[tokio::test]
+    async fn confidence_escalation_requests_approval_for_low_confidence() {
+        let _guard = crate::reliability::test_env_lock();
+        std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
+        std::env::set_var("AGENT007_RELIABILITY_CONFIDENCE_ESCALATION", "1");
+        std::env::set_var("AGENT007_AUTO_APPROVE", "0");
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(RunStore::new(dir.path()));
+        let run = store
+            .create_run("workflow-test", "ship auth", "standalone", Some("mock"))
+            .unwrap();
+        let runner = mock_runner("result\nconfidence: low").for_run(store.clone(), run.id.clone());
+
+        let def = WorkflowDef {
+            name: "confidence-escalation".to_string(),
+            description: None,
+            steps: vec![StepDef {
+                id: "draft".to_string(),
+                agent: "Architect".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("draft {{task}}".to_string()),
+                skill: None,
+                output: Some("plan".to_string()),
+                requires_approval: None,
+                r#type: StepType::Execute,
+                evaluate: None,
+                routes: None,
+                workflow: None,
+            }],
+            budget: None,
+            reliability: None,
+        };
+
+        let err = runner.run(&def, "ship auth").await.unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::ApprovalRequired { .. }
+        ));
+
+        let state: crate::state::WorkflowRunState = store
+            .read_json_artifact(&run.id, "workflow-state.json")
+            .unwrap();
+        assert_eq!(
+            state
+                .pending_approval
+                .as_ref()
+                .map(|pending| pending.step_id.as_str()),
+            Some("draft")
+        );
+        assert!(!state.reliability_transitions.is_empty());
+
+        std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
+        std::env::remove_var("AGENT007_RELIABILITY_CONFIDENCE_ESCALATION");
+        std::env::remove_var("AGENT007_AUTO_APPROVE");
+    }
+
+    #[tokio::test]
+    async fn guardrails_block_risky_prompt() {
+        let _guard = crate::reliability::test_env_lock();
+        std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
+        std::env::set_var("AGENT007_RELIABILITY_GUARDRAILS", "1");
+
+        let runner = mock_runner("ok");
+        let def = WorkflowDef {
+            name: "guardrails".to_string(),
+            description: None,
+            steps: vec![StepDef {
+                id: "danger".to_string(),
+                agent: "Operator".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("please drop table users".to_string()),
+                skill: None,
+                output: Some("result".to_string()),
+                requires_approval: None,
+                r#type: StepType::Execute,
+                evaluate: None,
+                routes: None,
+                workflow: None,
+            }],
+            budget: None,
+            reliability: None,
+        };
+
+        let err = runner.run(&def, "ship auth").await.unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::StepFailed { .. }
+        ));
+
+        std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
+        std::env::remove_var("AGENT007_RELIABILITY_GUARDRAILS");
     }
 }

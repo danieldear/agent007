@@ -7,6 +7,7 @@ pub struct WorkflowDef {
     pub description: Option<String>,
     pub steps: Vec<StepDef>,
     pub budget: Option<BudgetConfig>,
+    pub reliability: Option<ReliabilityConfig>,
 }
 
 impl WorkflowDef {
@@ -134,6 +135,41 @@ pub struct BudgetConfig {
     pub max_usd_per_task: Option<f64>,
     pub alert_at_percent: Option<u8>,
     pub on_exceed: Option<String>, // "pause" | "stop" | "alert-only"
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct ReliabilityConfig {
+    pub enabled: Option<bool>,
+    pub recovery: Option<ReliabilityRecoveryConfig>,
+    pub budget_governor: Option<ReliabilityBudgetGovernorConfig>,
+    pub guardrails: Option<ReliabilityGuardrailsConfig>,
+    pub confidence: Option<ReliabilityConfidenceConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct ReliabilityRecoveryConfig {
+    pub enabled: Option<bool>,
+    pub max_step_retries: Option<u32>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct ReliabilityBudgetGovernorConfig {
+    pub enabled: Option<bool>,
+    pub max_degradations_per_run: Option<u32>,
+    pub degrade_output_chars: Option<usize>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct ReliabilityGuardrailsConfig {
+    pub enabled: Option<bool>,
+    pub terms: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct ReliabilityConfidenceConfig {
+    pub enabled: Option<bool>,
+    pub low_terms: Option<Vec<String>>,
+    pub missing_requires_approval: Option<bool>,
 }
 
 #[derive(Debug, Default, Serialize)]

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::approval::ApprovalDecision;
+use crate::reliability::ReliabilityTransition;
 use crate::types::{BudgetUsed, StepDef, WorkflowDef};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -61,6 +63,12 @@ pub struct WorkflowStepState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowReliabilityEvent {
+    pub kind: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunState {
     pub workflow: String,
     pub task: String,
@@ -70,8 +78,16 @@ pub struct WorkflowRunState {
     pub completed_steps: Vec<String>,
     pub skipped_steps: Vec<String>,
     pub retry_counts: HashMap<String, u32>,
+    #[serde(default)]
+    pub recovery_retry_counts: HashMap<String, u32>,
     pub outputs: HashMap<String, String>,
     pub budget_used: BudgetUsed,
+    #[serde(default)]
+    pub degradation_count: u32,
+    #[serde(default)]
+    pub reliability_transitions: Vec<ReliabilityTransition>,
+    #[serde(default)]
+    pub reliability_events: Vec<WorkflowReliabilityEvent>,
     pub steps: Vec<WorkflowStepState>,
     pub pending_approval: Option<PendingApproval>,
     pub approval_decisions: HashMap<String, ApprovalDecision>,
@@ -89,8 +105,12 @@ impl WorkflowRunState {
             completed_steps: Vec::new(),
             skipped_steps: Vec::new(),
             retry_counts: HashMap::new(),
+            recovery_retry_counts: HashMap::new(),
             outputs: HashMap::new(),
             budget_used: BudgetUsed::default(),
+            degradation_count: 0,
+            reliability_transitions: Vec::new(),
+            reliability_events: Vec::new(),
             steps: def.steps.iter().map(WorkflowStepState::from).collect(),
             pending_approval: None,
             approval_decisions: HashMap::new(),
@@ -106,7 +126,13 @@ impl WorkflowRunState {
     }
 
     pub fn mark_step_running(&mut self, step: &StepDef) {
-        let attempts = self.retry_counts.get(&step.id).copied().unwrap_or(0) + 1;
+        let evaluator_attempts = self.retry_counts.get(&step.id).copied().unwrap_or(0);
+        let recovery_attempts = self
+            .recovery_retry_counts
+            .get(&step.id)
+            .copied()
+            .unwrap_or(0);
+        let attempts = evaluator_attempts.max(recovery_attempts) + 1;
         let step_state = self.step_mut(&step.id);
         step_state.status = WorkflowStepStatus::Running;
         step_state.attempts = attempts;
@@ -190,6 +216,14 @@ impl WorkflowRunState {
         step_state.status = WorkflowStepStatus::Pending;
     }
 
+    pub fn mark_step_recovery_retry(&mut self, step_id: &str, attempt: u32) {
+        self.recovery_retry_counts
+            .insert(step_id.to_string(), attempt);
+        let step_state = self.step_mut(step_id);
+        step_state.attempts = attempt;
+        step_state.status = WorkflowStepStatus::Pending;
+    }
+
     pub fn mark_step_skipped(&mut self, step_id: &str) {
         if !self.skipped_steps.iter().any(|id| id == step_id) {
             self.skipped_steps.push(step_id.to_string());
@@ -211,7 +245,13 @@ impl WorkflowRunState {
     }
 
     pub fn reset_step(&mut self, step_id: &str) {
-        let attempts = self.retry_counts.get(step_id).copied().unwrap_or(0);
+        let evaluator_attempts = self.retry_counts.get(step_id).copied().unwrap_or(0);
+        let recovery_attempts = self
+            .recovery_retry_counts
+            .get(step_id)
+            .copied()
+            .unwrap_or(0);
+        let attempts = evaluator_attempts.max(recovery_attempts);
         let step_state = self.step_mut(step_id);
         step_state.status = WorkflowStepStatus::Pending;
         step_state.attempts = attempts;
@@ -227,6 +267,23 @@ impl WorkflowRunState {
 
     pub fn sync_budget(&mut self, budget_used: BudgetUsed) {
         self.budget_used = budget_used;
+    }
+
+    pub fn sync_degradation_count(&mut self, degradation_count: u32) {
+        self.degradation_count = degradation_count;
+    }
+
+    pub fn record_reliability_transition(&mut self, transition: ReliabilityTransition) {
+        let payload = serde_json::to_value(&transition).unwrap_or_else(|_| serde_json::json!({}));
+        self.reliability_transitions.push(transition);
+        self.record_reliability_event("workflow-reliability-transition", payload);
+    }
+
+    pub fn record_reliability_event(&mut self, kind: impl Into<String>, payload: Value) {
+        self.reliability_events.push(WorkflowReliabilityEvent {
+            kind: kind.into(),
+            payload,
+        });
     }
 
     pub fn mark_failed(&mut self, step_id: Option<&str>, error: impl Into<String>) {
@@ -306,6 +363,7 @@ mod tests {
                 workflow: None,
             }],
             budget: None,
+            reliability: None,
         }
     }
 

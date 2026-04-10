@@ -7,6 +7,11 @@ use agent007_core::persona::PersonaProvider;
 
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind};
 use crate::error::WorkflowError;
+use crate::reliability::{
+    apply_degradation, evaluate_budget_decision, evaluate_confidence, evaluate_guardrail,
+    BudgetDecision, EscalationDecision, GuardrailDecision, ReliabilityPolicy,
+    ReliabilityTransition, ReliabilityTransitionKind,
+};
 use crate::runner::{
     build_step_dependents, check_budget, estimate_tokens, evaluate_condition,
     evaluate_decision_field, match_route, render_prompt, reset_steps_from_target, step_is_ready,
@@ -88,6 +93,7 @@ impl HostedWorkflowEngine {
         output: &str,
     ) -> Result<HostedWorkflowProgress, WorkflowError> {
         self.finalize_approved_steps(def, state)?;
+        let reliability_policy = ReliabilityPolicy::from_workflow(def);
 
         if state.status == WorkflowRunStatus::Failed {
             return Ok(self.failed_progress(state, "workflow is already failed"));
@@ -164,18 +170,31 @@ impl HostedWorkflowEngine {
             WorkflowStepStatus::Running => {}
         }
 
-        let final_content = match self.resolve_submission_content(state, step, output) {
-            SubmissionResolution::AwaitingApproval(message) => {
-                return Ok(self.awaiting_approval_progress(state, message));
-            }
-            SubmissionResolution::Content(content) => content,
-            SubmissionResolution::Failed(message) => {
-                state.mark_failed(Some(step_id), message.clone());
-                return Ok(self.failed_progress(state, message));
-            }
-        };
+        let escalation = evaluate_confidence(output, &reliability_policy);
+        let force_approval = matches!(escalation, EscalationDecision::RequestApproval { .. });
+        if let EscalationDecision::RequestApproval { reason_code } = escalation {
+            let transition = ReliabilityTransition::new(
+                step.id.clone(),
+                ReliabilityTransitionKind::EscalateApproval,
+                reason_code,
+                Some("confidence policy requested approval".to_string()),
+            );
+            state.record_reliability_transition(transition);
+        }
 
-        self.complete_step(def, state, step, &final_content);
+        let final_content =
+            match self.resolve_submission_content(state, step, output, force_approval) {
+                SubmissionResolution::AwaitingApproval(message) => {
+                    return Ok(self.awaiting_approval_progress(state, message));
+                }
+                SubmissionResolution::Content(content) => content,
+                SubmissionResolution::Failed(message) => {
+                    state.mark_failed(Some(step_id), message.clone());
+                    return Ok(self.failed_progress(state, message));
+                }
+            };
+
+        self.complete_step(def, state, step, &final_content, &reliability_policy);
         self.dispatch(def, state)
     }
 
@@ -226,7 +245,8 @@ impl HostedWorkflowEngine {
                                 id: step_id.clone(),
                                 reason: "approval decision is missing content".to_string(),
                             })?;
-                    self.complete_step(def, state, step, &content);
+                    let reliability_policy = ReliabilityPolicy::from_workflow(def);
+                    self.complete_step(def, state, step, &content, &reliability_policy);
                 }
                 ApprovalDecisionKind::Deny => {
                     state.mark_failed(
@@ -246,6 +266,7 @@ impl HostedWorkflowEngine {
         state: &mut WorkflowRunState,
         dispatch_ready: bool,
     ) -> Result<HostedWorkflowProgress, WorkflowError> {
+        let reliability_policy = ReliabilityPolicy::from_workflow(def);
         if state.status == WorkflowRunStatus::Failed {
             return Ok(self.failed_progress(
                 state,
@@ -319,7 +340,33 @@ impl HostedWorkflowEngine {
                     continue;
                 }
                 if step_is_ready(step, &state.outputs, &completed) {
-                    ready_ids.push(step.id.clone());
+                    let guardrail_input = self.guardrail_input(def, state, step);
+                    match evaluate_guardrail(&step.id, &guardrail_input, &reliability_policy) {
+                        GuardrailDecision::Allow { .. } => {
+                            ready_ids.push(step.id.clone());
+                        }
+                        GuardrailDecision::Block {
+                            reason_code,
+                            category,
+                            rationale,
+                        } => {
+                            let transition = ReliabilityTransition::new(
+                                step.id.clone(),
+                                ReliabilityTransitionKind::GuardrailBlocked,
+                                reason_code,
+                                Some(format!("{category}: {rationale}")),
+                            );
+                            state.record_reliability_transition(transition);
+                            state.mark_failed(
+                                Some(&step.id),
+                                format!("guardrail blocked step '{}'", step.id),
+                            );
+                            return Ok(self.failed_progress(
+                                state,
+                                format!("guardrail blocked step '{}'", step.id),
+                            ));
+                        }
+                    }
                 }
             }
             if !ready_ids.is_empty() {
@@ -407,13 +454,34 @@ impl HostedWorkflowEngine {
         })
     }
 
+    fn guardrail_input(
+        &self,
+        _def: &WorkflowDef,
+        state: &WorkflowRunState,
+        step: &StepDef,
+    ) -> String {
+        let template = match load_step_template(step) {
+            Ok(template) => template,
+            Err(_) => {
+                return step
+                    .prompt
+                    .clone()
+                    .or_else(|| step.skill.clone())
+                    .unwrap_or_default();
+            }
+        };
+
+        render_prompt(&template, &state.task, &state.outputs).unwrap_or(template)
+    }
+
     fn resolve_submission_content(
         &self,
         state: &mut WorkflowRunState,
         step: &StepDef,
         output: &str,
+        force_approval: bool,
     ) -> SubmissionResolution {
-        if !step.requires_approval.unwrap_or(false) {
+        if !step.requires_approval.unwrap_or(false) && !force_approval {
             return SubmissionResolution::Content(output.to_string());
         }
 
@@ -432,8 +500,13 @@ impl HostedWorkflowEngine {
         } else {
             state.mark_step_awaiting_approval(step, output);
             return SubmissionResolution::AwaitingApproval(format!(
-                "approval required for step '{}'",
-                step.id
+                "approval required for step '{}' ({})",
+                step.id,
+                if force_approval {
+                    "confidence-escalation"
+                } else {
+                    "step-config"
+                }
             ));
         };
 
@@ -455,10 +528,12 @@ impl HostedWorkflowEngine {
         state: &mut WorkflowRunState,
         step: &StepDef,
         content: &str,
+        reliability_policy: &ReliabilityPolicy,
     ) {
         if state.status == WorkflowRunStatus::Failed {
             return;
         }
+        let mut final_content = content.to_string();
 
         let step_map: HashMap<String, StepDef> = def
             .steps
@@ -468,23 +543,83 @@ impl HostedWorkflowEngine {
         let step_dependents = build_step_dependents(def, &step_map);
 
         if let Some(budget) = &def.budget {
-            let token_estimate = estimate_tokens(content);
-            let usd_estimate = token_estimate as f64 * 0.000_002;
             let mut used = state.budget_used.clone();
-            used.tokens += token_estimate;
-            used.estimated_usd += usd_estimate;
-            if let Err(error) = check_budget(budget, &used) {
-                state.mark_failed(Some(&step.id), error.to_string());
-                return;
+            let token_estimate = estimate_tokens(&final_content);
+            let usd_estimate = token_estimate as f64 * 0.000_002;
+            match evaluate_budget_decision(
+                budget,
+                &used,
+                token_estimate,
+                usd_estimate,
+                state.degradation_count,
+                reliability_policy,
+            ) {
+                BudgetDecision::Continue { .. } => {
+                    used.tokens += token_estimate;
+                    used.estimated_usd += usd_estimate;
+                    if let Err(error) = check_budget(budget, &used) {
+                        state.record_reliability_transition(ReliabilityTransition::new(
+                            step.id.clone(),
+                            ReliabilityTransitionKind::Abort,
+                            "budget-limit-exceeded",
+                            Some(error.to_string()),
+                        ));
+                        state.mark_failed(Some(&step.id), error.to_string());
+                        return;
+                    }
+                }
+                BudgetDecision::Degrade {
+                    reason_code,
+                    target_chars,
+                } => {
+                    let degraded = apply_degradation(&final_content, target_chars);
+                    let degraded_tokens = estimate_tokens(&degraded);
+                    let degraded_usd = degraded_tokens as f64 * 0.000_002;
+                    let mut projected = used.clone();
+                    projected.tokens += degraded_tokens;
+                    projected.estimated_usd += degraded_usd;
+                    if let Err(error) = check_budget(budget, &projected) {
+                        state.record_reliability_transition(ReliabilityTransition::new(
+                            step.id.clone(),
+                            ReliabilityTransitionKind::Abort,
+                            "budget-degrade-failed",
+                            Some(error.to_string()),
+                        ));
+                        state.mark_failed(Some(&step.id), error.to_string());
+                        return;
+                    }
+                    final_content = degraded;
+                    used = projected;
+                    state.sync_degradation_count(state.degradation_count.saturating_add(1));
+                    state.record_reliability_transition(ReliabilityTransition::new(
+                        step.id.clone(),
+                        ReliabilityTransitionKind::Degrade,
+                        reason_code,
+                        Some(format!(
+                            "output truncated to {} chars to remain within budget",
+                            target_chars
+                        )),
+                    ));
+                }
+                BudgetDecision::Abort { reason_code } => {
+                    state.record_reliability_transition(ReliabilityTransition::new(
+                        step.id.clone(),
+                        ReliabilityTransitionKind::Abort,
+                        reason_code.clone(),
+                        Some("budget governor aborted execution".to_string()),
+                    ));
+                    state.mark_failed(Some(&step.id), reason_code);
+                    return;
+                }
             }
             state.sync_budget(used);
         }
 
         let mut outputs = state.outputs.clone();
         if let Some(output_key) = &step.output {
-            outputs.insert(output_key.clone(), content.to_string());
+            outputs.insert(output_key.clone(), final_content.clone());
         }
-        state.mark_step_completed(step, content);
+        state.mark_step_completed(step, &final_content);
         state.sync_outputs(outputs.clone());
 
         match step.r#type {
@@ -505,7 +640,7 @@ impl HostedWorkflowEngine {
                 let passed = if let Some(condition) = &eval.condition {
                     evaluate_condition(condition, &outputs)
                 } else if let Some(field) = &eval.decision_field {
-                    evaluate_decision_field(content, field)
+                    evaluate_decision_field(&final_content, field)
                 } else {
                     true
                 };
@@ -519,8 +654,20 @@ impl HostedWorkflowEngine {
                 if !passed {
                     let attempt = state.retry_counts.get(&step.id).copied().unwrap_or(0) + 1;
                     let max = eval.max_retries.unwrap_or(3);
+                    state.record_reliability_transition(ReliabilityTransition::new(
+                        step.id.clone(),
+                        ReliabilityTransitionKind::Retry,
+                        "evaluator-failed-retry",
+                        Some(format!("attempt {attempt} of {max}")),
+                    ));
                     state.mark_step_retry(&step.id, attempt);
                     if attempt >= max {
+                        state.record_reliability_transition(ReliabilityTransition::new(
+                            step.id.clone(),
+                            ReliabilityTransitionKind::Abort,
+                            "max-retries-exceeded",
+                            Some(format!("attempt {attempt} reached max {max}")),
+                        ));
                         state.mark_failed(
                             Some(&step.id),
                             WorkflowError::MaxRetriesExceeded {
@@ -588,7 +735,7 @@ impl HostedWorkflowEngine {
                     return;
                 };
 
-                match match_route(content, routes) {
+                match match_route(&final_content, routes) {
                     Some(selected) => {
                         state.mark_route_selected(&step.id, selected);
                         for route in routes {
@@ -602,7 +749,7 @@ impl HostedWorkflowEngine {
                             Some(&step.id),
                             WorkflowError::NoRouteMatch {
                                 id: step.id.clone(),
-                                output: content.to_string(),
+                                output: final_content.to_string(),
                             }
                             .to_string(),
                         );
@@ -615,6 +762,12 @@ impl HostedWorkflowEngine {
         state.steps_completed = state.completed_steps.len();
         state.status = WorkflowRunStatus::Running;
         state.last_error = None;
+        state.record_reliability_transition(ReliabilityTransition::new(
+            step.id.clone(),
+            ReliabilityTransitionKind::Continue,
+            "step-completed",
+            None,
+        ));
     }
 
     fn awaiting_approval_progress(
@@ -745,6 +898,7 @@ mod tests {
                 workflow: None,
             }],
             budget: None,
+            reliability: None,
         }
     }
 
@@ -861,6 +1015,7 @@ mod tests {
                 },
             ],
             budget: None,
+            reliability: None,
         };
         let engine = hosted_engine();
         let mut state = WorkflowRunState::new(&def, "ship feature");
@@ -879,5 +1034,70 @@ mod tests {
         assert_eq!(rewound.status, HostedWorkflowProgressStatus::Ready);
         assert_eq!(rewound.ready_steps[0].id, "impl");
         assert!(!state.outputs.contains_key("code"));
+    }
+
+    #[test]
+    fn hosted_confidence_escalation_requests_approval() {
+        let _guard = crate::reliability::test_env_lock();
+        std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
+        std::env::set_var("AGENT007_RELIABILITY_CONFIDENCE_ESCALATION", "1");
+        std::env::set_var("AGENT007_AUTO_APPROVE", "0");
+
+        let def = single_step_def();
+        let engine = hosted_engine();
+        let mut state = WorkflowRunState::new(&def, "ship feature");
+
+        let ready = engine.dispatch(&def, &mut state).unwrap();
+        assert_eq!(ready.status, HostedWorkflowProgressStatus::Ready);
+
+        let waiting = engine
+            .submit_step_output(&def, &mut state, "research", "draft\nconfidence: low")
+            .unwrap();
+        assert_eq!(
+            waiting.status,
+            HostedWorkflowProgressStatus::AwaitingApproval
+        );
+        assert!(state.pending_approval.is_some());
+        assert!(!state.reliability_transitions.is_empty());
+
+        std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
+        std::env::remove_var("AGENT007_RELIABILITY_CONFIDENCE_ESCALATION");
+        std::env::remove_var("AGENT007_AUTO_APPROVE");
+    }
+
+    #[test]
+    fn hosted_budget_governor_degrades_output() {
+        let _guard = crate::reliability::test_env_lock();
+        std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
+        std::env::set_var("AGENT007_RELIABILITY_BUDGET_GOVERNOR", "1");
+        std::env::set_var("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS", "4");
+        std::env::set_var("AGENT007_RELIABILITY_MAX_DEGRADATIONS", "1");
+
+        let mut def = single_step_def();
+        def.budget = Some(crate::types::BudgetConfig {
+            max_tokens_per_session: Some(4),
+            max_usd_per_task: None,
+            alert_at_percent: None,
+            on_exceed: Some("stop".to_string()),
+        });
+
+        let engine = hosted_engine();
+        let mut state = WorkflowRunState::new(&def, "ship feature");
+        let _ = engine.dispatch(&def, &mut state).unwrap();
+
+        let done = engine
+            .submit_step_output(&def, &mut state, "research", "abcdefghijklmnopqrstuvwxyz")
+            .unwrap();
+        assert_eq!(done.status, HostedWorkflowProgressStatus::Succeeded);
+        assert!(state
+            .outputs
+            .get("notes")
+            .map(|value| value.contains("[degraded]"))
+            .unwrap_or(false));
+
+        std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
+        std::env::remove_var("AGENT007_RELIABILITY_BUDGET_GOVERNOR");
+        std::env::remove_var("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS");
+        std::env::remove_var("AGENT007_RELIABILITY_MAX_DEGRADATIONS");
     }
 }

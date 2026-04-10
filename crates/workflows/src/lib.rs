@@ -3,6 +3,7 @@ pub mod dag;
 pub mod error;
 pub mod hosted;
 pub mod loader;
+pub mod reliability;
 pub mod runner;
 pub mod state;
 pub mod types;
@@ -12,6 +13,7 @@ pub use hosted::{
     HostedWorkflowEngine, HostedWorkflowProgress, HostedWorkflowProgressStatus, HostedWorkflowStep,
 };
 pub use loader::WorkflowLoader;
+pub use reliability::{ReliabilityTransition, ReliabilityTransitionKind};
 pub use runner::WorkflowRunner;
 pub use state::{
     WorkflowRunRequest, WorkflowRunState, WorkflowRunStatus, WorkflowSourceRef, WorkflowStepState,

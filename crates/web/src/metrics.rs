@@ -7,7 +7,9 @@ use tokio::sync::Mutex;
 
 use agent007_core::{
     events::AgentEvent,
-    run_store::{RunStatus, RunStore, RunTokenSummary},
+    run_store::{
+        RunMetadata, RunScorecard, RunStatus, RunStore, RunTokenSummary, TOKEN_PRICE_PER_TOKEN_USD,
+    },
 };
 use agent007_learning::LearningEvent;
 
@@ -23,6 +25,12 @@ pub struct DashboardMetrics {
     pub total_tokens: u64,
     pub estimated_usd: f64,
     pub session_requests: u32,
+    pub scorecard_run_count: u32,
+    pub success_rate: f64,
+    pub avg_cost_usd: f64,
+    pub avg_latency_ms: f64,
+    pub total_retries: u32,
+    pub avg_retries_per_run: f64,
 
     pub avg_reward: f64,
     pub feedback_count: u32,
@@ -40,6 +48,7 @@ pub struct DashboardMetrics {
     pub model_provider: String,
 
     pub recent_tasks: VecDeque<TaskLogEntry>,
+    pub recent_scorecards: VecDeque<RunScorecardEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,9 +63,20 @@ pub struct TaskLogEntry {
     pub finished_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RunScorecardEntry {
+    pub run_id: String,
+    pub status: String,
+    pub success: bool,
+    pub duration_ms: Option<i64>,
+    pub retries: u32,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    pub quality_score: f64,
+}
+
 const MAX_RECENT_TASKS: usize = 50;
-// Keep in sync with STATUSLINE_PRICE_PER_TOKEN in crates/cli/src/commands/serve.rs
-const TOKEN_PRICE_PER_TOKEN_USD: f64 = 0.000_002;
+const MAX_RECENT_SCORECARDS: usize = 50;
 
 impl DashboardMetrics {
     pub fn new() -> Self {
@@ -75,6 +95,12 @@ impl DashboardMetrics {
             total_tokens: 0,
             estimated_usd: 0.0,
             session_requests: 0,
+            scorecard_run_count: 0,
+            success_rate: 0.0,
+            avg_cost_usd: 0.0,
+            avg_latency_ms: 0.0,
+            total_retries: 0,
+            avg_retries_per_run: 0.0,
             avg_reward: 0.0,
             feedback_count: 0,
             prompt_improvements: 0,
@@ -122,6 +148,7 @@ impl DashboardMetrics {
                     .unwrap_or_else(|| "hosted-mcp".to_string())
             },
             recent_tasks: VecDeque::new(),
+            recent_scorecards: VecDeque::new(),
         }
     }
 
@@ -249,7 +276,20 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
     metrics.total_tokens = 0;
     metrics.estimated_usd = 0.0;
     metrics.session_requests = 0;
+    metrics.scorecard_run_count = 0;
+    metrics.success_rate = 0.0;
+    metrics.avg_cost_usd = 0.0;
+    metrics.avg_latency_ms = 0.0;
+    metrics.total_retries = 0;
+    metrics.avg_retries_per_run = 0.0;
     metrics.recent_tasks.clear();
+    metrics.recent_scorecards.clear();
+
+    let mut completed_scorecards = 0u32;
+    let mut successful_scorecards = 0u32;
+    let mut total_cost_usd = 0.0f64;
+    let mut total_latency_ms = 0.0f64;
+    let mut latency_count = 0u32;
 
     for run in runs.iter().rev() {
         match run.status {
@@ -268,6 +308,36 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
         metrics.total_tokens += tokens;
         metrics.session_requests += requests;
 
+        if let Some(scorecard) = load_or_synthesize_scorecard(store, run, tokens, requests) {
+            metrics.scorecard_run_count += 1;
+            total_cost_usd += scorecard.estimated_usd;
+            metrics.total_retries = metrics.total_retries.saturating_add(scorecard.retry_count);
+            if scorecard.completed {
+                completed_scorecards += 1;
+                if scorecard.success {
+                    successful_scorecards += 1;
+                }
+            }
+            if let Some(duration_ms) = scorecard.duration_ms {
+                total_latency_ms += duration_ms as f64;
+                latency_count += 1;
+            }
+
+            metrics.recent_scorecards.push_back(RunScorecardEntry {
+                run_id: scorecard.run_id.clone(),
+                status: run_status_label(&scorecard.status).to_string(),
+                success: scorecard.success,
+                duration_ms: scorecard.duration_ms,
+                retries: scorecard.retry_count,
+                tokens: scorecard.tokens,
+                cost_usd: scorecard.estimated_usd,
+                quality_score: scorecard.quality_score,
+            });
+            if metrics.recent_scorecards.len() > MAX_RECENT_SCORECARDS {
+                metrics.recent_scorecards.pop_front();
+            }
+        }
+
         let provider_label = run.provider.clone().unwrap_or_else(|| run.mode.clone());
         metrics.recent_tasks.push_back(TaskLogEntry {
             id: run.id.clone(),
@@ -284,6 +354,18 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
         if metrics.recent_tasks.len() > MAX_RECENT_TASKS {
             metrics.recent_tasks.pop_front();
         }
+    }
+
+    if completed_scorecards > 0 {
+        metrics.success_rate = successful_scorecards as f64 / completed_scorecards as f64;
+    }
+    if metrics.scorecard_run_count > 0 {
+        metrics.avg_cost_usd = total_cost_usd / metrics.scorecard_run_count as f64;
+        metrics.avg_retries_per_run =
+            metrics.total_retries as f64 / metrics.scorecard_run_count as f64;
+    }
+    if latency_count > 0 {
+        metrics.avg_latency_ms = total_latency_ms / latency_count as f64;
     }
 
     metrics.active_agents = metrics.running_tasks.max(metrics.active_agents);
@@ -326,6 +408,57 @@ fn run_status_label(status: &RunStatus) -> &'static str {
         RunStatus::Succeeded => "completed",
         RunStatus::Failed => "failed",
     }
+}
+
+fn load_or_synthesize_scorecard(
+    store: &RunStore,
+    run: &RunMetadata,
+    tokens: u64,
+    requests: u32,
+) -> Option<RunScorecard> {
+    if let Ok(Some(scorecard)) = store.read_run_scorecard_optional(&run.id) {
+        return Some(scorecard);
+    }
+
+    let completed = matches!(run.status, RunStatus::Succeeded | RunStatus::Failed);
+    let success = matches!(run.status, RunStatus::Succeeded);
+    let duration_ms = run.finished_at.map(|finished| {
+        finished
+            .signed_duration_since(run.started_at)
+            .num_milliseconds()
+            .max(0)
+    });
+    let mut scorecard = RunScorecard {
+        schema_version: 1,
+        run_id: run.id.clone(),
+        kind: run.kind.clone(),
+        mode: run.mode.clone(),
+        provider: run.provider.clone(),
+        status: run.status.clone(),
+        completed,
+        success,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        duration_ms,
+        tokens,
+        requests,
+        estimated_usd: tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD,
+        retry_count: 0,
+        tool_calls: 0,
+        tool_errors: 0,
+        quality_score: 0.0,
+        updated_at: Utc::now(),
+    };
+    scorecard.quality_score = if completed {
+        if success {
+            100.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    Some(scorecard)
 }
 
 pub fn new_metrics_state() -> MetricsState {
@@ -387,6 +520,8 @@ mod tests {
         assert_eq!(m.running_tasks, 0);
         assert_eq!(m.completed_tasks, 0);
         assert_eq!(m.total_tokens, 0);
+        assert_eq!(m.scorecard_run_count, 0);
+        assert_eq!(m.total_retries, 0);
     }
 
     #[test]
@@ -496,6 +631,8 @@ mod tests {
         assert_eq!(snapshot.running_tasks, 1);
         assert_eq!(snapshot.session_requests, 1);
         assert_eq!(snapshot.total_tokens, 321);
+        assert_eq!(snapshot.scorecard_run_count, 2);
+        assert!((snapshot.success_rate - 1.0).abs() < f64::EPSILON);
         assert!(snapshot
             .recent_tasks
             .iter()

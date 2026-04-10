@@ -58,6 +58,33 @@ pub struct RunTokenSummary {
 }
 
 const TOKEN_SUMMARY_ARTIFACT: &str = "token-summary.json";
+const RUN_SCORECARD_ARTIFACT: &str = "run-scorecard.json";
+const RUN_SCORECARD_SCHEMA_VERSION: u32 = 1;
+// Keep in sync with STATUSLINE_PRICE_PER_TOKEN in crates/cli/src/commands/serve.rs.
+pub const TOKEN_PRICE_PER_TOKEN_USD: f64 = 0.000_002;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunScorecard {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub kind: String,
+    pub mode: String,
+    pub provider: Option<String>,
+    pub status: RunStatus,
+    pub completed: bool,
+    pub success: bool,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub duration_ms: Option<i64>,
+    pub tokens: u64,
+    pub requests: u32,
+    pub estimated_usd: f64,
+    pub retry_count: u32,
+    pub tool_calls: u32,
+    pub tool_errors: u32,
+    pub quality_score: f64,
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone)]
 pub struct RunStore {
@@ -99,6 +126,7 @@ impl RunStore {
         let run_dir = self.run_dir(&metadata.id);
         std::fs::create_dir_all(&run_dir).map_err(|error| CoreError::io(&run_dir, error))?;
         self.write_metadata(&metadata)?;
+        let _ = self.upsert_run_scorecard_for_metadata(&metadata);
 
         Ok(metadata)
     }
@@ -108,11 +136,15 @@ impl RunStore {
         if let AgentEvent::ModelRequest { token_estimate, .. } = event {
             self.bump_token_summary(run_id, *token_estimate)?;
         }
+        let _ = self.update_scorecard_from_event(run_id, event);
         Ok(())
     }
 
     pub fn append_note(&self, run_id: &str, kind: &str, payload: Value) -> Result<(), CoreError> {
-        self.append_entry(run_id, kind, payload)
+        let scorecard_payload = payload.clone();
+        self.append_entry(run_id, kind, payload)?;
+        let _ = self.update_scorecard_from_note(run_id, kind, &scorecard_payload);
+        Ok(())
     }
 
     pub fn finish_run(
@@ -143,6 +175,7 @@ impl RunStore {
         metadata.status = status;
         metadata.output_preview = Some(truncate_preview(output_preview));
         self.write_metadata(&metadata)?;
+        let _ = self.upsert_run_scorecard_for_metadata(&metadata);
         Ok(metadata)
     }
 
@@ -160,6 +193,7 @@ impl RunStore {
             RunStatus::Succeeded | RunStatus::Failed => Some(Utc::now()),
         };
         self.write_metadata(&metadata)?;
+        let _ = self.upsert_run_scorecard_for_metadata(&metadata);
         Ok(metadata)
     }
 
@@ -170,6 +204,7 @@ impl RunStore {
         if let Ok(mut metadata) = self.load_metadata(run_id) {
             metadata.provider = Some(provider.to_string());
             self.write_metadata(&metadata)?;
+            let _ = self.upsert_run_scorecard_for_metadata(&metadata);
         }
         Ok(())
     }
@@ -215,6 +250,7 @@ impl RunStore {
                     // don't show 0 tokens / 0 requests in the dashboard after cleanup.
                     let _ = self.ensure_hosted_token_fallback(&metadata, preview);
                     let _ = self.ensure_token_summary_artifact(&metadata.id);
+                    let _ = self.upsert_run_scorecard_for_metadata(&metadata);
                     cleaned += 1;
                 }
             }
@@ -337,6 +373,23 @@ impl RunStore {
             return Ok(None);
         }
         self.read_text_artifact(run_id, filename).map(Some)
+    }
+
+    pub fn read_run_scorecard(&self, run_id: &str) -> Result<RunScorecard, CoreError> {
+        self.read_json_artifact(run_id, RUN_SCORECARD_ARTIFACT)
+    }
+
+    pub fn read_run_scorecard_optional(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunScorecard>, CoreError> {
+        self.read_json_artifact_optional(run_id, RUN_SCORECARD_ARTIFACT)
+    }
+
+    pub fn ensure_run_scorecard_artifact(&self, run_id: &str) -> Result<RunScorecard, CoreError> {
+        let metadata = self.load_metadata(run_id)?;
+        self.upsert_run_scorecard_for_metadata(&metadata)?;
+        self.read_run_scorecard(run_id)
     }
 
     pub fn list_artifacts(&self, run_id: &str) -> Result<Vec<String>, CoreError> {
@@ -463,6 +516,169 @@ impl RunStore {
         self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
     }
 
+    fn update_scorecard_from_event(
+        &self,
+        run_id: &str,
+        event: &AgentEvent,
+    ) -> Result<(), CoreError> {
+        let metadata = self.load_metadata(run_id)?;
+        let summary = self
+            .read_json_artifact_optional::<RunTokenSummary>(run_id, TOKEN_SUMMARY_ARTIFACT)?
+            .unwrap_or_default();
+        let mut scorecard = self.load_or_init_scorecard(&metadata, &summary)?;
+        match event {
+            AgentEvent::ToolCall { .. } => {
+                scorecard.tool_calls = scorecard.tool_calls.saturating_add(1);
+            }
+            AgentEvent::ToolCallResult { success, .. } => {
+                if !success {
+                    scorecard.tool_errors = scorecard.tool_errors.saturating_add(1);
+                }
+            }
+            _ => {}
+        }
+        self.sync_scorecard_with_metadata(&mut scorecard, &metadata, &summary);
+        self.write_json_artifact(run_id, RUN_SCORECARD_ARTIFACT, &scorecard)
+    }
+
+    fn update_scorecard_from_note(
+        &self,
+        run_id: &str,
+        kind: &str,
+        _payload: &Value,
+    ) -> Result<(), CoreError> {
+        if kind != "workflow-step-retry" {
+            return Ok(());
+        }
+        let metadata = self.load_metadata(run_id)?;
+        let summary = self
+            .read_json_artifact_optional::<RunTokenSummary>(run_id, TOKEN_SUMMARY_ARTIFACT)?
+            .unwrap_or_default();
+        let mut scorecard = self.load_or_init_scorecard(&metadata, &summary)?;
+        scorecard.retry_count = scorecard.retry_count.saturating_add(1);
+        self.sync_scorecard_with_metadata(&mut scorecard, &metadata, &summary);
+        self.write_json_artifact(run_id, RUN_SCORECARD_ARTIFACT, &scorecard)
+    }
+
+    fn upsert_run_scorecard_for_metadata(&self, metadata: &RunMetadata) -> Result<(), CoreError> {
+        let summary = self
+            .read_json_artifact_optional::<RunTokenSummary>(&metadata.id, TOKEN_SUMMARY_ARTIFACT)?
+            .unwrap_or_default();
+        let mut scorecard = self.load_or_init_scorecard(metadata, &summary)?;
+        self.sync_scorecard_with_metadata(&mut scorecard, metadata, &summary);
+        self.write_json_artifact(&metadata.id, RUN_SCORECARD_ARTIFACT, &scorecard)
+    }
+
+    fn load_or_init_scorecard(
+        &self,
+        metadata: &RunMetadata,
+        summary: &RunTokenSummary,
+    ) -> Result<RunScorecard, CoreError> {
+        if let Some(scorecard) =
+            self.read_json_artifact_optional::<RunScorecard>(&metadata.id, RUN_SCORECARD_ARTIFACT)?
+        {
+            return Ok(scorecard);
+        }
+
+        let (retry_count, tool_calls, tool_errors) = self.scan_run_activity(&metadata.id)?;
+        let completed = run_is_completed(&metadata.status);
+        let success = matches!(metadata.status, RunStatus::Succeeded);
+        let duration_ms = run_duration_ms(metadata.started_at, metadata.finished_at);
+        let mut scorecard = RunScorecard {
+            schema_version: RUN_SCORECARD_SCHEMA_VERSION,
+            run_id: metadata.id.clone(),
+            kind: metadata.kind.clone(),
+            mode: metadata.mode.clone(),
+            provider: metadata.provider.clone(),
+            status: metadata.status.clone(),
+            completed,
+            success,
+            started_at: metadata.started_at,
+            finished_at: metadata.finished_at,
+            duration_ms,
+            tokens: summary.tokens,
+            requests: summary.requests,
+            estimated_usd: summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD,
+            retry_count,
+            tool_calls,
+            tool_errors,
+            quality_score: 0.0,
+            updated_at: Utc::now(),
+        };
+        scorecard.quality_score = compute_quality_score(&scorecard);
+        Ok(scorecard)
+    }
+
+    fn sync_scorecard_with_metadata(
+        &self,
+        scorecard: &mut RunScorecard,
+        metadata: &RunMetadata,
+        summary: &RunTokenSummary,
+    ) {
+        scorecard.schema_version = RUN_SCORECARD_SCHEMA_VERSION;
+        scorecard.run_id = metadata.id.clone();
+        scorecard.kind = metadata.kind.clone();
+        scorecard.mode = metadata.mode.clone();
+        scorecard.provider = metadata.provider.clone();
+        scorecard.status = metadata.status.clone();
+        scorecard.completed = run_is_completed(&metadata.status);
+        scorecard.success = matches!(metadata.status, RunStatus::Succeeded);
+        scorecard.started_at = metadata.started_at;
+        scorecard.finished_at = metadata.finished_at;
+        scorecard.duration_ms = run_duration_ms(metadata.started_at, metadata.finished_at);
+        scorecard.tokens = summary.tokens;
+        scorecard.requests = summary.requests;
+        scorecard.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        scorecard.quality_score = compute_quality_score(scorecard);
+        scorecard.updated_at = Utc::now();
+    }
+
+    fn scan_run_activity(&self, run_id: &str) -> Result<(u32, u32, u32), CoreError> {
+        let log_path = self.events_path(run_id);
+        if !log_path.exists() {
+            return Ok((0, 0, 0));
+        }
+
+        let file =
+            std::fs::File::open(&log_path).map_err(|error| CoreError::io(&log_path, error))?;
+        let reader = BufReader::new(file);
+
+        let mut retry_count = 0u32;
+        let mut tool_calls = 0u32;
+        let mut tool_errors = 0u32;
+
+        for line in reader.lines() {
+            let line = line.map_err(|error| CoreError::io(&log_path, error))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: RunLogEntry = serde_json::from_str(&line)?;
+            match entry.kind.as_str() {
+                "workflow-step-retry" => {
+                    retry_count = retry_count.saturating_add(1);
+                }
+                "agent-event" => {
+                    if let Ok(event) = serde_json::from_value::<AgentEvent>(entry.payload) {
+                        match event {
+                            AgentEvent::ToolCall { .. } => {
+                                tool_calls = tool_calls.saturating_add(1);
+                            }
+                            AgentEvent::ToolCallResult { success, .. } => {
+                                if !success {
+                                    tool_errors = tool_errors.saturating_add(1);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok((retry_count, tool_calls, tool_errors))
+    }
+
     fn compute_token_summary(&self, run_id: &str) -> Result<RunTokenSummary, CoreError> {
         let log_path = self.events_path(run_id);
         if !log_path.exists() {
@@ -560,6 +776,34 @@ fn truncate_preview(output: &str) -> String {
     }
 }
 
+fn run_duration_ms(started_at: DateTime<Utc>, finished_at: Option<DateTime<Utc>>) -> Option<i64> {
+    finished_at.map(|finished| {
+        finished
+            .signed_duration_since(started_at)
+            .num_milliseconds()
+            .max(0)
+    })
+}
+
+fn run_is_completed(status: &RunStatus) -> bool {
+    matches!(status, RunStatus::Succeeded | RunStatus::Failed)
+}
+
+fn compute_quality_score(scorecard: &RunScorecard) -> f64 {
+    if !scorecard.completed {
+        return 0.0;
+    }
+
+    let mut score = if scorecard.success { 100.0 } else { 0.0 };
+    score -= scorecard.retry_count as f64 * 4.0;
+    score -= scorecard.tool_errors as f64 * 6.0;
+    score -= (scorecard.tokens as f64 / 100_000.0).min(15.0);
+    if let Some(duration_ms) = scorecard.duration_ms {
+        score -= (duration_ms as f64 / 1_000.0 / 60.0).min(10.0);
+    }
+    (score.clamp(0.0, 100.0) * 10.0).round() / 10.0
+}
+
 fn shared_token_summary_lock(base_dir: &PathBuf) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
         OnceLock::new();
@@ -605,7 +849,9 @@ mod tests {
         let detail = store.load_run(&run.id).unwrap();
         assert_eq!(detail.entries.len(), 1);
         assert_eq!(detail.entries[0].kind, "note");
-        assert!(detail.artifacts.is_empty());
+        assert!(detail
+            .artifacts
+            .contains(&RUN_SCORECARD_ARTIFACT.to_string()));
     }
 
     #[test]
@@ -630,7 +876,13 @@ mod tests {
         assert_eq!(loaded, payload);
 
         let artifacts = store.list_artifacts(&run.id).unwrap();
-        assert_eq!(artifacts, vec!["workflow-request.json"]);
+        assert_eq!(
+            artifacts,
+            vec![
+                RUN_SCORECARD_ARTIFACT.to_string(),
+                "workflow-request.json".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -789,6 +1041,79 @@ mod tests {
             .unwrap();
         assert_eq!(summary.tokens, 42);
         assert_eq!(summary.requests, 1);
+    }
+
+    #[test]
+    fn create_run_initializes_run_scorecard_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("task", "score me", "standalone", Some("mock"))
+            .unwrap();
+
+        let scorecard = store.read_run_scorecard(&run.id).unwrap();
+        assert_eq!(scorecard.run_id, run.id);
+        assert_eq!(scorecard.status, RunStatus::Running);
+        assert_eq!(scorecard.tokens, 0);
+        assert_eq!(scorecard.retry_count, 0);
+        assert_eq!(scorecard.tool_errors, 0);
+    }
+
+    #[test]
+    fn scorecard_tracks_retry_and_tool_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run(
+                "workflow",
+                "retry and tool failure",
+                "standalone",
+                Some("mock"),
+            )
+            .unwrap();
+
+        store
+            .append_note(
+                &run.id,
+                "workflow-step-retry",
+                serde_json::json!({ "attempt": 1 }),
+            )
+            .unwrap();
+        store
+            .append_event(
+                &run.id,
+                &AgentEvent::ToolCall {
+                    agent_id: crate::types::AgentId::new(),
+                    tool: crate::events::ToolCall {
+                        name: "exec_command".to_string(),
+                        args: serde_json::json!({ "cmd": "echo hi" }),
+                    },
+                },
+            )
+            .unwrap();
+        store
+            .append_event(
+                &run.id,
+                &AgentEvent::ToolCallResult {
+                    agent_id: crate::types::AgentId::new(),
+                    tool: crate::events::ToolCall {
+                        name: "exec_command".to_string(),
+                        args: serde_json::json!({ "cmd": "echo hi" }),
+                    },
+                    success: false,
+                    error: Some("non-zero exit".to_string()),
+                },
+            )
+            .unwrap();
+        store.finish_run(&run.id, false, "failed").unwrap();
+
+        let scorecard = store.read_run_scorecard(&run.id).unwrap();
+        assert_eq!(scorecard.retry_count, 1);
+        assert_eq!(scorecard.tool_calls, 1);
+        assert_eq!(scorecard.tool_errors, 1);
+        assert_eq!(scorecard.status, RunStatus::Failed);
+        assert!(scorecard.completed);
+        assert!(!scorecard.success);
     }
 
     #[test]

@@ -146,6 +146,11 @@ impl WebServer {
             .route("/api/skill-registry", get(api::skill_registry_handler))
             .route("/api/status", get(api::status_handler))
             .route("/api/stats", get(api::stats_handler))
+            .route("/api/scorecards", get(api::scorecards_handler))
+            .route(
+                "/api/regression/evaluate",
+                get(api::regression_evaluate_handler),
+            )
             .route("/api/runs", get(api::runs_handler))
             .route("/api/runs/{id}", get(api::run_detail_handler))
             .route("/api/runs/{id}/approval", post(api::run_approval_handler))

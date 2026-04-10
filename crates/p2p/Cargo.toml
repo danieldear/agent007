@@ -1,0 +1,9 @@
+[package]
+name = "agent007-p2p"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }

@@ -75,6 +75,17 @@ export function useApi() {
     // Status
     getStatus: () => fetchJson('/api/status'),
     getStats: () => fetchJson('/api/stats'),
+    getScorecards: (limit = 100) => fetchJson(`/api/scorecards?limit=${encodeURIComponent(limit)}`),
+    evaluateRegression: (params = {}) => {
+      const query = new URLSearchParams()
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          query.set(key, String(value))
+        }
+      })
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return fetchJson(`/api/regression/evaluate${suffix}`)
+    },
     listRuns: () => fetchJson('/api/runs'),
     getRunDetail: (id) => fetchJson(`/api/runs/${encodeURIComponent(id)}`),
     approveRunStep: (id, data) => fetchJson(`/api/runs/${encodeURIComponent(id)}/approval`, { method: 'POST', body: JSON.stringify(data) }),

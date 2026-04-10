@@ -232,6 +232,7 @@ mod tests {
             description: None,
             steps,
             budget: None,
+            reliability: None,
         }
     }
 

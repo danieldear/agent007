@@ -756,6 +756,7 @@ mod tests {
             description: None,
             steps: vec![],
             budget: None,
+            reliability: None,
         };
         let result = stack.workflow_runner.validate(&def);
         // Empty workflow validates to empty batches
