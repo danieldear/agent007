@@ -44,7 +44,10 @@ mod tests {
     fn completion_request_serializes() {
         let req = CompletionRequest {
             model: "claude-sonnet-4-6".to_string(),
-            messages: vec![Message { role: Role::User, content: "hello".to_string() }],
+            messages: vec![Message {
+                role: Role::User,
+                content: "hello".to_string(),
+            }],
             max_tokens: Some(100),
             temperature: None,
             system: None,

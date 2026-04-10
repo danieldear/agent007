@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use chrono::Utc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -11,23 +11,28 @@ use agent007_core::events::AgentEvent;
 use agent007_core::orchestrator::OrchestratorAgent;
 use agent007_core::run_store::RunStore;
 use agent007_core::task::Task;
+use agent007_core::tool_executor::ToolExecutor;
 use agent007_core::types::PromptStore;
+use agent007_hooks::{HookConfig, HookExecutor};
+use agent007_learning::scorer::RewardWeights;
+use agent007_learning::store::LearningStore;
+use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
+use agent007_mcp::{McpClient, McpServerConfig};
 use agent007_memory::store::{MemoryEntryType, MemoryMeta, MemoryStore};
 use agent007_memory::vectordb::LanceDBStore;
 use agent007_memory::Retriever;
-use agent007_hooks::{HookConfig, HookExecutor};
-use agent007_mcp::{McpClient, McpServerConfig};
-use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
-use agent007_learning::scorer::RewardWeights;
-use agent007_learning::store::LearningStore;
-use agent007_models::{ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter, OllamaEmbeddingProvider, OllamaProvider};
+use agent007_models::{
+    ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter,
+    OllamaEmbeddingProvider, OllamaProvider,
+};
+use agent007_personas::PersonaRegistry;
 use agent007_skills::SkillExecutor;
 use agent007_tui::{App, EventLoop};
-use agent007_personas::PersonaRegistry;
 use agent007_zones::{AuditLogger, ZoneChecker, ZoneConfig};
-use agent007_core::tool_executor::ToolExecutor;
 
-pub use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home, agent007_write_home};
+pub use agent007_core::paths::{
+    agent007_global_home, agent007_home, agent007_project_home, agent007_write_home,
+};
 
 pub struct Stack {
     pub dispatcher: Arc<LocalDispatcher>,
@@ -66,7 +71,10 @@ pub fn has_openai_api_key() -> bool {
 }
 
 pub fn standalone_mode_available(config: &Config) -> bool {
-    is_dry_run() || has_anthropic_api_key() || has_openai_api_key() || config.models.ollama.is_some()
+    is_dry_run()
+        || has_anthropic_api_key()
+        || has_openai_api_key()
+        || config.models.ollama.is_some()
 }
 
 pub fn runtime_mode_label(config: &Config) -> &'static str {
@@ -173,7 +181,10 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
     }
 
     let requested_default = config.models.default_provider();
-    let default_provider = if available.iter().any(|provider| provider == &requested_default) {
+    let default_provider = if available
+        .iter()
+        .any(|provider| provider == &requested_default)
+    {
         requested_default
     } else {
         let fallback = available[0].clone();
@@ -223,7 +234,8 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
             ("default", routing.default.as_deref()),
         ] {
             if let Some(provider) = provider {
-                let (provider_name, model_name) = config.models.resolve_provider_and_model(Some(provider));
+                let (provider_name, model_name) =
+                    config.models.resolve_provider_and_model(Some(provider));
                 router.add_rule(task_type, &provider_name);
                 if model_name != provider_name {
                     router.alias(&model_name, &provider_name);
@@ -245,8 +257,9 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
         }
     }
 
-    let (default_provider_name, default_model_name) =
-        config.models.resolve_provider_and_model(Some(&config.models.default));
+    let (default_provider_name, default_model_name) = config
+        .models
+        .resolve_provider_and_model(Some(&config.models.default));
     if default_model_name != default_provider_name {
         router.alias(&default_model_name, &default_provider_name);
     }
@@ -331,7 +344,9 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     // Use the model router as the embedding provider (MockProvider implements EmbeddingProvider)
     // For the vector DB, use LanceDB with a local path.
     // In dry-run, the VectorDB may fail — use a fallback no-op if unavailable.
-    let lsp_categories = config.lsp.as_ref()
+    let lsp_categories = config
+        .lsp
+        .as_ref()
         .map(|l| l.inject_for_categories.clone())
         .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
     let skill_executor = build_skill_executor(
@@ -349,23 +364,24 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
 
     // 11. PersonaRegistry — load built-ins + user overrides from ~/.agent007/personas/
     let personas_dir = home.join("personas");
-    let persona_registry = Arc::new(
-        PersonaRegistry::load(&personas_dir).unwrap_or_else(|e| {
-            tracing::warn!("failed to load persona overrides from {}: {}", personas_dir.display(), e);
-            PersonaRegistry::built_in()
-        })
-    );
+    let persona_registry = Arc::new(PersonaRegistry::load(&personas_dir).unwrap_or_else(|e| {
+        tracing::warn!(
+            "failed to load persona overrides from {}: {}",
+            personas_dir.display(),
+            e
+        );
+        PersonaRegistry::built_in()
+    }));
 
     // 12. Zones — load config from [zones] section and build ZoneChecker
     let zone_config = ZoneConfig {
-        forbidden:    config.zones.forbidden.clone(),
-        readonly:     config.zones.readonly.clone(),
-        sensitive:    config.zones.sensitive.clone(),
+        forbidden: config.zones.forbidden.clone(),
+        readonly: config.zones.readonly.clone(),
+        sensitive: config.zones.sensitive.clone(),
         unrestricted: config.zones.unrestricted.clone(),
     };
     let zone_checker = Arc::new(
-        ZoneChecker::new(&zone_config)
-            .map_err(|e| anyhow::anyhow!("zones config error: {}", e))?
+        ZoneChecker::new(&zone_config).map_err(|e| anyhow::anyhow!("zones config error: {}", e))?,
     );
 
     // Audit log at ~/.agent007/audit/audit.log
@@ -438,30 +454,31 @@ async fn build_skill_executor(
             (Arc::new(ep), 768)
         } else {
             let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
-            (Arc::new(ep) as Arc<dyn agent007_models::EmbeddingProvider>, 384)
+            (
+                Arc::new(ep) as Arc<dyn agent007_models::EmbeddingProvider>,
+                384,
+            )
         };
 
     // Try to build LanceDB; in dry-run, fall back to a no-op VectorDB if it fails.
     let db: Arc<dyn agent007_memory::VectorDB> = if is_dry_run {
         Arc::new(NoOpVectorDB)
     } else {
-        let store = LanceDBStore::new(vectordb_path, "skills", embed_dim).await
+        let store = LanceDBStore::new(vectordb_path, "skills", embed_dim)
+            .await
             .map_err(|e| anyhow::anyhow!("failed to open LanceDB at {}: {}", vectordb_path, e))?;
         Arc::new(store)
     };
 
-    let retriever = Arc::new(
-        Retriever::new(embedder, db, 5)
-            .with_memory_store(Arc::clone(memory_store))
-    );
+    let retriever =
+        Arc::new(Retriever::new(embedder, db, 5).with_memory_store(Arc::clone(memory_store)));
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
-        agent007_global_home().join("memory")
+        agent007_global_home().join("memory"),
     ));
     let global_memory = global_store.scoped("global");
 
-    Ok(SkillExecutor::new(provider, retriever, memory)
-        .with_global_memory(global_memory))
+    Ok(SkillExecutor::new(provider, retriever, memory).with_global_memory(global_memory))
 }
 
 /// A no-op VectorDB used in dry-run mode (no actual storage).
@@ -518,15 +535,22 @@ fn generate_auto_insights(
     task: &str,
     success: bool,
 ) {
-    let Ok(run) = run_store.load_run(run_id) else { return; };
+    let Ok(run) = run_store.load_run(run_id) else {
+        return;
+    };
 
     // Collect distinct skill names from TaskCompleted events
-    let mut skills_used: Vec<String> = run.entries
+    let mut skills_used: Vec<String> = run
+        .entries
         .iter()
         .filter(|e| e.kind == "agent-event")
         .filter_map(|e| serde_json::from_value::<AgentEvent>(e.payload.clone()).ok())
         .filter_map(|ev| {
-            if let AgentEvent::TaskCompleted { skill_name: Some(skill), .. } = ev {
+            if let AgentEvent::TaskCompleted {
+                skill_name: Some(skill),
+                ..
+            } = ev
+            {
                 Some(skill)
             } else {
                 None
@@ -569,8 +593,7 @@ fn generate_auto_insights(
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
     let mode = runtime_mode_label(&config);
-    let provider = selected_runtime_provider(&config)
-        .unwrap_or_else(|| "hosted-mcp".to_string());
+    let provider = selected_runtime_provider(&config).unwrap_or_else(|| "hosted-mcp".to_string());
     let run = stack
         .run_store
         .create_run("task", &task, mode, Some(provider.as_str()))?;
@@ -597,20 +620,18 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         match stack.orchestrator.run(agent_task).await {
             Ok(result) => {
                 let _ = stack.run_store.finish_run(&run.id, true, &result.output);
-                if let Err(error) = persist_task_memory(
-                    &stack.memory_store,
-                    &run.id,
-                    &task,
-                    true,
-                    &result.output,
-                ) {
+                if let Err(error) =
+                    persist_task_memory(&stack.memory_store, &run.id, &task, true, &result.output)
+                {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
                 generate_auto_insights(&stack.memory_store, &stack.run_store, &run.id, &task, true);
                 tracing::info!("task completed: {}", result.output);
             }
             Err(error) => {
-                let _ = stack.run_store.finish_run(&run.id, false, error.to_string());
+                let _ = stack
+                    .run_store
+                    .finish_run(&run.id, false, error.to_string());
                 if let Err(persist_error) = persist_task_memory(
                     &stack.memory_store,
                     &run.id,
@@ -620,7 +641,13 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 ) {
                     tracing::warn!("failed to persist task memory: {}", persist_error);
                 }
-                generate_auto_insights(&stack.memory_store, &stack.run_store, &run.id, &task, false);
+                generate_auto_insights(
+                    &stack.memory_store,
+                    &stack.run_store,
+                    &run.id,
+                    &task,
+                    false,
+                );
                 return Err(error.into());
             }
         }
@@ -640,13 +667,9 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         match orchestrator.run(agent_task).await {
             Ok(result) => {
                 let _ = run_store.finish_run(&run_id, true, &result.output);
-                if let Err(error) = persist_task_memory(
-                    &memory_store,
-                    &run_id,
-                    &task_desc,
-                    true,
-                    &result.output,
-                ) {
+                if let Err(error) =
+                    persist_task_memory(&memory_store, &run_id, &task_desc, true, &result.output)
+                {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
                 generate_auto_insights(&memory_store, &run_store, &run_id, &task_desc, true);
@@ -654,13 +677,9 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
             }
             Err(e) => {
                 let _ = run_store.finish_run(&run_id, false, e.to_string());
-                if let Err(error) = persist_task_memory(
-                    &memory_store,
-                    &run_id,
-                    &task_desc,
-                    false,
-                    &e.to_string(),
-                ) {
+                if let Err(error) =
+                    persist_task_memory(&memory_store, &run_id, &task_desc, false, &e.to_string())
+                {
                     tracing::warn!("failed to persist task memory: {}", error);
                 }
                 generate_auto_insights(&memory_store, &run_store, &run_id, &task_desc, false);
@@ -732,7 +751,12 @@ mod tests {
         let stack = build_stack(&config).await.unwrap();
         // WorkflowRunner is on the stack — test that it can validate an empty-step workflow
         use agent007_workflows::types::WorkflowDef;
-        let def = WorkflowDef { name: "t".to_string(), description: None, steps: vec![], budget: None };
+        let def = WorkflowDef {
+            name: "t".to_string(),
+            description: None,
+            steps: vec![],
+            budget: None,
+        };
         let result = stack.workflow_runner.validate(&def);
         // Empty workflow validates to empty batches
         assert!(result.is_ok());
@@ -760,12 +784,20 @@ mod tests {
         std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
 
         let config = Arc::new(Config::default());
-        execute(config, "persist this task".to_string()).await.unwrap();
+        execute(config, "persist this task".to_string())
+            .await
+            .unwrap();
 
-        let task_last = tmp.path().join("memory").join("project").join("task_last.md");
+        let task_last = tmp
+            .path()
+            .join("memory")
+            .join("project")
+            .join("task_last.md");
         assert!(task_last.exists(), "task_last memory record should exist");
 
-        let store = Arc::new(agent007_memory::store::MemoryStore::new(tmp.path().join("memory")));
+        let store = Arc::new(agent007_memory::store::MemoryStore::new(
+            tmp.path().join("memory"),
+        ));
         let content = store.scoped("project").read("task_last").unwrap().unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["task"], "persist this task");

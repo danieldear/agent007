@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::budget::{BudgetEstimate, CompactLevel, TokenBudget, estimate_tokens};
+use crate::budget::{estimate_tokens, BudgetEstimate, CompactLevel, TokenBudget};
 use crate::compact::compact_command_output;
 use crate::error::CoreError;
 use crate::repo_brain::{RepoBrain, RepoBrainBuilder};
@@ -75,7 +75,13 @@ impl ContextCompiler {
             .list_runs(5)
             .unwrap_or_default();
 
-        let preliminary = render_context(task, &repo_brain, &relevant_files, &memory_notes, &recent_runs);
+        let preliminary = render_context(
+            task,
+            &repo_brain,
+            &relevant_files,
+            &memory_notes,
+            &recent_runs,
+        );
         let preliminary_tokens = estimate_tokens(&preliminary);
         let budget_report = self.budget.estimate_prompt(preliminary_tokens);
         let recommended_level = budget_report.recommended_level;
@@ -98,7 +104,13 @@ impl ContextCompiler {
                 .collect()
         };
 
-        let compiled_context = render_context(task, &repo_brain, &relevant_files, &memory_notes, &recent_runs);
+        let compiled_context = render_context(
+            task,
+            &repo_brain,
+            &relevant_files,
+            &memory_notes,
+            &recent_runs,
+        );
         let estimated_tokens = estimate_tokens(&compiled_context);
         let budget_report = self.budget.estimate_prompt(estimated_tokens);
 
@@ -180,14 +192,17 @@ fn collect_memory_notes_recursive(
     dir: &std::path::Path,
     scored: &mut Vec<(f64, ContextMemoryNote)>,
 ) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_memory_notes_recursive(root, &path, scored);
         } else if path.extension().and_then(|v| v.to_str()) == Some("md") {
             let key = if let Ok(rel) = path.strip_prefix(root) {
-                let components: Vec<&str> = rel.components()
+                let components: Vec<&str> = rel
+                    .components()
                     .map(|c| c.as_os_str().to_str().unwrap_or(""))
                     .collect();
                 if let Some((last, rest)) = components.split_last() {
@@ -195,8 +210,18 @@ fn collect_memory_notes_recursive(
                     let mut parts: Vec<&str> = rest.iter().copied().collect();
                     parts.push(stem);
                     parts.join(":")
-                } else { path.file_stem().and_then(|v| v.to_str()).unwrap_or("note").to_string() }
-            } else { path.file_stem().and_then(|v| v.to_str()).unwrap_or("note").to_string() };
+                } else {
+                    path.file_stem()
+                        .and_then(|v| v.to_str())
+                        .unwrap_or("note")
+                        .to_string()
+                }
+            } else {
+                path.file_stem()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("note")
+                    .to_string()
+            };
 
             let raw = match fs::read_to_string(&path) {
                 Ok(r) => r,
@@ -205,11 +230,14 @@ fn collect_memory_notes_recursive(
             let (content, meta) = parse_memory_frontmatter(&raw);
             let score = score_memory_entry(&meta);
             let excerpt = summarize_markdown_note(&content);
-            scored.push((score, ContextMemoryNote {
-                key,
-                tokens: estimate_tokens(&excerpt),
-                excerpt,
-            }));
+            scored.push((
+                score,
+                ContextMemoryNote {
+                    key,
+                    tokens: estimate_tokens(&excerpt),
+                    excerpt,
+                },
+            ));
         }
     }
 }
@@ -234,7 +262,8 @@ fn parse_memory_frontmatter(raw: &str) -> (String, MemoryFrontmatterMeta) {
 
 fn score_memory_entry(meta: &MemoryFrontmatterMeta) -> f64 {
     let count = meta.access_count.unwrap_or(0) as f64;
-    let days_ago = meta.updated_at
+    let days_ago = meta
+        .updated_at
         .map(|dt| (Utc::now() - dt).num_seconds() as f64 / 86400.0)
         .unwrap_or(365.0);
     0.4 * (count + 1.0).ln() + 0.6 * (-days_ago / 30.0).exp()
@@ -328,12 +357,17 @@ fn is_ignored_dir(name: &str) -> bool {
 }
 
 fn is_candidate_file(path: &Path) -> bool {
-    let ext = path.extension().and_then(|value| value.to_str()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
     matches!(
         ext,
         "rs" | "md" | "toml" | "yaml" | "yml" | "json" | "ts" | "tsx" | "js" | "jsx" | "py" | "go"
     ) || matches!(
-        path.file_name().and_then(|value| value.to_str()).unwrap_or_default(),
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default(),
         "Cargo.toml" | "package.json" | "AGENTS.md" | "README.md" | "README"
     )
 }
@@ -428,14 +462,22 @@ mod tests {
     fn compiler_picks_relevant_files_and_memory() {
         let root = tempfile::tempdir().unwrap();
         let agent_home = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
         fs::write(root.path().join("AGENTS.md"), "Focus on auth and tests\n").unwrap();
         fs::create_dir_all(root.path().join("src")).unwrap();
         fs::write(root.path().join("src/auth.rs"), "pub fn auth_token() {}\n").unwrap();
         fs::write(root.path().join("src/lib.rs"), "pub fn run() {}\n").unwrap();
         fs::create_dir_all(agent_home.path().join("memory").join("project")).unwrap();
         fs::write(
-            agent_home.path().join("memory").join("project").join("auth.md"),
+            agent_home
+                .path()
+                .join("memory")
+                .join("project")
+                .join("auth.md"),
             "# auth\nUse token-based auth\n",
         )
         .unwrap();

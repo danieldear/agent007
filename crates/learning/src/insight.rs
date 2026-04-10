@@ -79,7 +79,11 @@ impl InsightGenerator {
         provider: Arc<dyn ModelProvider>,
         project_scope: ScopedMemoryStore,
     ) -> Self {
-        Self { config, provider, project_scope }
+        Self {
+            config,
+            provider,
+            project_scope,
+        }
     }
 
     /// Evaluate whether an insight should be generated for `skill_name`.
@@ -101,11 +105,14 @@ impl InsightGenerator {
 
         // ── 2. Compute failure stats ─────────────────────────────────────────────
         let total = entries.len();
-        let failure_reasons: Vec<String> = entries.iter().filter_map(|e| match &e.outcome {
-            Outcome::Failure { reason } => Some(reason.clone()),
-            Outcome::ToolError { tool } => Some(format!("tool error: {tool}")),
-            _ => None,
-        }).collect();
+        let failure_reasons: Vec<String> = entries
+            .iter()
+            .filter_map(|e| match &e.outcome {
+                Outcome::Failure { reason } => Some(reason.clone()),
+                Outcome::ToolError { tool } => Some(format!("tool error: {tool}")),
+                _ => None,
+            })
+            .collect();
         let failure_rate = failure_reasons.len() as f32 / total as f32;
 
         if failure_rate < self.config.min_failure_rate {
@@ -114,7 +121,8 @@ impl InsightGenerator {
 
         // ── 3. Check per-skill cap ───────────────────────────────────────────────
         let index_key = format!("insight_index/{}", skill_name);
-        let existing: Vec<String> = self.project_scope
+        let existing: Vec<String> = self
+            .project_scope
             .read(&index_key)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -134,7 +142,9 @@ impl InsightGenerator {
         }
         let mut sorted: Vec<(&&str, &usize)> = counts.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
-        let top_reasons: Vec<String> = sorted.iter().take(3)
+        let top_reasons: Vec<String> = sorted
+            .iter()
+            .take(3)
             .map(|(r, c)| format!("{} ({c}×)", r))
             .collect();
 
@@ -166,7 +176,10 @@ impl InsightGenerator {
 
         let req = CompletionRequest {
             model: self.config.insight_model.clone(),
-            messages: vec![Message { role: Role::User, content: prompt }],
+            messages: vec![Message {
+                role: Role::User,
+                content: prompt,
+            }],
             max_tokens: None,
             temperature: None,
             system: None,
@@ -184,7 +197,9 @@ impl InsightGenerator {
         let key = format!("insight_{}_{}", skill_name, ts);
 
         // Extract the heading as a short summary for the memory frontmatter.
-        let summary = content.lines().next()
+        let summary = content
+            .lines()
+            .next()
             .unwrap_or("Auto-generated insight")
             .trim_start_matches("## Insight: ")
             .to_string();
@@ -225,14 +240,14 @@ impl InsightGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use async_trait::async_trait;
+    use crate::store::LearningStore;
+    use crate::types::{FeedbackEntry, Outcome};
+    use agent007_core::types::{AgentId, PromptRef};
     use agent007_memory::store::MemoryStore;
     use agent007_models::provider::ModelProvider;
     use agent007_models::types::{CompletionRequest, CompletionResponse};
-    use agent007_core::types::{AgentId, PromptRef};
-    use crate::store::LearningStore;
-    use crate::types::{FeedbackEntry, Outcome};
+    use async_trait::async_trait;
+    use std::sync::Arc;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -243,20 +258,33 @@ mod tests {
 
     impl StubProvider {
         fn ok(response: impl Into<String>) -> Arc<Self> {
-            Arc::new(Self { response: response.into(), should_fail: false })
+            Arc::new(Self {
+                response: response.into(),
+                should_fail: false,
+            })
         }
         fn failing() -> Arc<Self> {
-            Arc::new(Self { response: String::new(), should_fail: true })
+            Arc::new(Self {
+                response: String::new(),
+                should_fail: true,
+            })
         }
     }
 
     #[async_trait]
     impl ModelProvider for StubProvider {
-        fn name(&self) -> &str { "stub" }
+        fn name(&self) -> &str {
+            "stub"
+        }
 
-        async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, agent007_models::ModelError> {
+        async fn complete(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<CompletionResponse, agent007_models::ModelError> {
             if self.should_fail {
-                Err(agent007_models::ModelError::NotConfigured("stub".to_string()))
+                Err(agent007_models::ModelError::NotConfigured(
+                    "stub".to_string(),
+                ))
             } else {
                 Ok(CompletionResponse {
                     content: self.response.clone(),
@@ -295,7 +323,14 @@ mod tests {
 
         // Record only 2 entries (below default min of 5)
         for _ in 0..2 {
-            store.record_feedback(&make_entry("test-skill", Outcome::Failure { reason: "timeout".to_string() })).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "test-skill",
+                    Outcome::Failure {
+                        reason: "timeout".to_string(),
+                    },
+                ))
+                .unwrap();
         }
 
         let gen = InsightGenerator::new(
@@ -304,7 +339,10 @@ mod tests {
             ms.scoped("project"),
         );
         let result = gen.maybe_generate("test-skill", &store).await.unwrap();
-        assert!(result.is_none(), "should not generate insight below threshold");
+        assert!(
+            result.is_none(),
+            "should not generate insight below threshold"
+        );
     }
 
     /// Returns None when failure rate is below min_failure_rate.
@@ -315,16 +353,24 @@ mod tests {
 
         // 5 successes, 0 failures → failure rate = 0%
         for _ in 0..5 {
-            store.record_feedback(&make_entry("good-skill", Outcome::Success)).unwrap();
+            store
+                .record_feedback(&make_entry("good-skill", Outcome::Success))
+                .unwrap();
         }
 
         let gen = InsightGenerator::new(
-            InsightConfig { min_failure_rate: 0.2, ..InsightConfig::default() },
+            InsightConfig {
+                min_failure_rate: 0.2,
+                ..InsightConfig::default()
+            },
             StubProvider::ok("## Insight: X\nadvice"),
             ms.scoped("project"),
         );
         let result = gen.maybe_generate("good-skill", &store).await.unwrap();
-        assert!(result.is_none(), "should not generate insight when failures are rare");
+        assert!(
+            result.is_none(),
+            "should not generate insight when failures are rare"
+        );
     }
 
     /// Generates an insight and writes it to project scope when failure rate exceeds threshold.
@@ -334,10 +380,21 @@ mod tests {
         let (store, ms) = make_setup(&dir);
 
         // 2 successes, 3 failures → failure rate = 60%
-        store.record_feedback(&make_entry("rtt-analyze", Outcome::Success)).unwrap();
-        store.record_feedback(&make_entry("rtt-analyze", Outcome::Success)).unwrap();
+        store
+            .record_feedback(&make_entry("rtt-analyze", Outcome::Success))
+            .unwrap();
+        store
+            .record_feedback(&make_entry("rtt-analyze", Outcome::Success))
+            .unwrap();
         for _ in 0..3 {
-            store.record_feedback(&make_entry("rtt-analyze", Outcome::Failure { reason: "negative bias".to_string() })).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "rtt-analyze",
+                    Outcome::Failure {
+                        reason: "negative bias".to_string(),
+                    },
+                ))
+                .unwrap();
         }
 
         let insight_text = "## Insight: Check AP antenna height for negative bias\nWhen RTT shows negative bias, check AP antenna height before adjusting algorithm parameters.";
@@ -359,7 +416,10 @@ mod tests {
         // Verify it was written to project memory (second handle, same underlying store)
         let verify_scope = ms.scoped("project");
         let stored = verify_scope.read(&entry.memory_key).unwrap();
-        assert!(stored.is_some(), "insight should be persisted in project scope");
+        assert!(
+            stored.is_some(),
+            "insight should be persisted in project scope"
+        );
         assert!(stored.unwrap().contains("negative bias"));
     }
 
@@ -373,15 +433,27 @@ mod tests {
         // Pre-populate the index with max_insights_per_skill entries
         let existing: Vec<String> = (0..2).map(|i| format!("insight_capped_{i}")).collect();
         let index_json = serde_json::to_string(&existing).unwrap();
-        project_scope.write("insight_index/capped-skill", &index_json).unwrap();
+        project_scope
+            .write("insight_index/capped-skill", &index_json)
+            .unwrap();
 
         // 0 successes, 5 failures → high failure rate
         for _ in 0..5 {
-            store.record_feedback(&make_entry("capped-skill", Outcome::Failure { reason: "err".to_string() })).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "capped-skill",
+                    Outcome::Failure {
+                        reason: "err".to_string(),
+                    },
+                ))
+                .unwrap();
         }
 
         let gen = InsightGenerator::new(
-            InsightConfig { max_insights_per_skill: 2, ..InsightConfig::default() },
+            InsightConfig {
+                max_insights_per_skill: 2,
+                ..InsightConfig::default()
+            },
             StubProvider::ok("## Insight: X\nadvice"),
             project_scope,
         );
@@ -396,7 +468,14 @@ mod tests {
         let (store, ms) = make_setup(&dir);
 
         for _ in 0..5 {
-            store.record_feedback(&make_entry("fail-skill", Outcome::Failure { reason: "x".to_string() })).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "fail-skill",
+                    Outcome::Failure {
+                        reason: "x".to_string(),
+                    },
+                ))
+                .unwrap();
         }
 
         let gen = InsightGenerator::new(
@@ -405,7 +484,10 @@ mod tests {
             ms.scoped("project"),
         );
         let result = gen.maybe_generate("fail-skill", &store).await;
-        assert!(result.is_err(), "expected LearningError when model is unavailable");
+        assert!(
+            result.is_err(),
+            "expected LearningError when model is unavailable"
+        );
     }
 
     /// Index is updated after a successful insight write.
@@ -416,7 +498,14 @@ mod tests {
         let project_scope = ms.scoped("project");
 
         for _ in 0..5 {
-            store.record_feedback(&make_entry("indexed-skill", Outcome::Failure { reason: "nlos".to_string() })).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "indexed-skill",
+                    Outcome::Failure {
+                        reason: "nlos".to_string(),
+                    },
+                ))
+                .unwrap();
         }
 
         let gen = InsightGenerator::new(

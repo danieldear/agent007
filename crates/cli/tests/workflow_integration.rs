@@ -79,7 +79,10 @@ async fn single_step_workflow_runs_end_to_end() {
     assert_eq!(result.steps_completed, 1);
     assert_eq!(result.steps_total, 1);
     assert!(
-        result.outputs.get("result").map_or(false, |v| v.contains("step output text")),
+        result
+            .outputs
+            .get("result")
+            .map_or(false, |v| v.contains("step output text")),
         "expected output to contain provider response; got {:?}",
         result.outputs
     );
@@ -112,18 +115,18 @@ async fn workflow_runner_emits_agent_events() {
     runner.run(&def, "task").await.unwrap();
 
     // At least one event must have been published
-    let event = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        events.next(),
-    )
-    .await
-    .expect("timed out waiting for event")
-    .expect("event stream ended");
+    let event = tokio::time::timeout(std::time::Duration::from_millis(200), events.next())
+        .await
+        .expect("timed out waiting for event")
+        .expect("event stream ended");
 
     // The event should be either a ModelRequest or TaskCompleted
     use agent007_core::events::AgentEvent;
     assert!(
-        matches!(event, AgentEvent::ModelRequest { .. } | AgentEvent::TaskCompleted { .. }),
+        matches!(
+            event,
+            AgentEvent::ModelRequest { .. } | AgentEvent::TaskCompleted { .. }
+        ),
         "unexpected event variant: {:?}",
         event
     );
@@ -185,7 +188,9 @@ async fn workflow_result_saved_to_run_store() {
 
     let tmp = TempDir::new().unwrap();
     let run_store = Arc::new(RunStore::new(tmp.path()));
-    let run = run_store.create_run("test-wf", "count to 3", "mock", None).unwrap();
+    let run = run_store
+        .create_run("test-wf", "count to 3", "mock", None)
+        .unwrap();
 
     let (runner, _) = make_runner("1, 2, 3");
     let runner_with_store = runner.for_run(Arc::clone(&run_store), &run.id);

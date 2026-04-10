@@ -141,7 +141,10 @@ mod tests {
         let args = TestArgs::try_parse_from(["test", "report", "--regressions"]).unwrap();
         assert!(matches!(
             args.action,
-            TestAction::Report { regressions: true, .. }
+            TestAction::Report {
+                regressions: true,
+                ..
+            }
         ));
     }
 }

@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use crate::error::WorkflowError;
 use crate::types::WorkflowDef;
+use std::path::{Path, PathBuf};
 
 pub struct WorkflowLoader {
     pub dir: PathBuf,
@@ -16,10 +16,12 @@ impl WorkflowLoader {
         let raw = std::fs::read_to_string(path)?;
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let def = match ext {
-            "yaml" | "yml" => serde_yaml::from_str::<WorkflowDef>(&raw).map_err(|e| WorkflowError::ParseError {
-                path: path.to_path_buf(),
-                reason: e.to_string(),
-            }),
+            "yaml" | "yml" => {
+                serde_yaml::from_str::<WorkflowDef>(&raw).map_err(|e| WorkflowError::ParseError {
+                    path: path.to_path_buf(),
+                    reason: e.to_string(),
+                })
+            }
             _ => toml::from_str::<WorkflowDef>(&raw).map_err(|e| WorkflowError::ParseError {
                 path: path.to_path_buf(),
                 reason: e.to_string(),
@@ -78,8 +80,8 @@ impl WorkflowLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     const SAMPLE_TOML: &str = r#"
 name = "Sample"
@@ -104,7 +106,9 @@ output = "notes"
     #[test]
     fn load_from_missing_file_returns_io_error() {
         let loader = WorkflowLoader::new(std::path::PathBuf::from("/tmp/nonexistent"));
-        let err = loader.load_file(std::path::Path::new("/tmp/does_not_exist.toml")).unwrap_err();
+        let err = loader
+            .load_file(std::path::Path::new("/tmp/does_not_exist.toml"))
+            .unwrap_err();
         assert!(matches!(err, crate::error::WorkflowError::Io(_)));
     }
 
@@ -116,7 +120,10 @@ output = "notes"
 
         let loader = WorkflowLoader::new(dir.path().to_path_buf());
         let err = loader.load_file(&path).unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::ParseError { .. }));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::ParseError { .. }
+        ));
     }
 
     #[test]

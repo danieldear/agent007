@@ -128,8 +128,8 @@ pub async fn run_tcp(config: Arc<BridgeConfig>, port: u16) -> Result<(), IdeBrid
 
 #[cfg(test)]
 mod tests {
-    use tower_lsp::LspService;
     use super::*;
+    use tower_lsp::LspService;
 
     #[tokio::test]
     async fn server_initializes_without_panic() {

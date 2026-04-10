@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use tracing::instrument;
-use agent007_models::{CompletionRequest, Message, ModelProvider, Role};
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
 use crate::events::AgentEvent;
 use crate::task::{Task, TaskResult};
 use crate::types::{AgentId, SharedPromptStore};
+use agent007_models::{CompletionRequest, Message, ModelProvider, Role};
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 
 pub struct WorkerAgent {
     pub id: AgentId,
@@ -23,7 +23,13 @@ impl WorkerAgent {
         prompt_store: SharedPromptStore,
         cancellation: CancellationToken,
     ) -> Self {
-        Self { id: AgentId::new(), dispatcher, provider, prompt_store, cancellation }
+        Self {
+            id: AgentId::new(),
+            dispatcher,
+            provider,
+            prompt_store,
+            cancellation,
+        }
     }
 
     #[instrument(skip(self), fields(worker_id = %self.id, task_id = %task.id))]
@@ -39,15 +45,24 @@ impl WorkerAgent {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(task.description.clone());
 
-        self.dispatcher.publish(AgentEvent::ModelRequest {
-            provider: self.provider.name().to_string(),
-            prompt_ref: prompt_ref.clone(),
-            token_estimate: task.description.split_whitespace().count().saturating_mul(2),
-        }).await?;
+        self.dispatcher
+            .publish(AgentEvent::ModelRequest {
+                provider: self.provider.name().to_string(),
+                prompt_ref: prompt_ref.clone(),
+                token_estimate: task
+                    .description
+                    .split_whitespace()
+                    .count()
+                    .saturating_mul(2),
+            })
+            .await?;
 
         let request = CompletionRequest {
             model: self.provider.name().to_string(),
-            messages: vec![Message { role: Role::User, content: task.description.clone() }],
+            messages: vec![Message {
+                role: Role::User,
+                content: task.description.clone(),
+            }],
             max_tokens: Some(4096),
             temperature: Some(0.7),
             system: None,
@@ -56,12 +71,14 @@ impl WorkerAgent {
         let response = self.provider.complete(request).await?;
 
         let result = TaskResult::success(task.id, response.content);
-        self.dispatcher.publish(AgentEvent::TaskCompleted {
-            agent_id: self.id.clone(),
-            result: result.clone(),
-            skill_name: None,
-            model: Some(self.provider.name().to_string()),
-        }).await?;
+        self.dispatcher
+            .publish(AgentEvent::TaskCompleted {
+                agent_id: self.id.clone(),
+                result: result.clone(),
+                skill_name: None,
+                model: Some(self.provider.name().to_string()),
+            })
+            .await?;
 
         Ok(result)
     }

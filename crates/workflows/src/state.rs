@@ -154,11 +154,7 @@ impl WorkflowRunState {
         }
     }
 
-    pub fn record_approval_decision(
-        &mut self,
-        step_id: &str,
-        mut decision: ApprovalDecision,
-    ) {
+    pub fn record_approval_decision(&mut self, step_id: &str, mut decision: ApprovalDecision) {
         if decision.content.is_none() {
             if let Some(pending) = self
                 .pending_approval
@@ -168,7 +164,8 @@ impl WorkflowRunState {
                 decision.content = Some(pending.content.clone());
             }
         }
-        self.approval_decisions.insert(step_id.to_string(), decision);
+        self.approval_decisions
+            .insert(step_id.to_string(), decision);
         if self
             .pending_approval
             .as_ref()

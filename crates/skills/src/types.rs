@@ -31,11 +31,25 @@ pub struct Skill {
 }
 
 impl Skill {
-    pub fn name(&self) -> &str { &self.frontmatter.name }
-    pub fn trigger(&self) -> &str { &self.frontmatter.trigger }
-    pub fn model(&self) -> &str { &self.frontmatter.model }
-    pub fn template(&self) -> &str { &self.template }
-    pub fn category(&self) -> &str { &self.frontmatter.category }
-    pub fn version(&self) -> &str { &self.frontmatter.version }
-    pub fn tags(&self) -> &[String] { &self.frontmatter.tags }
+    pub fn name(&self) -> &str {
+        &self.frontmatter.name
+    }
+    pub fn trigger(&self) -> &str {
+        &self.frontmatter.trigger
+    }
+    pub fn model(&self) -> &str {
+        &self.frontmatter.model
+    }
+    pub fn template(&self) -> &str {
+        &self.template
+    }
+    pub fn category(&self) -> &str {
+        &self.frontmatter.category
+    }
+    pub fn version(&self) -> &str {
+        &self.frontmatter.version
+    }
+    pub fn tags(&self) -> &[String] {
+        &self.frontmatter.tags
+    }
 }

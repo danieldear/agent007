@@ -1,10 +1,10 @@
 // crates/cli/src/commands/persona.rs
-use std::sync::Arc;
-use anyhow::Result;
+use super::run::agent007_home;
+use crate::PersonaAction;
 use agent007_core::PersonaProvider;
 use agent007_personas::PersonaRegistry;
-use crate::PersonaAction;
-use super::run::agent007_home;
+use anyhow::Result;
+use std::sync::Arc;
 
 /// Top-level dispatch for `agent007 persona <action>`.
 pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction) -> Result<()> {
@@ -27,24 +27,22 @@ pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction)
                 }
             }
         }
-        PersonaAction::Show { name } => {
-            match registry.get(&name) {
-                Some(spec) => {
-                    println!("Name:            {}", spec.name);
-                    println!("Model:           {}", spec.preferred_model);
-                    println!("Description:     {}", spec.description);
-                    if !spec.allowed_tools.is_empty() {
-                        println!("Allowed tools:   {}", spec.allowed_tools.join(", "));
-                    }
-                    println!();
-                    println!("System prompt:");
-                    println!("{}", spec.system_prompt);
+        PersonaAction::Show { name } => match registry.get(&name) {
+            Some(spec) => {
+                println!("Name:            {}", spec.name);
+                println!("Model:           {}", spec.preferred_model);
+                println!("Description:     {}", spec.description);
+                if !spec.allowed_tools.is_empty() {
+                    println!("Allowed tools:   {}", spec.allowed_tools.join(", "));
                 }
-                None => {
-                    anyhow::bail!("persona '{}' not found. Run `agent007 persona list` to see available personas.", name);
-                }
+                println!();
+                println!("System prompt:");
+                println!("{}", spec.system_prompt);
             }
-        }
+            None => {
+                anyhow::bail!("persona '{}' not found. Run `agent007 persona list` to see available personas.", name);
+            }
+        },
     }
     Ok(())
 }
@@ -60,13 +58,27 @@ mod tests {
         assert_eq!(personas.len(), 15);
         let names: Vec<&str> = personas.iter().map(|p| p.name.as_str()).collect();
         for expected in &[
-            "Researcher", "Architect", "Coder", "TestDesigner",
-            "SecurityReviewer", "PerformanceEngineer", "DocumentationWriter",
-            "DependencyManager", "DebugAgent", "CodeReviewer",
-            "ExpertCoder", "UIUXDesigner", "DocsManager",
-            "DevOpsEngineer", "DataEngineer",
+            "Researcher",
+            "Architect",
+            "Coder",
+            "TestDesigner",
+            "SecurityReviewer",
+            "PerformanceEngineer",
+            "DocumentationWriter",
+            "DependencyManager",
+            "DebugAgent",
+            "CodeReviewer",
+            "ExpertCoder",
+            "UIUXDesigner",
+            "DocsManager",
+            "DevOpsEngineer",
+            "DataEngineer",
         ] {
-            assert!(names.contains(expected), "missing persona in list: {}", expected);
+            assert!(
+                names.contains(expected),
+                "missing persona in list: {}",
+                expected
+            );
         }
     }
 

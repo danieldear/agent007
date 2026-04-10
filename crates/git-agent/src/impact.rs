@@ -1,6 +1,6 @@
 // crates/git-agent/src/impact.rs
-use std::path::{Path, PathBuf};
 use crate::error::GitAgentError;
+use std::path::{Path, PathBuf};
 
 /// Shallow grep-based impact analysis.
 ///
@@ -53,13 +53,11 @@ pub fn impact_analysis(
             || content
                 .lines()
                 .any(|l| l.contains("use ") && l.contains(&module_path))
-            || content
-                .lines()
-                .any(|l| {
-                    let trimmed = l.trim_start();
-                    (trimmed.starts_with("mod ") || trimmed.starts_with("pub mod "))
-                        && l.contains(&stem)
-                });
+            || content.lines().any(|l| {
+                let trimmed = l.trim_start();
+                (trimmed.starts_with("mod ") || trimmed.starts_with("pub mod "))
+                    && l.contains(&stem)
+            });
 
         if references {
             affected.push(PathBuf::from(&entry_path));
@@ -128,7 +126,8 @@ mod tests {
         };
         {
             let tree = repo.find_tree(tree_id).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
         }
 
         (dir, repo)
@@ -138,7 +137,10 @@ mod tests {
     fn impact_finds_file_using_module() {
         let (_dir, repo) = make_repo_with_files(&[
             ("src/auth/token.rs", "pub fn make_token() {}"),
-            ("src/api/handler.rs", "use crate::auth::token;\nfn handle() {}"),
+            (
+                "src/api/handler.rs",
+                "use crate::auth::token;\nfn handle() {}",
+            ),
             ("src/unrelated.rs", "fn foo() {}"),
         ]);
         let affected = impact_analysis(&repo, Path::new("src/auth/token.rs")).unwrap();

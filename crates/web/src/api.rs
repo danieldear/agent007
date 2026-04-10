@@ -1,20 +1,22 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use agent007_core::paths::{agent007_global_home, agent007_home, agent007_project_home, agent007_write_home};
+use agent007_core::paths::{
+    agent007_global_home, agent007_home, agent007_project_home, agent007_write_home,
+};
+use agent007_sharing;
 use agent007_workflows::{
     WorkflowError, WorkflowLoader, WorkflowRunRequest, WorkflowRunState, WorkflowSourceRef,
 };
-use agent007_sharing;
 
 use crate::server::AppState;
 
@@ -115,11 +117,7 @@ pub async fn run_handler(
     let core_task = agent007_core::Task::new(&payload.task);
     match orchestrator.run(core_task).await {
         Ok(_) => {
-            let _ = store.finish_run(
-                &run.id,
-                true,
-                "Task submitted to agent007 orchestrator.",
-            );
+            let _ = store.finish_run(&run.id, true, "Task submitted to agent007 orchestrator.");
             (
                 StatusCode::OK,
                 Json(RunResponse {
@@ -142,9 +140,7 @@ pub async fn run_handler(
 
 /// `GET /api/skills` — list skills from project-local and global `.agent007/skills/`.
 /// Each skill includes a `source` field: `"project"` or `"global"`.
-pub async fn skills_handler(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let project_dir = agent007_project_home().map(|p| p.join("skills"));
     let global_dir = agent007_global_home().join("skills");
 
@@ -155,7 +151,9 @@ pub async fn skills_handler(
         if let Ok(entries) = std::fs::read_dir(&global_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Some(fm) = parse_frontmatter(&content) {
                         if let Some(t) = fm.get("trigger").and_then(|v| v.as_str()) {
@@ -181,7 +179,9 @@ pub async fn skills_handler(
     };
 
     for (dir, source) in &dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -189,18 +189,20 @@ pub async fn skills_handler(
             }
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Some(mut fm) = parse_frontmatter(&content) {
-                    let trigger = fm.get("trigger")
+                    let trigger = fm
+                        .get("trigger")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
                     if seen_triggers.insert(trigger.clone()) {
                         // A project-local skill that also exists in the global dir is a built-in
                         // seeded by `init`; show it as "global" to avoid PROJ badge confusion.
-                        let effective_source = if *source == "project" && global_triggers.contains(&trigger) {
-                            "global"
-                        } else {
-                            source
-                        };
+                        let effective_source =
+                            if *source == "project" && global_triggers.contains(&trigger) {
+                                "global"
+                            } else {
+                                source
+                            };
                         fm["source"] = Value::String(effective_source.to_string());
                         skills.push(fm);
                     }
@@ -213,9 +215,7 @@ pub async fn skills_handler(
 }
 
 /// `DELETE /api/skills/:trigger` — delete a skill file by its trigger slug.
-pub async fn skill_delete_handler(
-    Path(trigger): Path<String>,
-) -> impl IntoResponse {
+pub async fn skill_delete_handler(Path(trigger): Path<String>) -> impl IntoResponse {
     let target_trigger = format!("/{}", trigger.trim_start_matches('/'));
 
     // Search dirs: project-local first, then global.
@@ -229,17 +229,24 @@ pub async fn skill_delete_handler(
     // This handles the case where the filename doesn't match the trigger slug
     // (e.g. senior-ml-engineer.md with trigger: /skill).
     for dir in &dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Some(fm) = parse_frontmatter(&content) {
                     if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
                         return match std::fs::remove_file(&path) {
                             Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+                            Err(e) => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": e.to_string() })),
+                            )
+                                .into_response(),
                         };
                     }
                 }
@@ -247,7 +254,11 @@ pub async fn skill_delete_handler(
         }
     }
 
-    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skill not found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "skill not found" })),
+    )
+        .into_response()
 }
 
 /// `POST /api/skills/run` — run a skill by trigger.
@@ -278,12 +289,11 @@ pub async fn skills_run_handler(
     let memory_store = memory_store_for_web();
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
-        agent007_global_home().join("memory")
+        agent007_global_home().join("memory"),
     ));
     let global_memory = global_store.scoped("global");
 
-    let model =
-        state.model_router.clone() as Arc<dyn agent007_models::ModelProvider>;
+    let model = state.model_router.clone() as Arc<dyn agent007_models::ModelProvider>;
 
     let executor = agent007_skills::SkillExecutor::new(model, retriever, memory)
         .with_global_memory(global_memory);
@@ -318,16 +328,17 @@ pub async fn skills_run_handler(
         }
     };
 
-    let skill = match skills.into_iter().find(|s| s.trigger() == payload.trigger) {
-        Some(s) => s,
-        None => {
-            return (
+    let skill =
+        match skills.into_iter().find(|s| s.trigger() == payload.trigger) {
+            Some(s) => s,
+            None => return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("skill not found: {}", payload.trigger) })),
+                Json(
+                    serde_json::json!({ "error": format!("skill not found: {}", payload.trigger) }),
+                ),
             )
-                .into_response()
-        }
-    };
+                .into_response(),
+        };
 
     match executor.execute(&skill, &payload.args).await {
         Ok(output) => {
@@ -361,24 +372,26 @@ pub async fn skills_run_handler(
 /// In this implementation the dispatcher does not expose an introspection API,
 /// so we return empty lists with a placeholder avg_reward. A follow-on plan
 /// can add `Dispatcher::snapshot()` to expose live data.
-pub async fn status_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     let m = crate::metrics::snapshot_with_shared_state(
         state.metrics.lock().await.clone(),
         agent007_home(),
     );
-    let tasks = m.recent_tasks.iter().map(|task| {
-        serde_json::json!({
-            "id": task.id,
-            "task": task.task,
-            "status": task.status,
-            "agent": task.agent,
-            "tokens": task.tokens,
-            "started_at": task.started_at,
-            "finished_at": task.finished_at,
+    let tasks = m
+        .recent_tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "id": task.id,
+                "task": task.task,
+                "status": task.status,
+                "agent": task.agent,
+                "tokens": task.tokens,
+                "started_at": task.started_at,
+                "finished_at": task.finished_at,
+            })
         })
-    }).collect();
+        .collect();
     let agents = if m.active_agents == 0 {
         vec![]
     } else {
@@ -402,9 +415,7 @@ pub async fn status_handler(
 }
 
 /// `GET /api/stats` — comprehensive dashboard metrics.
-pub async fn stats_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
     let mut m = crate::metrics::snapshot_with_shared_state(
         state.metrics.lock().await.clone(),
         agent007_home(),
@@ -412,37 +423,59 @@ pub async fn stats_handler(
 
     // Collect all home dirs (project-local first, then global) — deduplicated
     let mut homes = Vec::new();
-    if let Some(proj) = agent007_project_home() { homes.push(proj); }
+    if let Some(proj) = agent007_project_home() {
+        homes.push(proj);
+    }
     let global = agent007_global_home();
-    if !homes.contains(&global) { homes.push(global); }
+    if !homes.contains(&global) {
+        homes.push(global);
+    }
 
-    let skills_count: u32 = homes.iter().map(|h| count_dir_files(&h.join("skills"), "md")).sum();
-    let workflows_count: u32 = homes.iter().map(|h| {
-        count_dir_files(&h.join("workflows"), "yaml") + count_dir_files(&h.join("workflows"), "yml")
-    }).sum();
-    let personas_count: u32 = homes.iter().map(|h| count_dir_files(&h.join("personas"), "toml")).sum();
+    let skills_count: u32 = homes
+        .iter()
+        .map(|h| count_dir_files(&h.join("skills"), "md"))
+        .sum();
+    let workflows_count: u32 = homes
+        .iter()
+        .map(|h| {
+            count_dir_files(&h.join("workflows"), "yaml")
+                + count_dir_files(&h.join("workflows"), "yml")
+        })
+        .sum();
+    let personas_count: u32 = homes
+        .iter()
+        .map(|h| count_dir_files(&h.join("personas"), "toml"))
+        .sum();
     // Memory is recursive (user/, project/ subdirs) — count from write home only to avoid double-counting
     let memory_keys = count_dir_files(&agent007_write_home().join("memory"), "md");
     m.update_inventory(skills_count, workflows_count, personas_count, memory_keys);
 
     let mut snapshot = serde_json::to_value(m).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = snapshot.as_object_mut() {
-        obj.insert("project_name".to_string(), serde_json::json!(state.project_name));
-        obj.insert("project_path".to_string(), serde_json::json!(state.project_path));
+        obj.insert(
+            "project_name".to_string(),
+            serde_json::json!(state.project_name),
+        );
+        obj.insert(
+            "project_path".to_string(),
+            serde_json::json!(state.project_path),
+        );
         // Ensure runtime_mode is always present (metrics struct has it, but guarantee it)
         if !obj.contains_key("runtime_mode") {
-            obj.insert("runtime_mode".to_string(), serde_json::json!(state.runtime_mode));
+            obj.insert(
+                "runtime_mode".to_string(),
+                serde_json::json!(state.runtime_mode),
+            );
         }
     }
     Json(snapshot).into_response()
 }
 
-pub async fn runs_handler(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn runs_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
     match store.list_runs(25) {
-        Ok(runs) => Json(serde_json::to_value(runs).unwrap_or_else(|_| serde_json::json!([]))).into_response(),
+        Ok(runs) => Json(serde_json::to_value(runs).unwrap_or_else(|_| serde_json::json!([])))
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -492,21 +525,24 @@ pub async fn run_approval_handler(
     Json(payload): Json<ApprovalRequest>,
 ) -> impl IntoResponse {
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
-    let mut state: agent007_workflows::WorkflowRunState = match store.read_json_artifact(&id, "workflow-state.json") {
-        Ok(state) => state,
-        Err(e) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
+    let mut state: agent007_workflows::WorkflowRunState =
+        match store.read_json_artifact(&id, "workflow-state.json") {
+            Ok(state) => state,
+            Err(e) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
 
-    let step_id = payload
-        .step
-        .clone()
-        .or_else(|| state.pending_approval.as_ref().map(|pending| pending.step_id.clone()));
+    let step_id = payload.step.clone().or_else(|| {
+        state
+            .pending_approval
+            .as_ref()
+            .map(|pending| pending.step_id.clone())
+    });
     let Some(step_id) = step_id else {
         return (
             StatusCode::CONFLICT,
@@ -566,7 +602,9 @@ pub async fn run_resume_handler(
             .into_response();
     };
 
-    let store = Arc::new(agent007_core::RunStore::new(agent007_home().join("sessions")));
+    let store = Arc::new(agent007_core::RunStore::new(
+        agent007_home().join("sessions"),
+    ));
     let detail = match store.load_run(&id) {
         Ok(detail) => detail,
         Err(e) => {
@@ -598,30 +636,30 @@ pub async fn run_resume_handler(
                 .into_response();
         }
     };
-    let workflow_ref = match store
-        .read_json_artifact_optional::<WorkflowSourceRef>(&id, "workflow-source.json")
-    {
-        Ok(Some(source)) => source.workflow_ref,
-        Ok(None) => request.workflow.clone(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
+    let workflow_ref =
+        match store.read_json_artifact_optional::<WorkflowSourceRef>(&id, "workflow-source.json") {
+            Ok(Some(source)) => source.workflow_ref,
+            Ok(None) => request.workflow.clone(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
 
-    let workflow_state: WorkflowRunState = match store.read_json_artifact(&id, "workflow-state.json") {
-        Ok(state) => state,
-        Err(e) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
+    let workflow_state: WorkflowRunState =
+        match store.read_json_artifact(&id, "workflow-state.json") {
+            Ok(state) => state,
+            Err(e) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
 
     if workflow_state.pending_approval.is_some() {
         return (
@@ -757,7 +795,10 @@ fn parse_approval_decision(
         return Err("content is required when decision=edit".to_string());
     }
 
-    Ok(ApprovalDecision { decision: kind, content })
+    Ok(ApprovalDecision {
+        decision: kind,
+        content,
+    })
 }
 
 // ── Persona CRUD ──────────────────────────────────────────────────────────────
@@ -771,22 +812,24 @@ pub struct PersonaSaveRequest {
     pub system_prompt: Option<String>,
 }
 
-pub async fn personas_list_handler(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let personas_dir = agent007_home().join("personas");
     let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
         .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
     use agent007_core::PersonaProvider;
-    let personas: Vec<Value> = registry.list().iter().map(|p| {
-        serde_json::json!({
-            "name": p.name,
-            "description": p.description,
-            "preferred_model": p.preferred_model,
-            "allowed_tools": p.allowed_tools,
-            "system_prompt": p.system_prompt,
+    let personas: Vec<Value> = registry
+        .list()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "description": p.description,
+                "preferred_model": p.preferred_model,
+                "allowed_tools": p.allowed_tools,
+                "system_prompt": p.system_prompt,
+            })
         })
-    }).collect();
+        .collect();
     Json(Value::Array(personas)).into_response()
 }
 
@@ -796,16 +839,33 @@ pub async fn persona_save_handler(
 ) -> impl IntoResponse {
     let personas_dir = agent007_write_home().join("personas");
     if let Err(e) = std::fs::create_dir_all(&personas_dir) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
-    let filename = payload.name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect::<String>().to_lowercase();
+    let filename = payload
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase();
     let path = personas_dir.join(format!("{filename}.toml"));
 
     let tools = payload.allowed_tools.unwrap_or_default();
-    let tools_str = tools.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(", ");
+    let tools_str = tools
+        .iter()
+        .map(|t| format!("\"{t}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let model = payload.preferred_model.as_deref().unwrap_or("codex");
     let prompt = payload.system_prompt.as_deref().unwrap_or("");
 
@@ -815,12 +875,21 @@ pub async fn persona_save_handler(
          preferred_model = \"{}\"\n\
          allowed_tools   = [{}]\n\n\
          system_prompt   = \"\"\"\n{}\n\"\"\"\n",
-        payload.name, payload.description.replace('"', "\\\""), model, tools_str, prompt,
+        payload.name,
+        payload.description.replace('"', "\\\""),
+        model,
+        tools_str,
+        prompt,
     );
 
     match std::fs::write(&path, &content) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() }))
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -829,18 +898,34 @@ pub async fn persona_delete_handler(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let personas_dir = agent007_home().join("personas");
-    let filename = name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect::<String>().to_lowercase();
+    let filename = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase();
     let path = personas_dir.join(format!("{filename}.toml"));
 
     if path.exists() {
         match std::fs::remove_file(&path) {
             Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
         }
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response()
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not found" })),
+        )
+            .into_response()
     }
 }
 
@@ -866,7 +951,13 @@ fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
     let sanitized = raw
         .trim()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string();
@@ -878,9 +969,7 @@ fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
     }
 }
 
-pub async fn workflows_list_handler(
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let global = agent007_global_home().join("workflows");
 
     // Pre-compute workflow names present in the global dir so project-local copies
@@ -928,7 +1017,10 @@ pub async fn workflows_list_handler(
         }
     }
     result.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
     Json(result).into_response()
 }
@@ -949,20 +1041,35 @@ pub async fn workflow_get_handler(
 
     let path = workflow_dirs()
         .into_iter()
-        .flat_map(|dir| [dir.join(format!("{safe_name}.yaml")), dir.join(format!("{safe_name}.yml"))])
+        .flat_map(|dir| {
+            [
+                dir.join(format!("{safe_name}.yaml")),
+                dir.join(format!("{safe_name}.yml")),
+            ]
+        })
         .find(|p| p.exists());
     let Some(path) = path else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not found" })),
+        )
+            .into_response();
     };
 
     match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            match serde_yaml::from_str::<Value>(&content) {
-                Ok(val) => Json(val).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(content) => match serde_yaml::from_str::<Value>(&content) {
+            Ok(val) => Json(val).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -1000,17 +1107,33 @@ pub async fn workflow_validate_handler(
     let llm = if state.standalone_mode {
         validate_with_llm(&state, &payload).await
     } else {
-        ValidateLlm { available: false, score: None, summary: None, issues: vec![], suggestions: vec![] }
+        ValidateLlm {
+            available: false,
+            score: None,
+            summary: None,
+            issues: vec![],
+            suggestions: vec![],
+        }
     };
     let valid = structural.errors.is_empty();
-    Json(WorkflowValidateResponse { valid, structural, llm }).into_response()
+    Json(WorkflowValidateResponse {
+        valid,
+        structural,
+        llm,
+    })
+    .into_response()
 }
 
 fn validate_structural(workflow: &Value) -> ValidateStructural {
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    if workflow.get("name").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+    if workflow
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .is_empty()
+    {
         warnings.push("Workflow has no name — it will be saved as 'untitled'".into());
     }
 
@@ -1026,7 +1149,11 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
     let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut outputs: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (i, step) in steps.iter().enumerate() {
-        let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = step
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if id.is_empty() {
             errors.push(format!("Step {i} has no 'id'"));
         } else if !ids.insert(id.clone()) {
@@ -1041,7 +1168,12 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
     for step in steps {
         let id = step.get("id").and_then(|v| v.as_str()).unwrap_or("?");
 
-        if step.get("agent").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+        if step
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+        {
             errors.push(format!("Step '{id}' has no 'agent'"));
         }
 
@@ -1050,19 +1182,44 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
             warnings.push(format!("Step '{id}' has an empty prompt"));
         }
 
-        match step.get("type").and_then(|v| v.as_str()).unwrap_or("execute") {
+        match step
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("execute")
+        {
             "evaluator" => {
                 match step.get("evaluate") {
-                    None => errors.push(format!("Evaluator step '{id}' is missing 'evaluate' config")),
+                    None => errors.push(format!(
+                        "Evaluator step '{id}' is missing 'evaluate' config"
+                    )),
                     Some(eval) => {
-                        if eval.get("decision_field").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
-                            errors.push(format!("Evaluator step '{id}': evaluate.decision_field is required"));
+                        if eval
+                            .get("decision_field")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .is_empty()
+                        {
+                            errors.push(format!(
+                                "Evaluator step '{id}': evaluate.decision_field is required"
+                            ));
                         }
-                        if eval.get("on_pass").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
-                            warnings.push(format!("Evaluator step '{id}': evaluate.on_pass is empty"));
+                        if eval
+                            .get("on_pass")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .is_empty()
+                        {
+                            warnings
+                                .push(format!("Evaluator step '{id}': evaluate.on_pass is empty"));
                         }
-                        if eval.get("on_fail").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
-                            warnings.push(format!("Evaluator step '{id}': evaluate.on_fail is empty"));
+                        if eval
+                            .get("on_fail")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .is_empty()
+                        {
+                            warnings
+                                .push(format!("Evaluator step '{id}': evaluate.on_fail is empty"));
                         }
                     }
                 }
@@ -1075,7 +1232,9 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
                 if routes.map_or(true, |r| r.is_empty()) {
                     errors.push(format!("Router step '{id}' is missing 'routes' config"));
                 } else {
-                    let has_default = routes.unwrap().iter()
+                    let has_default = routes
+                        .unwrap()
+                        .iter()
                         .any(|r| r.get("default").and_then(|v| v.as_bool()).unwrap_or(false));
                     if !has_default {
                         warnings.push(format!("Router step '{id}' has no default route — unmatched classifications will stall"));
@@ -1092,7 +1251,9 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
                 if dep_id == id {
                     errors.push(format!("Step '{id}' has a self-dependency"));
                 } else if !dep_id.is_empty() && !ids.contains(dep_id) {
-                    errors.push(format!("Step '{id}' depends_on '{dep_id}' which does not exist"));
+                    errors.push(format!(
+                        "Step '{id}' depends_on '{dep_id}' which does not exist"
+                    ));
                 }
             }
         }
@@ -1103,13 +1264,18 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
             // (memory scopes, RAG context, and the built-in task/args).
             let is_builtin = matches!(
                 var.as_str(),
-                "task" | "args"
-                    | "memory.project" | "memory.user"
-                    | "memory.global" | "memory.repo_brain"
+                "task"
+                    | "args"
+                    | "memory.project"
+                    | "memory.user"
+                    | "memory.global"
+                    | "memory.repo_brain"
                     | "rag_context"
             );
             if !is_builtin && !outputs.contains(var.as_str()) {
-                warnings.push(format!("Step '{id}' references {{{{'{var}'}}}} but no step produces that output key"));
+                warnings.push(format!(
+                    "Step '{id}' references {{{{'{var}'}}}} but no step produces that output key"
+                ));
             }
         }
     }
@@ -1131,15 +1297,20 @@ fn validate_structural(workflow: &Value) -> ValidateStructural {
             }
         }
     }
-    let mut queue: std::collections::VecDeque<&str> =
-        in_degree.iter().filter(|(_, &v)| v == 0).map(|(&k, _)| k).collect();
+    let mut queue: std::collections::VecDeque<&str> = in_degree
+        .iter()
+        .filter(|(_, &v)| v == 0)
+        .map(|(&k, _)| k)
+        .collect();
     let mut visited = 0usize;
     while let Some(node) = queue.pop_front() {
         visited += 1;
         for &next in fwd.get(node).map(|v| v.as_slice()).unwrap_or(&[]) {
             let deg = in_degree.entry(next).or_insert(0);
             *deg -= 1;
-            if *deg == 0 { queue.push_back(next); }
+            if *deg == 0 {
+                queue.push_back(next);
+            }
         }
     }
     if visited < ids.len() {
@@ -1156,7 +1327,9 @@ fn extract_template_vars(prompt: &str) -> Vec<String> {
         rest = &rest[start + 2..];
         if let Some(end) = rest.find("}}") {
             let var = rest[..end].trim().to_string();
-            if !var.is_empty() { vars.push(var); }
+            if !var.is_empty() {
+                vars.push(var);
+            }
             rest = &rest[end + 2..];
         } else {
             break;
@@ -1170,7 +1343,15 @@ async fn validate_with_llm(state: &AppState, workflow: &Value) -> ValidateLlm {
 
     let workflow_json = match serde_json::to_string_pretty(workflow) {
         Ok(s) => s,
-        Err(_) => return ValidateLlm { available: true, score: None, summary: Some("Could not serialize workflow".into()), issues: vec![], suggestions: vec![] },
+        Err(_) => {
+            return ValidateLlm {
+                available: true,
+                score: None,
+                summary: Some("Could not serialize workflow".into()),
+                issues: vec![],
+                suggestions: vec![],
+            }
+        }
     };
 
     let prompt = format!(
@@ -1188,7 +1369,10 @@ async fn validate_with_llm(state: &AppState, workflow: &Value) -> ValidateLlm {
 
     let request = CompletionRequest {
         model: "default".to_string(),
-        messages: vec![Message { role: Role::User, content: prompt }],
+        messages: vec![Message {
+            role: Role::User,
+            content: prompt,
+        }],
         max_tokens: Some(1024),
         temperature: Some(0.1),
         system: Some("You are a workflow validation expert. Respond only with valid JSON.".into()),
@@ -1205,17 +1389,43 @@ async fn validate_with_llm(state: &AppState, workflow: &Value) -> ValidateLlm {
         },
         Ok(resp) => {
             // Strip markdown fences if present
-            let content = resp.content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            let content = resp
+                .content
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
             match serde_json::from_str::<Value>(content) {
                 Ok(json) => ValidateLlm {
                     available: true,
-                    score: json.get("score").and_then(|v| v.as_u64()).map(|v| v.min(10) as u8),
-                    summary: json.get("summary").and_then(|v| v.as_str()).map(String::from),
-                    issues: json.get("issues").and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+                    score: json
+                        .get("score")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v.min(10) as u8),
+                    summary: json
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    issues: json
+                        .get("issues")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str())
+                                .map(String::from)
+                                .collect()
+                        })
                         .unwrap_or_default(),
-                    suggestions: json.get("suggestions").and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+                    suggestions: json
+                        .get("suggestions")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str())
+                                .map(String::from)
+                                .collect()
+                        })
                         .unwrap_or_default(),
                 },
                 Err(_) => ValidateLlm {
@@ -1235,27 +1445,41 @@ pub async fn workflow_save_handler(
     Json(payload): Json<Value>,
 ) -> impl IntoResponse {
     let name = sanitize_file_stem(
-        payload.get("name").and_then(|v| v.as_str()).unwrap_or("untitled"),
+        payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("untitled"),
         "untitled",
     );
     let wf_dir = agent007_write_home().join("workflows");
     if let Err(e) = std::fs::create_dir_all(&wf_dir) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let path = wf_dir.join(format!("{name}.yaml"));
     match serde_yaml::to_string(&payload) {
-        Ok(yaml) => {
-            match std::fs::write(&path, &yaml) {
-                Ok(()) => Json(serde_json::json!({
-                    "ok": true,
-                    "name": name,
-                    "path": path.display().to_string()
-                })).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(yaml) => match std::fs::write(&path, &yaml) {
+            Ok(()) => Json(serde_json::json!({
+                "ok": true,
+                "name": name,
+                "path": path.display().to_string()
+            }))
+            .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -1302,7 +1526,8 @@ pub async fn skill_generate_handler(
 
     // If standalone model is available, ask it to write the prompt.
     if state.standalone_mode {
-        let system = "You are an expert AI prompt engineer. Write a concise, effective system prompt \
+        let system =
+            "You are an expert AI prompt engineer. Write a concise, effective system prompt \
             for an AI skill. Output ONLY the prompt text — no preamble, no markdown fences.";
         let user_msg = format!(
             "Write a prompt template for an AI skill named \"{name}\" that does the following:\n\n\
@@ -1326,7 +1551,8 @@ pub async fn skill_generate_handler(
         };
         match state.model_router.route(&name).complete(request).await {
             Ok(resp) => {
-                return Json(serde_json::json!({ "template": resp.content.trim() })).into_response();
+                return Json(serde_json::json!({ "template": resp.content.trim() }))
+                    .into_response();
             }
             Err(_) => {} // fall through to template-based generation
         }
@@ -1334,11 +1560,11 @@ pub async fn skill_generate_handler(
 
     // Hosted-mcp fallback: build a well-structured template from the description.
     let role_hint = match category {
-        "dev"     => "senior software engineer",
-        "code"    => "expert code reviewer",
+        "dev" => "senior software engineer",
+        "code" => "expert code reviewer",
         "project" => "experienced project manager",
-        "meta"    => "AI systems specialist",
-        _         => "expert AI assistant",
+        "meta" => "AI systems specialist",
+        _ => "expert AI assistant",
     };
 
     let template = format!(
@@ -1363,13 +1589,25 @@ pub async fn skill_save_handler(
 ) -> impl IntoResponse {
     let skills_dir = agent007_write_home().join("skills");
     if let Err(e) = std::fs::create_dir_all(&skills_dir) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     // Use trigger-derived filename so the file is discoverable by trigger lookup.
-    let trigger_slug: String = payload.trigger.trim_start_matches('/')
+    let trigger_slug: String = payload
+        .trigger
+        .trim_start_matches('/')
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let filename = if trigger_slug.is_empty() {
         sanitize_file_stem(&payload.name, "skill")
@@ -1406,8 +1644,13 @@ pub async fn skill_save_handler(
     );
 
     match std::fs::write(&path, &content) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() }))
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -1422,7 +1665,11 @@ fn memory_store_for_web() -> Arc<agent007_memory::store::MemoryStore> {
 }
 
 fn web_namespace(scope: &str) -> &str {
-    if scope == "global" { "" } else { scope }
+    if scope == "global" {
+        ""
+    } else {
+        scope
+    }
 }
 
 // ── Memory list ───────────────────────────────────────────────────────────────
@@ -1433,7 +1680,11 @@ pub async fn memory_list_handler(
 ) -> impl IntoResponse {
     // Basic scope validation — reject traversal attempts
     if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid scope"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid scope"})),
+        )
+            .into_response();
     }
     let store = memory_store_for_web();
     let namespace = web_namespace(&scope);
@@ -1460,7 +1711,10 @@ pub async fn memory_get_handler(
     let namespace = web_namespace(&scope);
     match store.scoped(namespace).read(&key) {
         Ok(Some(content)) => (
-            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
             content,
         )
             .into_response(),
@@ -1478,13 +1732,18 @@ pub async fn workflow_templates_list_handler() -> impl IntoResponse {
     Json(get_workflow_templates()).into_response()
 }
 
-pub async fn workflow_template_get_handler(
-    Path(name): Path<String>,
-) -> impl IntoResponse {
+pub async fn workflow_template_get_handler(Path(name): Path<String>) -> impl IntoResponse {
     let templates = get_workflow_templates();
-    match templates.iter().find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name.as_str())) {
+    match templates
+        .iter()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name.as_str()))
+    {
         Some(t) => Json(t.clone()).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "template not found" }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "template not found" })),
+        )
+            .into_response(),
     }
 }
 
@@ -1504,10 +1763,14 @@ pub async fn skill_get_handler(
     search_dirs.push(agent007_global_home().join("skills"));
 
     for skills_dir in &search_dirs {
-        let Ok(entries) = std::fs::read_dir(skills_dir) else { continue; };
+        let Ok(entries) = std::fs::read_dir(skills_dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Some(fm) = parse_frontmatter(&content) {
                     if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
@@ -1515,7 +1778,10 @@ pub async fn skill_get_handler(
                         if let Some(obj) = result.as_object_mut() {
                             let parts: Vec<&str> = content.splitn(3, "---").collect();
                             if parts.len() >= 3 {
-                                obj.insert("template".to_string(), serde_json::Value::String(parts[2].trim().to_string()));
+                                obj.insert(
+                                    "template".to_string(),
+                                    serde_json::Value::String(parts[2].trim().to_string()),
+                                );
                             }
                         }
                         return Json(result).into_response();
@@ -1525,7 +1791,11 @@ pub async fn skill_get_handler(
         }
     }
 
-    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skill not found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "skill not found" })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1542,20 +1812,40 @@ pub async fn skill_import_handler(
     let client = reqwest::Client::new();
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
 
     if !resp.status().is_success() {
-        return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": format!("HTTP {}", resp.status()) }))).into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("HTTP {}", resp.status()) })),
+        )
+            .into_response();
     }
 
     let content = match resp.text().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
 
     if content.len() > 100_000 {
-        return (StatusCode::PAYLOAD_TOO_LARGE, Json(serde_json::json!({ "error": "skill file exceeds 100KB limit" }))).into_response();
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({ "error": "skill file exceeds 100KB limit" })),
+        )
+            .into_response();
     }
 
     // Derive URL-based fallbacks (used when frontmatter fields are absent).
@@ -1564,7 +1854,10 @@ pub async fn skill_import_handler(
         let last = url_parts.last().copied().unwrap_or("imported-skill");
         let last_no_ext = last.trim_end_matches(".md").trim_end_matches(".MD");
         // When filename is generic (SKILL, skills, README, index), prefer the parent directory name.
-        let effective = if matches!(last_no_ext.to_lowercase().as_str(), "skill" | "skills" | "readme" | "index") {
+        let effective = if matches!(
+            last_no_ext.to_lowercase().as_str(),
+            "skill" | "skills" | "readme" | "index"
+        ) {
             if url_parts.len() >= 2 {
                 url_parts[url_parts.len() - 2]
             } else {
@@ -1573,16 +1866,35 @@ pub async fn skill_import_handler(
         } else {
             last_no_ext
         };
-        let s: String = effective.chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
+        let s: String = effective
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
             .collect();
         let s = s.trim_matches('-').to_string();
-        if s.is_empty() { "imported-skill".to_string() } else { s }
+        if s.is_empty() {
+            "imported-skill".to_string()
+        } else {
+            s
+        }
     };
     let url_trigger = format!("/{slug}");
-    let url_name: String = slug.split('-')
-        .map(|w| { let mut c = w.chars(); match c.next() { None => String::new(), Some(f) => f.to_uppercase().collect::<String>() + c.as_str() } })
-        .collect::<Vec<_>>().join(" ");
+    let url_name: String = slug
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let url_description = format!("Imported from {}", payload.url);
 
     // Lenient frontmatter parse: optional trigger/name/description, tolerate missing or bad YAML.
@@ -1610,10 +1922,22 @@ pub async fn skill_import_handler(
     let name = fm.name.unwrap_or(url_name);
     let description = fm.description.unwrap_or(url_description);
 
-    let filename: String = trigger.trim_start_matches('/')
-        .chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+    let filename: String = trigger
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
-    let filename = if filename.is_empty() { slug.clone() } else { filename };
+    let filename = if filename.is_empty() {
+        slug.clone()
+    } else {
+        filename
+    };
 
     // Preserve original content only when it already had a valid trigger; otherwise synthesize.
     let output = if has_original_trigger {
@@ -1633,15 +1957,14 @@ pub async fn skill_import_handler(
 }
 
 pub async fn skill_registry_handler() -> impl IntoResponse {
-    let registry_url = "https://raw.githubusercontent.com/danieldear/agent007/main/docs/registry.json";
+    let registry_url =
+        "https://raw.githubusercontent.com/danieldear/agent007/main/docs/registry.json";
     let client = reqwest::Client::new();
     match client.get(registry_url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.json::<serde_json::Value>().await {
-                Ok(val) => Json(val).into_response(),
-                Err(_) => Json(serde_json::json!([])).into_response(),
-            }
-        }
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(val) => Json(val).into_response(),
+            Err(_) => Json(serde_json::json!([])).into_response(),
+        },
         _ => Json(serde_json::json!([])).into_response(),
     }
 }
@@ -1649,7 +1972,8 @@ pub async fn skill_registry_handler() -> impl IntoResponse {
 fn normalize_github_url(url: &str) -> String {
     let url = url.trim();
     if url.contains("github.com") && url.contains("/blob/") {
-        url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+        url.replace("github.com", "raw.githubusercontent.com")
+            .replace("/blob/", "/")
     } else {
         url.to_string()
     }
@@ -1768,24 +2092,40 @@ pub async fn skill_promote_handler(
 
     let project_skills = match agent007_project_home() {
         Some(p) => p.join("skills"),
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "no project-local .agent007 found" }))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "no project-local .agent007 found" })),
+            )
+                .into_response()
+        }
     };
     let global_skills = agent007_global_home().join("skills");
 
-    let found = std::fs::read_dir(&project_skills).ok()
+    let found = std::fs::read_dir(&project_skills)
+        .ok()
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
         .find(|e| {
-            std::fs::read_to_string(e.path()).ok()
+            std::fs::read_to_string(e.path())
+                .ok()
                 .and_then(|c| parse_frontmatter(&c))
-                .and_then(|fm| fm.get("trigger").and_then(|v| v.as_str()).map(|t| t == target_trigger))
+                .and_then(|fm| {
+                    fm.get("trigger")
+                        .and_then(|v| v.as_str())
+                        .map(|t| t == target_trigger)
+                })
                 .unwrap_or(false)
         });
 
     let Some(entry) = found else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skill not found in project" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "skill not found in project" })),
+        )
+            .into_response();
     };
 
     let src = entry.path();
@@ -1800,10 +2140,14 @@ pub async fn skill_promote_handler(
     let dest = global_skills.join(&filename);
 
     if dest.exists() {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({
-            "error": "skill already exists globally",
-            "path": dest.display().to_string()
-        }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "skill already exists globally",
+                "path": dest.display().to_string()
+            })),
+        )
+            .into_response();
     }
 
     match std::fs::copy(&src, &dest) {
@@ -1813,9 +2157,14 @@ pub async fn skill_promote_handler(
             Json(serde_json::json!({
                 "ok": true,
                 "promoted_to": dest.display().to_string()
-            })).into_response()
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -1838,13 +2187,20 @@ pub async fn workflow_promote_handler(
     let global_wf = agent007_global_home().join("workflows");
 
     let src = project_wf.and_then(|dir| {
-        [dir.join(format!("{safe_name}.yaml")), dir.join(format!("{safe_name}.yml"))]
-            .into_iter()
-            .find(|p| p.exists())
+        [
+            dir.join(format!("{safe_name}.yaml")),
+            dir.join(format!("{safe_name}.yml")),
+        ]
+        .into_iter()
+        .find(|p| p.exists())
     });
 
     let Some(src) = src else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "workflow not found in project" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "workflow not found in project" })),
+        )
+            .into_response();
     };
 
     let Some(filename) = src.file_name().map(|f| f.to_string_lossy().to_string()) else {
@@ -1858,10 +2214,14 @@ pub async fn workflow_promote_handler(
     let dest = global_wf.join(&filename);
 
     if dest.exists() {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({
-            "error": "workflow already exists globally",
-            "path": dest.display().to_string()
-        }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "workflow already exists globally",
+                "path": dest.display().to_string()
+            })),
+        )
+            .into_response();
     }
 
     match std::fs::copy(&src, &dest) {
@@ -1871,22 +2231,29 @@ pub async fn workflow_promote_handler(
             Json(serde_json::json!({
                 "ok": true,
                 "promoted_to": dest.display().to_string()
-            })).into_response()
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
 // ── Bundle export / import ─────────────────────────────────────────────────────
 
 /// `DELETE /api/workflows/:name` — delete a workflow file by name.
-pub async fn workflow_delete_handler(
-    Path(name): Path<String>,
-) -> impl IntoResponse {
+pub async fn workflow_delete_handler(Path(name): Path<String>) -> impl IntoResponse {
     let requested = name.trim();
     let safe_name = sanitize_file_stem(requested, "");
     if safe_name.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "invalid workflow name" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid workflow name" })),
+        )
+            .into_response();
     }
 
     // Search project-local first, then global
@@ -1907,13 +2274,20 @@ pub async fn workflow_delete_handler(
         if path.exists() {
             return match std::fs::remove_file(path) {
                 Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response(),
             };
         }
     }
 
-    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "workflow not found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "workflow not found" })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1930,10 +2304,14 @@ pub async fn bundle_export_handler(
     let skills_dir = agent007_home().join("skills");
     let workflows_dir = agent007_home().join("workflows");
 
-    let skill_filters: Vec<&str> = params.skills.as_deref()
+    let skill_filters: Vec<&str> = params
+        .skills
+        .as_deref()
         .map(|s| s.split(',').collect())
         .unwrap_or_default();
-    let wf_filters: Vec<&str> = params.workflows.as_deref()
+    let wf_filters: Vec<&str> = params
+        .workflows
+        .as_deref()
         .map(|s| s.split(',').collect())
         .unwrap_or_default();
 
@@ -1942,13 +2320,27 @@ pub async fn bundle_export_handler(
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (
                 StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/json"),
-                 (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"agent007-bundle.a7bundle\"")],
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json"),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"agent007-bundle.a7bundle\"",
+                    ),
+                ],
                 json,
-            ).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
         },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -1966,12 +2358,24 @@ pub async fn bundle_import_handler(
 ) -> impl IntoResponse {
     let bundle_json = match serde_json::to_string(&payload.bundle) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
 
     let bundle = match agent007_sharing::Bundle::from_json(&bundle_json) {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("invalid bundle: {e}") }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid bundle: {e}") })),
+            )
+                .into_response()
+        }
     };
 
     let skills_dir = agent007_write_home().join("skills");
@@ -1980,18 +2384,32 @@ pub async fn bundle_import_handler(
 
     match importer.import(&bundle, payload.overwrite) {
         Ok(results) => {
-            let imported = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Imported).count();
-            let skipped = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Skipped).count();
-            let overwritten = results.iter().filter(|r| r.action == agent007_sharing::ImportAction::Overwritten).count();
+            let imported = results
+                .iter()
+                .filter(|r| r.action == agent007_sharing::ImportAction::Imported)
+                .count();
+            let skipped = results
+                .iter()
+                .filter(|r| r.action == agent007_sharing::ImportAction::Skipped)
+                .count();
+            let overwritten = results
+                .iter()
+                .filter(|r| r.action == agent007_sharing::ImportAction::Overwritten)
+                .count();
             Json(serde_json::json!({
                 "ok": true,
                 "results": results,
                 "imported": imported,
                 "skipped": skipped,
                 "overwritten": overwritten,
-            })).into_response()
-        },
-        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2044,8 +2462,8 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use crate::server::WebServer;
+    use axum_test::TestServer;
 
     fn test_server() -> TestServer {
         let server = WebServer::new_test();
@@ -2157,7 +2575,8 @@ mod tests {
                     }
                 }
             })
-            .to_string() + "\n",
+            .to_string()
+                + "\n",
         )
         .unwrap();
 
@@ -2165,9 +2584,19 @@ mod tests {
         let response = ts.get("/api/stats").await;
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
-        assert_eq!(body.get("completed_tasks").and_then(|value| value.as_u64()), Some(1));
-        assert_eq!(body.get("session_requests").and_then(|value| value.as_u64()), Some(1));
-        assert_eq!(body.get("total_tokens").and_then(|value| value.as_u64()), Some(222));
+        assert_eq!(
+            body.get("completed_tasks").and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            body.get("session_requests")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            body.get("total_tokens").and_then(|value| value.as_u64()),
+            Some(222)
+        );
 
         std::env::remove_var("AGENT007_HOME");
     }
@@ -2349,7 +2778,10 @@ requires_approval = true
         let response = ts.post("/api/runs/session-1/resume").await;
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
-        assert_eq!(body.get("status").and_then(|value| value.as_str()), Some("succeeded"));
+        assert_eq!(
+            body.get("status").and_then(|value| value.as_str()),
+            Some("succeeded")
+        );
         let resumed_id = body
             .get("session")
             .and_then(|value| value.as_str())

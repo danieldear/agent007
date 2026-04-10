@@ -108,7 +108,8 @@ impl LearningStore {
     /// Reads only the index (a JSON array of UUIDs) — O(1) in terms of entry deserialization.
     pub fn count_feedback(&self, skill_name: &str) -> Result<usize, crate::error::LearningError> {
         let index_key = format!("feedback/index/{}", skill_name);
-        let ids: Vec<String> = self.scoped
+        let ids: Vec<String> = self
+            .scoped
             .read(&index_key)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -120,7 +121,8 @@ impl LearningStore {
     pub fn list_skill_names(&self) -> Result<Vec<String>, crate::error::LearningError> {
         const PREFIX: &str = "feedback/index/";
         let keys = self.scoped.list_keys()?;
-        Ok(keys.into_iter()
+        Ok(keys
+            .into_iter()
             .filter_map(|k| k.strip_prefix(PREFIX).map(str::to_string))
             .filter(|s| s != "__none__")
             .collect())
@@ -184,9 +186,9 @@ impl LearningStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{FeedbackEntry, Outcome};
     use agent007_core::types::{AgentId, PromptRef};
     use agent007_memory::store::MemoryStore;
-    use crate::types::{FeedbackEntry, Outcome};
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -228,7 +230,10 @@ mod tests {
 
         store.record_feedback(&entry).unwrap();
 
-        let retrieved = store.get_entry(entry.id).unwrap().expect("should find entry");
+        let retrieved = store
+            .get_entry(entry.id)
+            .unwrap()
+            .expect("should find entry");
         assert_eq!(retrieved.id, entry.id);
         assert_eq!(retrieved.model, "claude");
         assert_eq!(retrieved.skill_name, Some("code-review".to_string()));
@@ -241,7 +246,9 @@ mod tests {
 
         // Record 5 entries for "review-pr" and 2 for "other"
         for _ in 0..5 {
-            store.record_feedback(&make_entry(Some("review-pr"))).unwrap();
+            store
+                .record_feedback(&make_entry(Some("review-pr")))
+                .unwrap();
         }
         for _ in 0..2 {
             store.record_feedback(&make_entry(Some("other"))).unwrap();

@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use serde_json::{json, Value};
 use crate::error::ModelError;
 use crate::provider::ModelProvider;
 use crate::types::{CompletionRequest, CompletionResponse, Message};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 pub struct OllamaProvider {
     base_url: String,
@@ -20,7 +20,13 @@ impl OllamaProvider {
         }
     }
 
-    pub fn build_body(&self, model: &str, messages: &[Message], max_tokens: Option<u32>, temperature: Option<f32>) -> String {
+    pub fn build_body(
+        &self,
+        model: &str,
+        messages: &[Message],
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+    ) -> String {
         let mut body = json!({
             "model": model,
             "messages": messages,
@@ -50,7 +56,10 @@ impl ModelProvider for OllamaProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
         let mut messages = request.messages;
-        let model = if request.model.is_empty() || request.model == self.name() || request.model == "ollama" {
+        let model = if request.model.is_empty()
+            || request.model == self.name()
+            || request.model == "ollama"
+        {
             self.model.as_str()
         } else {
             request.model.as_str()
@@ -58,10 +67,13 @@ impl ModelProvider for OllamaProvider {
 
         // Prepend system message if provided
         if let Some(system_content) = request.system {
-            messages.insert(0, Message {
-                role: crate::types::Role::System,
-                content: system_content,
-            });
+            messages.insert(
+                0,
+                Message {
+                    role: crate::types::Role::System,
+                    content: system_content,
+                },
+            );
         }
 
         let body = self.build_body(model, &messages, request.max_tokens, request.temperature);
@@ -116,7 +128,10 @@ mod tests {
     #[test]
     fn ollama_builds_openai_compatible_body() {
         let p = OllamaProvider::new("http://localhost:11434", "llama3");
-        let msgs = vec![Message { role: Role::User, content: "hello".to_string() }];
+        let msgs = vec![Message {
+            role: Role::User,
+            content: "hello".to_string(),
+        }];
         let body = p.build_body("llama3", &msgs, None, None);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["model"], "llama3");

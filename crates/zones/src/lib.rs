@@ -1,13 +1,13 @@
 // crates/zones/src/lib.rs
 
+pub mod audit;
+pub mod checker;
+pub mod config;
 pub mod error;
 pub mod level;
-pub mod config;
-pub mod checker;
-pub mod audit;
 
-pub use error::ZonesError;
-pub use level::{ZoneLevel, FileOp};
-pub use config::ZoneConfig;
+pub use audit::{AuditEntry, AuditLogger};
 pub use checker::{ZoneChecker, ZoneViolation};
-pub use audit::{AuditLogger, AuditEntry};
+pub use config::ZoneConfig;
+pub use error::ZonesError;
+pub use level::{FileOp, ZoneLevel};

@@ -1,17 +1,21 @@
-mod config;
-pub mod commands;
 mod built_in_skills;
+pub mod commands;
+mod config;
 #[cfg(test)]
 mod test_support;
 
 use clap::{Parser, Subcommand};
-use commands::git::GitArgs;
 use commands::checkpoint::CheckpointArgs;
+use commands::git::GitArgs;
 
 pub use commands::workflow::WorkflowAction;
 
 #[derive(Parser, Debug)]
-#[command(name = "agent007", version = "0.1.0", about = "Multi-agent AI orchestration")]
+#[command(
+    name = "agent007",
+    version = "0.1.0",
+    about = "Multi-agent AI orchestration"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -253,17 +257,31 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     // MCP/LSP clients parse stdio strictly; keep logs off stdout and
     // default stdio server modes to quiet logging.
-    if matches!(cli.command, Commands::Serve { .. } | Commands::ServeLsp { .. }) {
+    if matches!(
+        cli.command,
+        Commands::Serve { .. } | Commands::ServeLsp { .. }
+    ) {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_max_level(tracing::Level::ERROR)
             .init();
     } else {
-        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .init();
     }
     let config = std::sync::Arc::new(crate::config::Config::load()?);
     match cli.command {
-        Commands::Init { force, global, claude, cursor, codex, copilot, zed, no_ide } => {
+        Commands::Init {
+            force,
+            global,
+            claude,
+            cursor,
+            codex,
+            copilot,
+            zed,
+            no_ide,
+        } => {
             let (do_claude, do_cursor, do_codex, do_copilot, do_zed) = if no_ide {
                 (false, false, false, false, false)
             } else if !claude && !cursor && !codex && !copilot && !zed {
@@ -272,14 +290,7 @@ async fn main() -> anyhow::Result<()> {
                 (claude, cursor, codex, copilot, zed)
             };
             commands::init::execute(
-                config,
-                force,
-                global,
-                do_claude,
-                do_cursor,
-                do_codex,
-                do_copilot,
-                do_zed,
+                config, force, global, do_claude, do_cursor, do_codex, do_copilot, do_zed,
             )
             .await
         }
@@ -316,25 +327,34 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             if result.resolved {
-                println!("All tests passing after {} iteration(s).", result.iterations);
+                println!(
+                    "All tests passing after {} iteration(s).",
+                    result.iterations
+                );
             } else {
-                println!("Debug loop exhausted ({} iterations). Diagnosis:\n{}", result.iterations, result.final_output);
+                println!(
+                    "Debug loop exhausted ({} iterations). Diagnosis:\n{}",
+                    result.iterations, result.final_output
+                );
             }
             Ok(())
         }
         Commands::Workflow(w) => commands::workflow::execute(config, w.action).await,
         Commands::Bundle(b) => commands::bundle::execute(config, b.action).await,
-        Commands::Audit { last, agent, path, blocked } => {
-            commands::audit::execute(config, last, agent, path, blocked).await
-        }
-        Commands::ServeWeb { port } => {
-            commands::serve_web::execute(config, port).await
-        }
+        Commands::Audit {
+            last,
+            agent,
+            path,
+            blocked,
+        } => commands::audit::execute(config, last, agent, path, blocked).await,
+        Commands::ServeWeb { port } => commands::serve_web::execute(config, port).await,
         Commands::Dashboard { port } => {
             let url = format!("http://localhost:{port}");
             tracing::info!("Starting agent007 dashboard on {url}");
             // Attempt to open browser (best-effort, no error on failure)
-            let _ = std::process::Command::new("open").arg(&url).spawn()
+            let _ = std::process::Command::new("open")
+                .arg(&url)
+                .spawn()
                 .or_else(|_| std::process::Command::new("xdg-open").arg(&url).spawn())
                 .or_else(|_| std::process::Command::new("start").arg(&url).spawn());
             commands::serve_web::execute(config, port).await
@@ -358,7 +378,14 @@ async fn main() -> anyhow::Result<()> {
                 if is_prefix {
                     commands::skill::execute(config, SkillAction::List).await
                 } else {
-                    commands::skill::execute(config, SkillAction::Run { trigger, args: rest }).await
+                    commands::skill::execute(
+                        config,
+                        SkillAction::Run {
+                            trigger,
+                            args: rest,
+                        },
+                    )
+                    .await
                 }
             } else {
                 commands::skill::execute(config, SkillAction::List).await
@@ -370,9 +397,9 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
     use crate::commands::checkpoint::CheckpointAction;
     use crate::commands::git::GitAction;
+    use clap::Parser;
 
     #[test]
     fn parse_run_subcommand() {
@@ -383,32 +410,54 @@ mod tests {
     #[test]
     fn parse_skill_list_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "skill", "list"]).unwrap();
-        assert!(matches!(cli.command, Commands::Skill(ref s) if matches!(s.action, SkillAction::List)));
+        assert!(
+            matches!(cli.command, Commands::Skill(ref s) if matches!(s.action, SkillAction::List))
+        );
     }
 
     #[test]
     fn parse_skill_add_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "skill", "add", "/path/to/skill.md"]).unwrap();
-        assert!(matches!(cli.command, Commands::Skill(ref s) if matches!(s.action, SkillAction::Add { ref path } if path == "/path/to/skill.md")));
+        assert!(
+            matches!(cli.command, Commands::Skill(ref s) if matches!(s.action, SkillAction::Add { ref path } if path == "/path/to/skill.md"))
+        );
     }
 
     #[test]
     fn parse_serve_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "serve"]).unwrap();
-        assert!(matches!(cli.command, Commands::Serve { port: 8007, no_dashboard: false }));
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                port: 8007,
+                no_dashboard: false
+            }
+        ));
     }
 
     #[test]
     fn parse_serve_with_port_and_no_dashboard() {
-        let cli = Cli::try_parse_from(["agent007", "serve", "--port", "9000", "--no-dashboard"]).unwrap();
-        assert!(matches!(cli.command, Commands::Serve { port: 9000, no_dashboard: true }));
+        let cli =
+            Cli::try_parse_from(["agent007", "serve", "--port", "9000", "--no-dashboard"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                port: 9000,
+                no_dashboard: true
+            }
+        ));
     }
 
     #[test]
     fn parse_slash_trigger_as_external() {
         // agent007 /review-pr https://github.com/org/repo/pull/42
         // clap external_subcommand captures this as Commands::Slash(vec!["/review-pr", "..."])
-        let cli = Cli::try_parse_from(["agent007", "/review-pr", "https://github.com/org/repo/pull/42"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "agent007",
+            "/review-pr",
+            "https://github.com/org/repo/pull/42",
+        ])
+        .unwrap();
         assert!(matches!(cli.command, Commands::Slash(ref args) if args[0] == "/review-pr"));
     }
 
@@ -432,7 +481,8 @@ mod tests {
 
     #[test]
     fn parse_checkpoint_create_subcommand() {
-        let cli = Cli::try_parse_from(["agent007", "checkpoint", "create", "before refactor"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["agent007", "checkpoint", "create", "before refactor"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Checkpoint(ref c) if matches!(c.action, CheckpointAction::Create { ref name } if name == "before refactor")
@@ -469,8 +519,14 @@ mod tests {
     #[test]
     fn parse_git_commit_subcommand() {
         let cli = Cli::try_parse_from([
-            "agent007", "git", "commit", "implement mDNS", "--files", "src/net/mdns.rs",
-        ]).unwrap();
+            "agent007",
+            "git",
+            "commit",
+            "implement mDNS",
+            "--files",
+            "src/net/mdns.rs",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Git(ref g) if matches!(g.action, GitAction::Commit { .. })
@@ -480,12 +536,19 @@ mod tests {
     #[test]
     fn parse_git_pr_subcommand() {
         let cli = Cli::try_parse_from([
-            "agent007", "git", "pr",
-            "--title", "Add mDNS",
-            "--body", "adds mdns",
-            "--head", "feature/add-mDNS",
-            "--base", "main",
-        ]).unwrap();
+            "agent007",
+            "git",
+            "pr",
+            "--title",
+            "Add mDNS",
+            "--body",
+            "adds mdns",
+            "--head",
+            "feature/add-mDNS",
+            "--base",
+            "main",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Git(ref g) if matches!(g.action, GitAction::Pr { .. })
@@ -504,8 +567,14 @@ mod tests {
     #[test]
     fn parse_replay_subcommand() {
         let cli = Cli::try_parse_from([
-            "agent007", "replay", "--session", "abc123", "--model", "ollama/llama3",
-        ]).unwrap();
+            "agent007",
+            "replay",
+            "--session",
+            "abc123",
+            "--model",
+            "ollama/llama3",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Replay { ref session, ref model } if session == "abc123" && model == "ollama/llama3"
@@ -515,7 +584,15 @@ mod tests {
     #[test]
     fn parse_audit_subcommand_no_flags() {
         let cli = Cli::try_parse_from(["agent007", "audit"]).unwrap();
-        assert!(matches!(cli.command, Commands::Audit { last: None, agent: None, path: None, blocked: false }));
+        assert!(matches!(
+            cli.command,
+            Commands::Audit {
+                last: None,
+                agent: None,
+                path: None,
+                blocked: false
+            }
+        ));
     }
 
     #[test]
@@ -529,7 +606,8 @@ mod tests {
 
     #[test]
     fn parse_audit_subcommand_agent_and_blocked() {
-        let cli = Cli::try_parse_from(["agent007", "audit", "--agent", "WorkerAgent", "--blocked"]).unwrap();
+        let cli = Cli::try_parse_from(["agent007", "audit", "--agent", "WorkerAgent", "--blocked"])
+            .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Audit { ref agent, blocked: true, .. } if agent.as_deref() == Some("WorkerAgent")
@@ -548,8 +626,14 @@ mod tests {
     #[test]
     fn parse_workflow_run_subcommand() {
         let cli = Cli::try_parse_from([
-            "agent007", "workflow", "run", "tdd-feature", "--task", "add auth"
-        ]).unwrap();
+            "agent007",
+            "workflow",
+            "run",
+            "tdd-feature",
+            "--task",
+            "add auth",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Workflow(ref w) if matches!(
@@ -563,7 +647,9 @@ mod tests {
     #[test]
     fn parse_workflow_list_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "workflow", "list"]).unwrap();
-        assert!(matches!(cli.command, Commands::Workflow(ref w) if matches!(w.action, WorkflowAction::List)));
+        assert!(
+            matches!(cli.command, Commands::Workflow(ref w) if matches!(w.action, WorkflowAction::List))
+        );
     }
 
     #[test]

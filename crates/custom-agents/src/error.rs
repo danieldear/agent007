@@ -43,7 +43,9 @@ mod tests {
 
     #[test]
     fn worker_not_allowed_message() {
-        let e = CustomAgentError::WorkerNotAllowed { name: "Hacker".into() };
+        let e = CustomAgentError::WorkerNotAllowed {
+            name: "Hacker".into(),
+        };
         assert!(e.to_string().contains("Hacker"));
     }
 }

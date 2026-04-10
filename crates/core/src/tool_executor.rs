@@ -59,7 +59,7 @@ impl ToolExecutor {
     pub fn check_zone(&self, path: &Path, op: FileOp) -> Result<(), ZoneViolation> {
         let checker = match &self.zone_checker {
             Some(c) => c,
-            None => return Ok(()),   // no checker → unrestricted by default
+            None => return Ok(()), // no checker → unrestricted by default
         };
 
         let result = checker.check(path, op);
@@ -113,7 +113,10 @@ impl ToolExecutor {
             .as_ref()
             .ok_or_else(|| CoreError::NotConfigured("MCP client not configured".to_string()))?;
         let locked = client.lock().await;
-        locked.call_tool(tool_name, args).await.map_err(CoreError::from)
+        locked
+            .call_tool(tool_name, args)
+            .await
+            .map_err(CoreError::from)
     }
 }
 
@@ -125,9 +128,9 @@ mod tests {
 
     fn make_executor(dir: &TempDir) -> ToolExecutor {
         let config = ZoneConfig {
-            forbidden:    vec!["secrets/".to_string(), ".env".to_string()],
-            readonly:     vec!["src/auth/".to_string()],
-            sensitive:    vec!["src/crypto/".to_string()],
+            forbidden: vec!["secrets/".to_string(), ".env".to_string()],
+            readonly: vec!["src/auth/".to_string()],
+            sensitive: vec!["src/crypto/".to_string()],
             unrestricted: vec!["src/".to_string()],
         };
         let checker = Arc::new(ZoneChecker::new(&config).unwrap());
@@ -143,7 +146,9 @@ mod tests {
     fn check_zone_allows_read_on_unrestricted() {
         let dir = TempDir::new().unwrap();
         let ex = make_executor(&dir);
-        assert!(ex.check_zone(Path::new("src/utils.rs"), FileOp::Read).is_ok());
+        assert!(ex
+            .check_zone(Path::new("src/utils.rs"), FileOp::Read)
+            .is_ok());
     }
 
     #[test]
@@ -159,8 +164,12 @@ mod tests {
     fn check_zone_allows_read_but_blocks_write_on_readonly() {
         let dir = TempDir::new().unwrap();
         let ex = make_executor(&dir);
-        assert!(ex.check_zone(Path::new("src/auth/login.rs"), FileOp::Read).is_ok());
-        assert!(ex.check_zone(Path::new("src/auth/login.rs"), FileOp::Write).is_err());
+        assert!(ex
+            .check_zone(Path::new("src/auth/login.rs"), FileOp::Read)
+            .is_ok());
+        assert!(ex
+            .check_zone(Path::new("src/auth/login.rs"), FileOp::Write)
+            .is_err());
     }
 
     #[test]
@@ -176,7 +185,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(parsed["allowed"], false);
         assert_eq!(parsed["blocked"], true);
-        assert_eq!(parsed["agent"],  "TestAgent");
+        assert_eq!(parsed["agent"], "TestAgent");
     }
 
     #[test]
@@ -198,7 +207,9 @@ mod tests {
     fn check_zone_without_checker_always_allows() {
         let ex = ToolExecutor::new("Bare");
         // No checker attached — all ops pass
-        assert!(ex.check_zone(Path::new("secrets/very_sensitive"), FileOp::Delete).is_ok());
+        assert!(ex
+            .check_zone(Path::new("secrets/very_sensitive"), FileOp::Delete)
+            .is_ok());
     }
 
     #[tokio::test]

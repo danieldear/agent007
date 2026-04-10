@@ -15,10 +15,15 @@ pub struct AgentHandle {
 
 impl AgentHandle {
     pub fn new() -> Self {
-        Self { id: AgentId::new(), state: AgentState::Idle }
+        Self {
+            id: AgentId::new(),
+            state: AgentState::Idle,
+        }
     }
 }
 
 impl Default for AgentHandle {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

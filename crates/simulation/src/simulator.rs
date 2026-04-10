@@ -31,8 +31,8 @@ impl Simulator {
         let scenario_path = scenario_tmp.path().to_string_lossy().to_string();
         let output_path = output_tmp.path().to_string_lossy().to_string();
 
-        let scenario_json = serde_json::to_string_pretty(&scenario.params)
-            .unwrap_or_else(|_| "{}".to_string());
+        let scenario_json =
+            serde_json::to_string_pretty(&scenario.params).unwrap_or_else(|_| "{}".to_string());
         tokio::fs::write(scenario_tmp.path(), scenario_json.as_bytes()).await?;
 
         // Expand placeholders in args
@@ -110,9 +110,7 @@ impl Simulator {
                     if err_m > max_err {
                         return Err(SimulationError::ValidationFailed {
                             name: scenario_name.to_string(),
-                            reason: format!(
-                                "error_m {err_m:.2} exceeds max {max_err:.2}"
-                            ),
+                            reason: format!("error_m {err_m:.2} exceeds max {max_err:.2}"),
                         });
                     }
                 }
@@ -123,9 +121,7 @@ impl Simulator {
                     if acc < min_acc {
                         return Err(SimulationError::ValidationFailed {
                             name: scenario_name.to_string(),
-                            reason: format!(
-                                "accuracy_percent {acc:.1} below minimum {min_acc:.1}"
-                            ),
+                            reason: format!("accuracy_percent {acc:.1} below minimum {min_acc:.1}"),
                         });
                     }
                 }
@@ -136,9 +132,7 @@ impl Simulator {
                     if ho > max_ho {
                         return Err(SimulationError::ValidationFailed {
                             name: scenario_name.to_string(),
-                            reason: format!(
-                                "handoff_time_ms {ho} exceeds max {max_ho}"
-                            ),
+                            reason: format!("handoff_time_ms {ho} exceeds max {max_ho}"),
                         });
                     }
                 }
@@ -205,7 +199,10 @@ mod tests {
             working_dir: None,
             env: None,
         };
-        let scenario = ScenarioDef { name: "s1".into(), params: json!({}) };
+        let scenario = ScenarioDef {
+            name: "s1".into(),
+            params: json!({}),
+        };
         let sim = Simulator::new();
         let err = sim.run_scenario(&sut, &scenario).await.unwrap_err();
         assert!(matches!(err, SimulationError::SutFailed { .. }));
@@ -215,13 +212,18 @@ mod tests {
     fn validate_passes_no_constraints() {
         let sim = Simulator::new();
         let config = ValidationConfig::default();
-        assert!(sim.validate_output("s1", r#"{"anything": true}"#, &config).is_ok());
+        assert!(sim
+            .validate_output("s1", r#"{"anything": true}"#, &config)
+            .is_ok());
     }
 
     #[test]
     fn validate_fails_on_high_error_m() {
         let sim = Simulator::new();
-        let config = ValidationConfig { max_error_m: Some(2.0), ..Default::default() };
+        let config = ValidationConfig {
+            max_error_m: Some(2.0),
+            ..Default::default()
+        };
         let err = sim
             .validate_output("s1", r#"{"error_m": 5.5}"#, &config)
             .unwrap_err();
@@ -231,7 +233,10 @@ mod tests {
     #[test]
     fn validate_passes_within_bounds() {
         let sim = Simulator::new();
-        let config = ValidationConfig { max_error_m: Some(2.0), ..Default::default() };
+        let config = ValidationConfig {
+            max_error_m: Some(2.0),
+            ..Default::default()
+        };
         assert!(sim
             .validate_output("s1", r#"{"error_m": 1.5}"#, &config)
             .is_ok());

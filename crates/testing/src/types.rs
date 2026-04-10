@@ -5,7 +5,7 @@ pub struct TestPlan {
     pub scope: String,
     pub priority: String,
     pub coverage_target: u8,
-    pub test_types: Vec<String>,  // "unit", "integration", "property"
+    pub test_types: Vec<String>, // "unit", "integration", "property"
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -56,7 +56,11 @@ mod tests {
         let r = FailureReport {
             run_id: "abc".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
-            summary: RunSummary { total: 10, passed: 9, failed: 1 },
+            summary: RunSummary {
+                total: 10,
+                passed: 9,
+                failed: 1,
+            },
             failures: vec![],
             coverage: CoverageResult::default(),
             regressions: vec![],

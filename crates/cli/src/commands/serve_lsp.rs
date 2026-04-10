@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use agent007_ide_bridge::server::{run_stdio, run_tcp, BridgeConfig};
 use anyhow::Result;
-use agent007_ide_bridge::server::{BridgeConfig, run_stdio, run_tcp};
 
 use crate::config::Config;
 

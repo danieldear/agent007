@@ -1,8 +1,8 @@
-use crossterm::event::KeyCode;
-use agent007_core::events::AgentEvent;
-use agent007_learning::types::LearningEvent;
 use crate::app::App;
 use crate::TuiError;
+use agent007_core::events::AgentEvent;
+use agent007_learning::types::LearningEvent;
+use crossterm::event::KeyCode;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppAction {
@@ -78,10 +78,7 @@ impl EventLoop {
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<(), TuiError> {
         crossterm::terminal::enable_raw_mode()?;
-        crossterm::execute!(
-            std::io::stderr(),
-            crossterm::terminal::EnterAlternateScreen
-        )?;
+        crossterm::execute!(std::io::stderr(), crossterm::terminal::EnterAlternateScreen)?;
 
         let backend = ratatui::backend::CrosstermBackend::new(std::io::stderr());
         let mut terminal = ratatui::Terminal::new(backend)?;
@@ -90,10 +87,7 @@ impl EventLoop {
 
         // Cleanup — always runs even on error
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stderr(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
 
         result
     }

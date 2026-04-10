@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use anyhow::Result;
 use crate::config::Config;
 use crate::SkillAction;
+use anyhow::Result;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub struct SkillSummary {
     pub name: String,
@@ -34,7 +34,9 @@ struct ListFrontmatter {
     version: String,
 }
 
-fn default_version() -> String { "1.0.0".to_string() }
+fn default_version() -> String {
+    "1.0.0".to_string()
+}
 
 /// List all skills found in skills_dir. Returns a Vec of summaries (name + description + trigger).
 /// Reads each .md file and parses YAML frontmatter.
@@ -109,16 +111,19 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
         SkillAction::List => {
             let summaries = list_skills(&skills_dir).await?;
             for s in &summaries {
-                println!("[v{}] {:20} {:40} {}", s.version, s.trigger, s.name, s.description);
+                println!(
+                    "[v{}] {:20} {:40} {}",
+                    s.version, s.trigger, s.name, s.description
+                );
             }
             Ok(())
         }
-        SkillAction::Add { path } => {
-            copy_skill_to_dir(std::path::Path::new(&path), &skills_dir)
-        }
+        SkillAction::Add { path } => copy_skill_to_dir(std::path::Path::new(&path), &skills_dir),
         SkillAction::Run { trigger, args } => {
             let is_dry_run = crate::commands::run::is_dry_run();
-            let router = Arc::new(crate::commands::run::build_model_router(&config, is_dry_run));
+            let router = Arc::new(crate::commands::run::build_model_router(
+                &config, is_dry_run,
+            ));
 
             // Embedding provider + VectorDB for the Retriever
             let embedder = Arc::new(agent007_models::MockProvider::with_embedding_dim(
@@ -134,13 +139,10 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
                 let vdb_path = home.join("vectordb");
                 std::fs::create_dir_all(&vdb_path)?;
                 let vdb_path_str = vdb_path.to_string_lossy().to_string();
-                let store = agent007_memory::vectordb::LanceDBStore::new(
-                    &vdb_path_str,
-                    "skills",
-                    384,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to open vector db: {}", e))?;
+                let store =
+                    agent007_memory::vectordb::LanceDBStore::new(&vdb_path_str, "skills", 384)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to open vector db: {}", e))?;
                 Arc::new(store)
             };
 
@@ -151,21 +153,22 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
             let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(memory_dir));
             let memory = memory_store.global();
             let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
-                crate::commands::run::agent007_global_home().join("memory")
+                crate::commands::run::agent007_global_home().join("memory"),
             ));
             let global_memory = global_store.scoped("global");
 
-            let executor =
-                agent007_skills::SkillExecutor::new(router as Arc<dyn agent007_models::ModelProvider>, retriever, memory)
-                    .with_global_memory(global_memory);
+            let executor = agent007_skills::SkillExecutor::new(
+                router as Arc<dyn agent007_models::ModelProvider>,
+                retriever,
+                memory,
+            )
+            .with_global_memory(global_memory);
 
             let result = run_skill(&trigger, &args, &executor).await?;
             println!("{}", result);
             Ok(())
         }
-        SkillAction::Install { source } => {
-            install_skill(&source, &skills_dir)
-        }
+        SkillAction::Install { source } => install_skill(&source, &skills_dir),
     }
 }
 
@@ -200,7 +203,8 @@ pub fn install_skill(source: &str, skills_dir: &std::path::Path) -> Result<()> {
         anyhow::bail!("fetch failed — HTTP {} for {url}", response.status());
     }
 
-    let content = response.text()
+    let content = response
+        .text()
         .map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))?;
 
     // Validate frontmatter: must have name: and trigger:
@@ -210,12 +214,18 @@ pub fn install_skill(source: &str, skills_dir: &std::path::Path) -> Result<()> {
     }
 
     #[derive(serde::Deserialize)]
-    struct MinimalFrontmatter { name: String, trigger: String }
+    struct MinimalFrontmatter {
+        name: String,
+        trigger: String,
+    }
     let fm: MinimalFrontmatter = serde_yaml::from_str(parts[1])
         .map_err(|e| anyhow::anyhow!("failed to parse skill frontmatter: {e}"))?;
 
     // Derive filename from trigger (strip leading /)
-    let filename = format!("{}.md", fm.trigger.trim_start_matches('/').replace('/', "-"));
+    let filename = format!(
+        "{}.md",
+        fm.trigger.trim_start_matches('/').replace('/', "-")
+    );
     std::fs::create_dir_all(skills_dir)?;
     let dest = skills_dir.join(&filename);
     std::fs::write(&dest, &content)?;
@@ -280,7 +290,8 @@ mod tests {
         std::fs::write(
             skills_dir.path().join("no_version.md"),
             "---\nname: no_version\ndescription: test\ntrigger: /no-version\n---\nDo it.\n",
-        ).unwrap();
+        )
+        .unwrap();
         let summaries = list_skills(skills_dir.path()).await.unwrap();
         assert_eq!(summaries[0].version, "1.0.0");
     }

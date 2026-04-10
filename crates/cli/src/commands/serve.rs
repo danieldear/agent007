@@ -9,29 +9,29 @@ use std::{
 
 use anyhow::Result;
 use rmcp::{
-    ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResult, Content, Implementation,
-        InitializeRequestParams, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, Content, Implementation, InitializeRequestParams,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::io::stdio,
+    ServerHandler, ServiceExt,
 };
 use serde_json::Map;
 
-use crate::config::Config;
 use super::run::{
     agent007_global_home, agent007_home, agent007_project_home, agent007_write_home, build_stack,
-    runtime_mode_label, selected_runtime_model, selected_runtime_provider, standalone_mode_available,
+    runtime_mode_label, selected_runtime_model, selected_runtime_provider,
+    standalone_mode_available,
 };
 use super::skill::SkillSummary;
+use crate::config::Config;
 
 use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::events::AgentEvent;
 use agent007_core::types::PromptRef;
-use agent007_learning::LearningDispatcher;
 use agent007_hooks::{HookConfig, HookEvent, HookExecutor};
+use agent007_learning::LearningDispatcher;
 
 /// MCP server that exposes agent007 tools to Claude Code (or any MCP client).
 pub struct Agent007Server {
@@ -44,7 +44,12 @@ pub struct Agent007Server {
 impl Agent007Server {
     pub fn new(config: Arc<Config>) -> Self {
         let hook_executor = load_hook_executor();
-        Self { config, dispatcher: None, learning_dispatcher: None, hook_executor }
+        Self {
+            config,
+            dispatcher: None,
+            learning_dispatcher: None,
+            hook_executor,
+        }
     }
 
     pub fn with_dispatchers(
@@ -65,25 +70,41 @@ impl Agent007Server {
         }
     }
 
-    async fn publish_task_assigned(&self, agent_id: &agent007_core::types::AgentId, task: &agent007_core::Task) {
+    async fn publish_task_assigned(
+        &self,
+        agent_id: &agent007_core::types::AgentId,
+        task: &agent007_core::Task,
+    ) {
         if let Some(d) = &self.dispatcher {
             use agent007_core::dispatcher::Dispatcher;
-            let _ = d.publish(agent007_core::AgentEvent::TaskAssigned {
-                agent_id: agent_id.clone(),
-                task: task.clone(),
-            }).await;
+            let _ = d
+                .publish(agent007_core::AgentEvent::TaskAssigned {
+                    agent_id: agent_id.clone(),
+                    task: task.clone(),
+                })
+                .await;
         }
     }
 
-    async fn publish_task_completed(&self, agent_id: &agent007_core::types::AgentId, task_id: uuid::Uuid, output: &str) {
+    async fn publish_task_completed(
+        &self,
+        agent_id: &agent007_core::types::AgentId,
+        task_id: uuid::Uuid,
+        output: &str,
+    ) {
         if let Some(d) = &self.dispatcher {
             use agent007_core::dispatcher::Dispatcher;
-            let _ = d.publish(agent007_core::AgentEvent::TaskCompleted {
-                agent_id: agent_id.clone(),
-                result: agent007_core::TaskResult::success(task_id, output.chars().take(200).collect()),
-                skill_name: None,
-                model: None,
-            }).await;
+            let _ = d
+                .publish(agent007_core::AgentEvent::TaskCompleted {
+                    agent_id: agent_id.clone(),
+                    result: agent007_core::TaskResult::success(
+                        task_id,
+                        output.chars().take(200).collect(),
+                    ),
+                    skill_name: None,
+                    model: None,
+                })
+                .await;
         }
         self.fire_hook(&HookEvent::PostTaskComplete);
     }
@@ -91,12 +112,14 @@ impl Agent007Server {
     async fn publish_model_request(&self, token_estimate: usize) {
         if let Some(d) = &self.dispatcher {
             use agent007_core::dispatcher::Dispatcher;
-            let _ = d.publish(agent007_core::AgentEvent::ModelRequest {
-                provider: selected_runtime_provider(&self.config)
-                    .unwrap_or_else(|| "hosted-mcp".to_string()),
-                prompt_ref: agent007_core::types::PromptRef::new(),
-                token_estimate,
-            }).await;
+            let _ = d
+                .publish(agent007_core::AgentEvent::ModelRequest {
+                    provider: selected_runtime_provider(&self.config)
+                        .unwrap_or_else(|| "hosted-mcp".to_string()),
+                    prompt_ref: agent007_core::types::PromptRef::new(),
+                    token_estimate,
+                })
+                .await;
         }
     }
 
@@ -130,6 +153,22 @@ impl Agent007Server {
                         }
                     },
                     "required": ["task"]
+                }),
+            ),
+            tool(
+                "agent007_dispatch",
+                "Dispatch a simple command-style agent007 request (slash-like UX) to the right tool. \
+                 Supports patterns like '$agent007 wf tdd ...', '$agent007 skill /brainstorm ...', \
+                 '$agent007 run ...', '/agent007 ...', or '@agent007 ...'.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Command-style request to dispatch"
+                        }
+                    },
+                    "required": ["command"]
                 }),
             ),
             tool(
@@ -895,9 +934,7 @@ impl ServerHandler for Agent007Server {
             .with_description(
                 "Multi-agent AI orchestration with RAG memory, skills, hooks, and learning.",
             );
-        info.capabilities = ServerCapabilities::builder()
-            .enable_tools()
-            .build();
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "Use agent007_help for the current catalog and exact invocation examples. \
              Use agent007_run to run tasks. Generic skill/workflow tools are available via \
@@ -944,7 +981,9 @@ impl ServerHandler for Agent007Server {
                     return Ok(CallToolResult::success(vec![Content::text(output)]));
                 }
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))]));
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))]));
                 }
             }
         }
@@ -952,7 +991,8 @@ impl ServerHandler for Agent007Server {
         if let Some(workflow) = dynamic_workflow_tool(request.name.as_ref()) {
             let task = extract_string(request.arguments.as_ref(), "task")?;
             let aid = agent007_core::types::AgentId::new();
-            let core_task = agent007_core::Task::new(&format!("workflow:{}", workflow.workflow_ref));
+            let core_task =
+                agent007_core::Task::new(&format!("workflow:{}", workflow.workflow_ref));
             let task_id = core_task.id;
             self.publish_task_assigned(&aid, &core_task).await;
 
@@ -970,7 +1010,9 @@ impl ServerHandler for Agent007Server {
                     return Ok(CallToolResult::success(vec![Content::text(output)]));
                 }
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))]));
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))]));
                 }
             }
         }
@@ -979,7 +1021,9 @@ impl ServerHandler for Agent007Server {
             // ── existing 5 ────────────────────────────────────────────────
             "agent007_help" => {
                 let topic = optional_string(request.arguments.as_ref(), "topic");
-                Ok(CallToolResult::success(vec![Content::text(agent007_help(topic.as_deref()))]))
+                Ok(CallToolResult::success(vec![Content::text(agent007_help(
+                    topic.as_deref(),
+                ))]))
             }
             "agent007_run" => {
                 let task_str = extract_string(request.arguments.as_ref(), "task")?;
@@ -994,17 +1038,117 @@ impl ServerHandler for Agent007Server {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
-            "agent007_skill_list" => {
-                match list_available_skills() {
-                    Ok(skills) => {
-                        Ok(CallToolResult::success(vec![Content::text(format_skills(&skills))]))
+            "agent007_dispatch" => {
+                let command = extract_string(request.arguments.as_ref(), "command")?;
+                let parsed = match parse_dispatch_command(&command) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Error: {e}\n\n{}",
+                            dispatch_usage()
+                        ))]));
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                };
+
+                match parsed {
+                    DispatchCommand::Help { topic } => {
+                        Ok(CallToolResult::success(vec![Content::text(agent007_help(
+                            topic.as_deref(),
+                        ))]))
+                    }
+                    DispatchCommand::Run { task } => {
+                        let aid = agent007_core::types::AgentId::new();
+                        let core_task = agent007_core::Task::new(&task);
+                        let task_id = core_task.id;
+                        self.publish_task_assigned(&aid, &core_task).await;
+                        match run_task(&self.config, task).await {
+                            Ok(output) => {
+                                let token_est = output.len() / 4;
+                                self.publish_model_request(token_est).await;
+                                self.publish_task_completed(&aid, task_id, &output).await;
+                                Ok(CallToolResult::success(vec![Content::text(output)]))
+                            }
+                            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Error: {e}"
+                            ))])),
+                        }
+                    }
+                    DispatchCommand::SkillList => match list_available_skills() {
+                        Ok(skills) => Ok(CallToolResult::success(vec![Content::text(
+                            format_skills(&skills),
+                        )])),
+                        Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Error: {e}"
+                        ))])),
+                    },
+                    DispatchCommand::SkillRun { trigger, args } => {
+                        let aid = agent007_core::types::AgentId::new();
+                        let core_task = agent007_core::Task::new(&format!("skill:{trigger}"));
+                        let task_id = core_task.id;
+                        self.publish_task_assigned(&aid, &core_task).await;
+                        self.fire_hook(&HookEvent::OnSkillExecute {
+                            skill: trigger.clone(),
+                        });
+                        match run_skill_mcp(&self.config, trigger, args).await {
+                            Ok(output) => {
+                                let token_est = output.len() / 4;
+                                self.publish_model_request(token_est).await;
+                                self.publish_task_completed(&aid, task_id, &output).await;
+                                Ok(CallToolResult::success(vec![Content::text(output)]))
+                            }
+                            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Error: {e}"
+                            ))])),
+                        }
+                    }
+                    DispatchCommand::WorkflowList => match workflow_list() {
+                        Ok(names) => {
+                            let text = if names.is_empty() {
+                                format!(
+                                    "No workflow files found in {}.",
+                                    agent007_home().join("workflows").display()
+                                )
+                            } else {
+                                names.join("\n")
+                            };
+                            Ok(CallToolResult::success(vec![Content::text(text)]))
+                        }
+                        Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Error: {e}"
+                        ))])),
+                    },
+                    DispatchCommand::WorkflowRun { name, task } => {
+                        let aid = agent007_core::types::AgentId::new();
+                        let core_task = agent007_core::Task::new(&format!("workflow:{name}"));
+                        let task_id = core_task.id;
+                        self.publish_task_assigned(&aid, &core_task).await;
+                        match workflow_run(&self.config, &name, &task).await {
+                            Ok(output) => {
+                                let token_est = output.len() / 4;
+                                self.publish_model_request(token_est).await;
+                                self.publish_task_completed(&aid, task_id, &output).await;
+                                Ok(CallToolResult::success(vec![Content::text(output)]))
+                            }
+                            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Error: {e}"
+                            ))])),
+                        }
+                    }
                 }
             }
+            "agent007_skill_list" => match list_available_skills() {
+                Ok(skills) => Ok(CallToolResult::success(vec![Content::text(format_skills(
+                    &skills,
+                ))])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))])),
+            },
             "agent007_skill_run" => {
                 let trigger = extract_string(request.arguments.as_ref(), "trigger")?;
                 let args = string_or_default(request.arguments.as_ref(), "args", "");
@@ -1012,7 +1156,9 @@ impl ServerHandler for Agent007Server {
                 let core_task = agent007_core::Task::new(&format!("skill:{trigger}"));
                 let task_id = core_task.id;
                 self.publish_task_assigned(&aid, &core_task).await;
-                self.fire_hook(&HookEvent::OnSkillExecute { skill: trigger.clone() });
+                self.fire_hook(&HookEvent::OnSkillExecute {
+                    skill: trigger.clone(),
+                });
                 match run_skill_mcp(&self.config, trigger, args).await {
                     Ok(output) => {
                         let token_est = output.len() / 4;
@@ -1020,7 +1166,9 @@ impl ServerHandler for Agent007Server {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
             "agent007_persona_list" => {
@@ -1034,7 +1182,9 @@ impl ServerHandler for Agent007Server {
                 } else {
                     personas
                         .iter()
-                        .map(|p| format!("• {} [{}] — {}", p.name, p.preferred_model, p.description))
+                        .map(|p| {
+                            format!("• {} [{}] — {}", p.name, p.preferred_model, p.description)
+                        })
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
@@ -1059,9 +1209,10 @@ impl ServerHandler for Agent007Server {
                         );
                         Ok(CallToolResult::success(vec![Content::text(text)]))
                     }
-                    None => Ok(CallToolResult::error(vec![Content::text(
-                        format!("Persona '{}' not found.", name)
-                    )])),
+                    None => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Persona '{}' not found.",
+                        name
+                    ))])),
                 }
             }
 
@@ -1070,29 +1221,35 @@ impl ServerHandler for Agent007Server {
             // 1. Memory read
             "agent007_memory_read" => {
                 let scope = extract_string(request.arguments.as_ref(), "scope")?;
-                let key   = extract_string(request.arguments.as_ref(), "key")?;
+                let key = extract_string(request.arguments.as_ref(), "key")?;
                 match memory_read(&scope, &key) {
                     Ok(Some(val)) => Ok(CallToolResult::success(vec![Content::text(val)])),
-                    Ok(None)      => Ok(CallToolResult::success(vec![Content::text(
-                        format!("Key '{}' not found in scope '{}'.", key, scope)
-                    )])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Ok(None) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Key '{}' not found in scope '{}'.",
+                        key, scope
+                    ))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 2. Memory write
             "agent007_memory_write" => {
                 let scope = extract_string(request.arguments.as_ref(), "scope")?;
-                let key   = extract_string(request.arguments.as_ref(), "key")?;
+                let key = extract_string(request.arguments.as_ref(), "key")?;
                 let value = extract_string(request.arguments.as_ref(), "value")?;
                 match memory_write(&scope, &key, &value) {
                     Ok(()) => {
                         self.fire_hook(&HookEvent::OnMemoryWrite { key: key.clone() });
-                        Ok(CallToolResult::success(vec![Content::text(
-                            format!("Written key '{}' in scope '{}'.", key, scope)
-                        )]))
+                        Ok(CallToolResult::success(vec![Content::text(format!(
+                            "Written key '{}' in scope '{}'.",
+                            key, scope
+                        ))]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1108,24 +1265,30 @@ impl ServerHandler for Agent007Server {
                         };
                         Ok(CallToolResult::success(vec![Content::text(text)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 4. Record actual tokens
             "agent007_record_tokens" => {
                 let run_id = extract_string(request.arguments.as_ref(), "run_id")?;
-                let tokens = request.arguments.as_ref()
+                let tokens = request
+                    .arguments
+                    .as_ref()
                     .and_then(|a| a.get("tokens"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
                 let model = extract_string(request.arguments.as_ref(), "model")?;
-                let output = request.arguments.as_ref()
+                let output = request
+                    .arguments
+                    .as_ref()
                     .and_then(|a| a.get("output"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 match record_actual_tokens(&run_id, tokens, &model, output.as_deref()) {
-                    Ok(()) => {
+                    Ok(message) => {
                         // If the host passes back the skill output, persist it to project memory
                         if let Some(ref out) = output {
                             let store = memory_store();
@@ -1134,31 +1297,31 @@ impl ServerHandler for Agent007Server {
                         }
                         // Passively record feedback in the learning store
                         record_feedback_entry(&model, output.as_deref());
-                        Ok(CallToolResult::success(vec![Content::text(
-                            format!("Recorded {} tokens for run '{}' (model: {}).", tokens, run_id, model)
-                        )]))
+                        Ok(CallToolResult::success(vec![Content::text(message)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 5. Workflow list
-            "agent007_workflow_list" => {
-                match workflow_list() {
-                    Ok(names) => {
-                        let text = if names.is_empty() {
-                            format!(
-                                "No workflow files found in {}.",
-                                agent007_home().join("workflows").display()
-                            )
-                        } else {
-                            names.join("\n")
-                        };
-                        Ok(CallToolResult::success(vec![Content::text(text)]))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+            "agent007_workflow_list" => match workflow_list() {
+                Ok(names) => {
+                    let text = if names.is_empty() {
+                        format!(
+                            "No workflow files found in {}.",
+                            agent007_home().join("workflows").display()
+                        )
+                    } else {
+                        names.join("\n")
+                    };
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
-            }
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))])),
+            },
 
             // 5. Workflow run
             "agent007_workflow_run" => {
@@ -1175,7 +1338,9 @@ impl ServerHandler for Agent007Server {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1192,7 +1357,9 @@ impl ServerHandler for Agent007Server {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1203,7 +1370,9 @@ impl ServerHandler for Agent007Server {
                 let content = optional_string(request.arguments.as_ref(), "content");
                 match workflow_approve(&session, step, &decision, content) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1212,7 +1381,9 @@ impl ServerHandler for Agent007Server {
                 let task = extract_string(request.arguments.as_ref(), "task")?;
                 match workflow_hosted_start(&name, &task) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1220,7 +1391,9 @@ impl ServerHandler for Agent007Server {
                 let session = extract_string(request.arguments.as_ref(), "session")?;
                 match workflow_hosted_next(&session) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1230,7 +1403,9 @@ impl ServerHandler for Agent007Server {
                 let output = extract_string(request.arguments.as_ref(), "output")?;
                 match workflow_hosted_submit_step(&session, &step, &output) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1238,27 +1413,33 @@ impl ServerHandler for Agent007Server {
                 let session = extract_string(request.arguments.as_ref(), "session")?;
                 match workflow_hosted_status(&session) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 6. Git status
-            "agent007_git_status" => {
-                match git_run(&["status"]) {
-                    Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
-                }
-            }
+            "agent007_git_status" => match git_run(&["status"]) {
+                Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))])),
+            },
 
             // 7. Git diff
             "agent007_git_diff" => {
                 // Show both unstaged and staged diffs
                 let unstaged = git_run(&["diff"]).unwrap_or_default();
-                let staged   = git_run(&["diff", "--staged"]).unwrap_or_default();
+                let staged = git_run(&["diff", "--staged"]).unwrap_or_default();
                 let combined = format!(
                     "=== Unstaged ===\n{}\n=== Staged ===\n{}",
-                    if unstaged.is_empty() { "(none)" } else { &unstaged },
-                    if staged.is_empty()   { "(none)" } else { &staged   },
+                    if unstaged.is_empty() {
+                        "(none)"
+                    } else {
+                        &unstaged
+                    },
+                    if staged.is_empty() { "(none)" } else { &staged },
                 );
                 Ok(CallToolResult::success(vec![Content::text(combined)]))
             }
@@ -1269,7 +1450,9 @@ impl ServerHandler for Agent007Server {
                 let n_str = n.to_string();
                 match git_run(&["log", "--oneline", &format!("-{}", n_str)]) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1278,7 +1461,9 @@ impl ServerHandler for Agent007Server {
                 let message = extract_string(request.arguments.as_ref(), "message")?;
                 match git_run(&["commit", "-m", &message]) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1291,26 +1476,32 @@ impl ServerHandler for Agent007Server {
                     .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
                 use agent007_core::PersonaProvider;
                 if registry.get(&name).is_none() {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        format!("Persona '{}' not found.", name)
-                    )]));
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Persona '{}' not found.",
+                        name
+                    ))]));
                 }
                 // Store in memory under scope "user", key "active_persona"
                 match memory_write("user", "active_persona", &name) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(
-                        format!("Active persona switched to '{}'.", name)
-                    )])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Active persona switched to '{}'.",
+                        name
+                    ))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 11. Zone check
             "agent007_zone_check" => {
-                let path_str  = extract_string(request.arguments.as_ref(), "path")?;
+                let path_str = extract_string(request.arguments.as_ref(), "path")?;
                 let operation = extract_string(request.arguments.as_ref(), "operation")?;
                 match zone_check(&self.config, &path_str, &operation) {
                     Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1322,32 +1513,44 @@ impl ServerHandler for Agent007Server {
                 let core_task = agent007_core::Task::new(&task_str);
                 let task_id = core_task.id;
                 self.publish_task_assigned(&aid, &core_task).await;
-                match task_submit(&self.config, task_str, if persona.is_empty() { None } else { Some(persona) }).await {
+                match task_submit(
+                    &self.config,
+                    task_str,
+                    if persona.is_empty() {
+                        None
+                    } else {
+                        Some(persona)
+                    },
+                )
+                .await
+                {
                     Ok(output) => {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             // 13. Skill create
             "agent007_skill_create" => {
-                let name        = extract_string(request.arguments.as_ref(), "name")?;
-                let trigger     = extract_string(request.arguments.as_ref(), "trigger")?;
+                let name = extract_string(request.arguments.as_ref(), "name")?;
+                let trigger = extract_string(request.arguments.as_ref(), "trigger")?;
                 let description = extract_string(request.arguments.as_ref(), "description")?;
-                let template    = extract_string(request.arguments.as_ref(), "template")?;
+                let template = extract_string(request.arguments.as_ref(), "template")?;
                 let default_model = self.config.models.default_provider();
-                let model = string_or_default(
-                    request.arguments.as_ref(),
-                    "model",
-                    default_model.as_str(),
-                );
+                let model =
+                    string_or_default(request.arguments.as_ref(), "model", default_model.as_str());
                 match skill_create(&name, &trigger, &description, &template, &model) {
-                    Ok(path) => Ok(CallToolResult::success(vec![Content::text(
-                        format!("Skill '{}' created at {}.", name, path)
-                    )])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Ok(path) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Skill '{}' created at {}.",
+                        name, path
+                    ))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1369,7 +1572,9 @@ impl ServerHandler for Agent007Server {
                 let task = extract_string(request.arguments.as_ref(), "task")?;
                 match workflow_plan(&self.config, &name, &task).await {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1383,18 +1588,26 @@ impl ServerHandler for Agent007Server {
                     }
                     "save" => {
                         let name = extract_string(request.arguments.as_ref(), "name")?;
-                        let description = extract_string(request.arguments.as_ref(), "description")?;
-                        let system_prompt = extract_string(request.arguments.as_ref(), "system_prompt")?;
+                        let description =
+                            extract_string(request.arguments.as_ref(), "description")?;
+                        let system_prompt =
+                            extract_string(request.arguments.as_ref(), "system_prompt")?;
                         let default_provider = self.config.models.default_provider();
                         let preferred_model = string_or_default(
                             request.arguments.as_ref(),
                             "preferred_model",
                             default_provider.as_str(),
                         );
-                        let allowed_tools = request.arguments.as_ref()
+                        let allowed_tools = request
+                            .arguments
+                            .as_ref()
                             .and_then(|a| a.get("allowed_tools"))
                             .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect::<Vec<_>>()
+                            })
                             .unwrap_or_default();
                         match agent_save(&name, &description, &system_prompt, &preferred_model, &allowed_tools) {
                             Ok(path) => Ok(CallToolResult::success(vec![Content::text(
@@ -1403,9 +1616,10 @@ impl ServerHandler for Agent007Server {
                             Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
                         }
                     }
-                    other => Ok(CallToolResult::error(vec![Content::text(
-                        format!("Unknown action '{}'. Use 'catalog' or 'save'.", other)
-                    )])),
+                    other => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Unknown action '{}'. Use 'catalog' or 'save'.",
+                        other
+                    ))])),
                 }
             }
 
@@ -1420,7 +1634,8 @@ impl ServerHandler for Agent007Server {
                     "save" => {
                         let name = extract_string(request.arguments.as_ref(), "name")?;
                         let trigger = extract_string(request.arguments.as_ref(), "trigger")?;
-                        let description = extract_string(request.arguments.as_ref(), "description")?;
+                        let description =
+                            extract_string(request.arguments.as_ref(), "description")?;
                         let template = extract_string(request.arguments.as_ref(), "template")?;
                         let default_model = self.config.models.default_provider();
                         let model = string_or_default(
@@ -1429,15 +1644,19 @@ impl ServerHandler for Agent007Server {
                             default_model.as_str(),
                         );
                         match skill_create(&name, &trigger, &description, &template, &model) {
-                            Ok(path) => Ok(CallToolResult::success(vec![Content::text(
-                                format!("Skill '{}' created at {}. Trigger: {}", name, path, trigger)
-                            )])),
-                            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                            Ok(path) => Ok(CallToolResult::success(vec![Content::text(format!(
+                                "Skill '{}' created at {}. Trigger: {}",
+                                name, path, trigger
+                            ))])),
+                            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Error: {e}"
+                            ))])),
                         }
                     }
-                    other => Ok(CallToolResult::error(vec![Content::text(
-                        format!("Unknown action '{}'. Use 'templates' or 'save'.", other)
-                    )])),
+                    other => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Unknown action '{}'. Use 'templates' or 'save'.",
+                        other
+                    ))])),
                 }
             }
 
@@ -1445,7 +1664,9 @@ impl ServerHandler for Agent007Server {
             "agent007_workflow_create" => {
                 let name = extract_string(request.arguments.as_ref(), "name")?;
                 let yaml = extract_string(request.arguments.as_ref(), "yaml")?;
-                let overwrite = request.arguments.as_ref()
+                let overwrite = request
+                    .arguments
+                    .as_ref()
                     .and_then(|a| a.get("overwrite"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
@@ -1458,12 +1679,12 @@ impl ServerHandler for Agent007Server {
             }
 
             // 19. Downstream MCP tool list
-            "agent007_mcp_tools_list" => {
-                match mcp_tools_list(&self.config).await {
-                    Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
-                }
-            }
+            "agent007_mcp_tools_list" => match mcp_tools_list(&self.config).await {
+                Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))])),
+            },
 
             // 20. Downstream MCP tool call
             "agent007_mcp_tool_call" => {
@@ -1477,7 +1698,9 @@ impl ServerHandler for Agent007Server {
                 let aid = agent007_core::types::AgentId::new();
                 match mcp_tool_call(&self.config, &aid, &name, args).await {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1486,7 +1709,9 @@ impl ServerHandler for Agent007Server {
                 let limit = number_or_default(request.arguments.as_ref(), "limit", 10) as usize;
                 match run_history(limit) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1495,7 +1720,9 @@ impl ServerHandler for Agent007Server {
                 let id = extract_string(request.arguments.as_ref(), "id")?;
                 match run_show(&id) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1505,13 +1732,16 @@ impl ServerHandler for Agent007Server {
                 let level = string_or_default(request.arguments.as_ref(), "level", "compact");
                 match compact_output_tool(&self.config, &command, &output, &level) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             "agent007_context_compile" => {
                 let task = extract_string(request.arguments.as_ref(), "task")?;
-                let max_files = number_or_default(request.arguments.as_ref(), "max_files", 8) as usize;
+                let max_files =
+                    number_or_default(request.arguments.as_ref(), "max_files", 8) as usize;
                 let max_memory_notes =
                     number_or_default(request.arguments.as_ref(), "max_memory_notes", 6) as usize;
                 let max_prompt_tokens =
@@ -1530,13 +1760,17 @@ impl ServerHandler for Agent007Server {
                     max_response_tokens,
                 ) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
             "agent007_repo_brain_refresh" => match repo_brain_refresh_tool(&self.config) {
                 Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))])),
             },
 
             "agent007_budget_estimate" => {
@@ -1557,7 +1791,9 @@ impl ServerHandler for Agent007Server {
                     max_response_tokens,
                 ) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Error: {e}"))])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
                 }
             }
 
@@ -1609,10 +1845,7 @@ fn extract_string(
         })
 }
 
-fn optional_string(
-    args: Option<&Map<String, serde_json::Value>>,
-    key: &str,
-) -> Option<String> {
+fn optional_string(args: Option<&Map<String, serde_json::Value>>, key: &str) -> Option<String> {
     args.and_then(|a| a.get(key))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -1649,6 +1882,156 @@ fn parse_compact_level(level: &str) -> Result<agent007_core::CompactLevel> {
             other
         )),
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DispatchCommand {
+    Help { topic: Option<String> },
+    Run { task: String },
+    SkillList,
+    SkillRun { trigger: String, args: String },
+    WorkflowList,
+    WorkflowRun { name: String, task: String },
+}
+
+fn split_first_token(input: &str) -> (&str, &str) {
+    let trimmed = input.trim_start();
+    if trimmed.is_empty() {
+        return ("", "");
+    }
+    let boundary = trimmed
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(trimmed.len());
+    let head = &trimmed[..boundary];
+    let tail = trimmed[boundary..].trim_start();
+    (head, tail)
+}
+
+fn strip_agent007_prefix(input: &str) -> &str {
+    let (head, tail) = split_first_token(input);
+    match head.to_ascii_lowercase().as_str() {
+        "$agent007" | "/agent007" | "@agent007" | "agent007" => tail,
+        _ => input.trim(),
+    }
+}
+
+fn canonicalize_identifier(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn resolve_workflow_alias(alias: &str) -> Option<String> {
+    let canonical_alias = canonicalize_identifier(alias);
+    let sanitized_alias = sanitize_tool_component(alias);
+    load_available_workflows().ok().and_then(|workflows| {
+        workflows.into_iter().find_map(|(workflow_ref, _)| {
+            let canonical_ref = canonicalize_identifier(&workflow_ref);
+            let sanitized_ref = sanitize_tool_component(&workflow_ref);
+            if canonical_ref == canonical_alias || sanitized_ref == sanitized_alias {
+                Some(workflow_ref)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+fn normalize_dispatch_skill_trigger(trigger: &str) -> String {
+    let trimmed = trigger.trim();
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{}", trimmed.trim_start_matches('/'))
+    }
+}
+
+fn parse_dispatch_command(command: &str) -> Result<DispatchCommand> {
+    let normalized = strip_agent007_prefix(command).trim();
+    if normalized.is_empty() {
+        return Ok(DispatchCommand::Help {
+            topic: Some("overview".to_string()),
+        });
+    }
+
+    let (head, tail) = split_first_token(normalized);
+    let head_lower = head.to_ascii_lowercase();
+
+    match head_lower.as_str() {
+        "help" | "?" | "-h" | "--help" => {
+            let (topic, _) = split_first_token(tail);
+            let topic = match topic.to_ascii_lowercase().as_str() {
+                "overview" | "skills" | "workflows" | "tools" => Some(topic.to_ascii_lowercase()),
+                _ => None,
+            };
+            Ok(DispatchCommand::Help { topic })
+        }
+        "run" => {
+            if tail.is_empty() {
+                return Err(anyhow::anyhow!("run requires a task"));
+            }
+            Ok(DispatchCommand::Run {
+                task: tail.to_string(),
+            })
+        }
+        "workflow" | "workflows" | "wf" => {
+            let (name, task) = split_first_token(tail);
+            if name.is_empty() || matches!(name.to_ascii_lowercase().as_str(), "list" | "ls") {
+                return Ok(DispatchCommand::WorkflowList);
+            }
+            if task.is_empty() {
+                return Err(anyhow::anyhow!("workflow '{}' requires a task", name));
+            }
+            Ok(DispatchCommand::WorkflowRun {
+                name: resolve_workflow_alias(name).unwrap_or_else(|| name.to_string()),
+                task: task.to_string(),
+            })
+        }
+        "skill" | "skills" | "sk" => {
+            let (trigger, args) = split_first_token(tail);
+            if trigger.is_empty() || matches!(trigger.to_ascii_lowercase().as_str(), "list" | "ls")
+            {
+                return Ok(DispatchCommand::SkillList);
+            }
+            Ok(DispatchCommand::SkillRun {
+                trigger: normalize_dispatch_skill_trigger(trigger),
+                args: args.to_string(),
+            })
+        }
+        _ => {
+            if head.starts_with('/') {
+                return Ok(DispatchCommand::SkillRun {
+                    trigger: normalize_dispatch_skill_trigger(head),
+                    args: tail.to_string(),
+                });
+            }
+            if let Some(workflow_ref) = resolve_workflow_alias(head) {
+                if tail.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "workflow '{}' requires a task",
+                        workflow_ref
+                    ));
+                }
+                return Ok(DispatchCommand::WorkflowRun {
+                    name: workflow_ref,
+                    task: tail.to_string(),
+                });
+            }
+            Ok(DispatchCommand::Run {
+                task: normalized.to_string(),
+            })
+        }
+    }
+}
+
+fn dispatch_usage() -> &'static str {
+    "Usage examples:\n\
+     - $agent007 wf tdd add login rate limiting\n\
+     - $agent007 workflow code-review review the current diff\n\
+     - $agent007 skill /brainstorm onboarding ideas\n\
+     - $agent007 /dev-pr-review review this patch\n\
+     - $agent007 run refactor auth module\n\
+     - /agent007 help workflows"
 }
 
 #[derive(Clone, Debug)]
@@ -1739,13 +2122,10 @@ fn load_available_skills() -> Result<Vec<agent007_skills::Skill>> {
         }
 
         let loader = agent007_skills::SkillLoader::new(&skills_dir);
-        for skill in loader
-            .load_all()
-            .map_err(|e| anyhow::anyhow!("failed to load skills from {}: {}", skills_dir.display(), e))?
-        {
-            skills
-                .entry(skill.trigger().to_string())
-                .or_insert(skill);
+        for skill in loader.load_all().map_err(|e| {
+            anyhow::anyhow!("failed to load skills from {}: {}", skills_dir.display(), e)
+        })? {
+            skills.entry(skill.trigger().to_string()).or_insert(skill);
         }
     }
 
@@ -1823,9 +2203,9 @@ fn dynamic_skill_tool_defs() -> Vec<Tool> {
 }
 
 fn dynamic_skill_tool(name: &str) -> Option<DynamicSkillTool> {
-    dynamic_skill_catalog()
-        .into_iter()
-        .find(|tool| tool.tool_name == name || tool.legacy_tool_names.iter().any(|alias| alias == name))
+    dynamic_skill_catalog().into_iter().find(|tool| {
+        tool.tool_name == name || tool.legacy_tool_names.iter().any(|alias| alias == name)
+    })
 }
 
 fn load_available_workflows() -> Result<Vec<(String, agent007_workflows::WorkflowDef)>> {
@@ -1837,16 +2217,19 @@ fn load_available_workflows() -> Result<Vec<(String, agent007_workflows::Workflo
         }
 
         let loader = agent007_workflows::WorkflowLoader::new(workflows_dir.clone());
-        for workflow_ref in loader
-            .list_names()
-            .map_err(|e| anyhow::anyhow!("failed to list workflows from {}: {}", workflows_dir.display(), e))?
-        {
+        for workflow_ref in loader.list_names().map_err(|e| {
+            anyhow::anyhow!(
+                "failed to list workflows from {}: {}",
+                workflows_dir.display(),
+                e
+            )
+        })? {
             if workflows.contains_key(&workflow_ref) {
                 continue;
             }
-            let def = loader
-                .load_named(&workflow_ref)
-                .map_err(|e| anyhow::anyhow!("failed to load workflow '{}': {}", workflow_ref, e))?;
+            let def = loader.load_named(&workflow_ref).map_err(|e| {
+                anyhow::anyhow!("failed to load workflow '{}': {}", workflow_ref, e)
+            })?;
             workflows.insert(workflow_ref, def);
         }
     }
@@ -1859,13 +2242,18 @@ fn dynamic_workflow_catalog() -> Vec<DynamicWorkflowTool> {
 
     if let Ok(workflows) = load_available_workflows() {
         for (workflow_ref, def) in workflows {
-            let tool_name = format!("agent007_workflow_{}", sanitize_tool_component(&workflow_ref));
-            tools.entry(tool_name.clone()).or_insert(DynamicWorkflowTool {
-                tool_name,
-                workflow_ref,
-                display_name: def.name,
-                description: def.description,
-            });
+            let tool_name = format!(
+                "agent007_workflow_{}",
+                sanitize_tool_component(&workflow_ref)
+            );
+            tools
+                .entry(tool_name.clone())
+                .or_insert(DynamicWorkflowTool {
+                    tool_name,
+                    workflow_ref,
+                    display_name: def.name,
+                    description: def.description,
+                });
         }
     }
 
@@ -1914,16 +2302,32 @@ fn agent007_help(topic: Option<&str>) -> String {
     let topic = topic.unwrap_or("overview");
 
     let core_tools = [
+        (
+            "agent007_dispatch",
+            "Dispatch a simple command-style request to run/skill/workflow tools",
+        ),
         ("agent007_run", "Run a general task through agent007"),
         ("agent007_help", "Show this catalog and invocation guidance"),
         ("agent007_skill_list", "List installed skills"),
         ("agent007_skill_run", "Run a skill by trigger"),
         ("agent007_workflow_list", "List installed workflows"),
         ("agent007_workflow_run", "Run a workflow by name"),
-        ("agent007_workflow_create", "Save a new or updated workflow YAML to disk"),
-        ("agent007_workflow_start", "Start a hosted MCP workflow session"),
-        ("agent007_workflow_next", "Get the next hosted workflow steps"),
-        ("agent007_workflow_submit_step", "Submit hosted workflow step output"),
+        (
+            "agent007_workflow_create",
+            "Save a new or updated workflow YAML to disk",
+        ),
+        (
+            "agent007_workflow_start",
+            "Start a hosted MCP workflow session",
+        ),
+        (
+            "agent007_workflow_next",
+            "Get the next hosted workflow steps",
+        ),
+        (
+            "agent007_workflow_submit_step",
+            "Submit hosted workflow step output",
+        ),
         ("agent007_workflow_status", "Inspect hosted workflow state"),
     ];
 
@@ -1932,10 +2336,14 @@ fn agent007_help(topic: Option<&str>) -> String {
     if matches!(topic, "overview" | "tools") {
         lines.push("agent007 MCP Catalog".to_string());
         lines.push(String::new());
-        lines.push("How to invoke from Codex: ask Codex in plain language to call a named MCP tool.".to_string());
+        lines.push("How to invoke from Codex: use `agent007_dispatch` for slash-like commands, or call named tools directly.".to_string());
         lines.push("Examples:".to_string());
-        lines.push("- Use the MCP tool agent007_workflow_tdd with task \"build login flow with tests\".".to_string());
-        lines.push("- Use the MCP tool agent007_skill_write_tests with args \"write tests for auth middleware\".".to_string());
+        lines.push("- Use the MCP tool agent007_dispatch with command \"$agent007 wf tdd build login flow with tests\".".to_string());
+        lines.push("- Use the MCP tool agent007_dispatch with command \"$agent007 skill /brainstorm onboarding ideas\".".to_string());
+        lines.push(
+            "- Use the MCP tool agent007_workflow_tdd with task \"build login flow with tests\"."
+                .to_string(),
+        );
         lines.push("- Call agent007_help with topic \"skills\".".to_string());
         lines.push(String::new());
         lines.push("Core tools:".to_string());
@@ -1975,7 +2383,9 @@ fn agent007_help(topic: Option<&str>) -> String {
             lines.push("- none discovered".to_string());
         } else {
             for workflow in workflows {
-                let description = workflow.description.unwrap_or_else(|| "No description".to_string());
+                let description = workflow
+                    .description
+                    .unwrap_or_else(|| "No description".to_string());
                 lines.push(format!(
                     "- {}: {} (workflow ref {})",
                     workflow.tool_name, description, workflow.workflow_ref
@@ -2009,7 +2419,10 @@ fn parse_approval_decision(
         return Err(anyhow::anyhow!("content is required when decision=edit"));
     }
 
-    Ok(ApprovalDecision { decision: kind, content })
+    Ok(ApprovalDecision {
+        decision: kind,
+        content,
+    })
 }
 
 fn format_skills(skills: &[SkillSummary]) -> String {
@@ -2065,32 +2478,93 @@ fn hosted_model_label() -> String {
 /// updates RunMetadata.provider with the real model name so the dashboard shows it correctly,
 /// then finishes the run so it transitions from "Running" → "completed" in the dashboard.
 /// Called via the `agent007_record_tokens` MCP tool after the host finishes its LLM work.
-fn record_actual_tokens(run_id: &str, tokens: usize, model: &str, output: Option<&str>) -> Result<()> {
+fn record_actual_tokens(
+    run_id: &str,
+    tokens: usize,
+    model: &str,
+    output: Option<&str>,
+) -> Result<String> {
     let store = load_run_store();
-    // Guard 1: already finished — a host retry would double-count; silently succeed.
-    if store.load_run(run_id).map(|d| d.metadata.finished_at.is_some()).unwrap_or(false) {
-        return Ok(());
+    let detail = store
+        .load_run(run_id)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let metadata = detail.metadata;
+    let stale_restart_failure = metadata.finished_at.is_some()
+        && matches!(metadata.status, agent007_core::run_store::RunStatus::Failed)
+        && metadata.output_preview.as_deref() == Some("terminated: server restarted");
+
+    // Runs finalized for real errors should not be rewritten by a late host retry.
+    if metadata.finished_at.is_some() && !stale_restart_failure {
+        let status = match metadata.status {
+            agent007_core::run_store::RunStatus::Running => "running",
+            agent007_core::run_store::RunStatus::AwaitingApproval => "awaiting-approval",
+            agent007_core::run_store::RunStatus::Succeeded => "succeeded",
+            agent007_core::run_store::RunStatus::Failed => "failed",
+        };
+        return Ok(format!(
+            "Run '{}' is already finalized with status '{}' — token record skipped.",
+            run_id, status
+        ));
     }
-    // Guard 2: ModelRequest already appended — append_event succeeded but finish_run
-    // failed on a prior attempt. Skip the append to avoid double-counting; fall through
-    // to finish the run with the tokens that were already recorded.
-    if !store.has_model_request_event(run_id).unwrap_or(false) {
-        store.append_event(
-            run_id,
-            &AgentEvent::ModelRequest {
-                provider: model.to_string(),
-                prompt_ref: PromptRef::new(),
-                token_estimate: tokens,
-            },
-        ).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // If this was auto-failed by stale-run cleanup, append an explicit hosted result
+    // event with exact tokens so the event stream shows the recovered completion.
+    if stale_restart_failure || !store.has_model_request_event(run_id).unwrap_or(false) {
+        store
+            .append_event(
+                run_id,
+                &AgentEvent::ModelRequest {
+                    provider: model.to_string(),
+                    prompt_ref: PromptRef::new(),
+                    token_estimate: tokens,
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
     }
     // Stamp the real model name into metadata so the dashboard shows it (not "hosted-mcp").
-    store.set_provider(run_id, model).map_err(|e| anyhow::anyhow!("{}", e))?;
+    store
+        .set_provider(run_id, model)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Persist exact host-reported token totals (overwriting stale fallback estimates).
+    store
+        .write_json_artifact(
+            run_id,
+            "token-summary.json",
+            &agent007_core::run_store::RunTokenSummary {
+                tokens: tokens as u64,
+                requests: 1,
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
     // Transition the run from Running → Succeeded now that the host LLM has finished.
     let preview = output.unwrap_or("completed");
-    store.finish_run(run_id, true, preview).map_err(|e| anyhow::anyhow!("{}", e))?;
+    if stale_restart_failure {
+        store
+            .finish_run_with_status(
+                run_id,
+                agent007_core::run_store::RunStatus::Succeeded,
+                preview,
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    } else {
+        store
+            .finish_run(run_id, true, preview)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
     write_statusline();
-    Ok(())
+    if stale_restart_failure {
+        Ok(format!(
+            "Recovered stale run '{}' and recorded {} tokens (model: {}).",
+            run_id, tokens, model
+        ))
+    } else {
+        Ok(format!(
+            "Recorded {} tokens for run '{}' (model: {}).",
+            tokens, run_id, model
+        ))
+    }
 }
 
 fn record_estimated_tokens(run_id: &str, prompt_chars: usize, model: &str) {
@@ -2115,13 +2589,20 @@ const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_002;
 fn load_hook_executor() -> Option<Arc<HookExecutor>> {
     let global_hooks = agent007_home().join("hooks").join("hooks.toml");
     let candidates: Vec<std::path::PathBuf> = agent007_project_home()
-        .map(|p| vec![p.join(".agent007").join("hooks").join("hooks.toml"), global_hooks.clone()])
+        .map(|p| {
+            vec![
+                p.join(".agent007").join("hooks").join("hooks.toml"),
+                global_hooks.clone(),
+            ]
+        })
         .unwrap_or_else(|| vec![global_hooks]);
     for path in &candidates {
         if path.exists() {
             match HookConfig::load(path) {
                 Ok(cfg) => return Some(Arc::new(HookExecutor::new(cfg))),
-                Err(e) => tracing::warn!(path = %path.display(), error = %e, "failed to load hooks.toml"),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to load hooks.toml")
+                }
             }
         }
     }
@@ -2131,8 +2612,8 @@ fn load_hook_executor() -> Option<Arc<HookExecutor>> {
 /// Fire-and-forget: save a FeedbackEntry to the global learning store.
 /// Errors are logged but not propagated — learning is best-effort.
 fn record_feedback_entry(model: &str, skill_hint: Option<&str>) {
-    use agent007_learning::{FeedbackEntry, LearningStore, Outcome};
     use agent007_core::types::{AgentId, PromptRef};
+    use agent007_learning::{FeedbackEntry, LearningStore, Outcome};
     use agent007_memory::store::MemoryStore;
 
     let mem = Arc::new(MemoryStore::new(agent007_global_home().join("memory")));
@@ -2167,9 +2648,18 @@ fn write_statusline() {
     };
 
     // ── Run counts ────────────────────────────────────────────────────────────
-    let succeeded = runs.iter().filter(|r| matches!(r.status, RunStatus::Succeeded)).count();
-    let failed    = runs.iter().filter(|r| matches!(r.status, RunStatus::Failed)).count();
-    let running   = runs.iter().filter(|r| matches!(r.status, RunStatus::Running | RunStatus::AwaitingApproval)).count();
+    let succeeded = runs
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::Succeeded))
+        .count();
+    let failed = runs
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::Failed))
+        .count();
+    let running = runs
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::Running | RunStatus::AwaitingApproval))
+        .count();
 
     // ── Token + model scan (20 most recent runs) ──────────────────────────────
     let mut total_tokens: u64 = 0;
@@ -2181,9 +2671,14 @@ fn write_statusline() {
     for run in runs.iter().take(20) {
         if let Ok(detail) = store.load_run(&run.id) {
             for entry in &detail.entries {
-                if entry.kind != "agent-event" { continue; }
-                if let Ok(AgentEvent::ModelRequest { token_estimate, provider, .. }) =
-                    serde_json::from_value::<AgentEvent>(entry.payload.clone())
+                if entry.kind != "agent-event" {
+                    continue;
+                }
+                if let Ok(AgentEvent::ModelRequest {
+                    token_estimate,
+                    provider,
+                    ..
+                }) = serde_json::from_value::<AgentEvent>(entry.payload.clone())
                 {
                     total_tokens += token_estimate as u64;
                     if !provider.is_empty() && provider != "hosted-mcp" {
@@ -2196,24 +2691,34 @@ fn write_statusline() {
 
     // ── Shorten model name: "claude-sonnet-4-6" → "sonnet-4-6" ───────────────
     let model_short = last_model
-        .strip_prefix("claude-").unwrap_or(&last_model)
+        .strip_prefix("claude-")
+        .unwrap_or(&last_model)
         .to_string();
 
     // ── Last finished task ────────────────────────────────────────────────────
-    let last_finished = runs.iter()
+    let last_finished = runs
+        .iter()
         .find(|r| matches!(r.status, RunStatus::Succeeded | RunStatus::Failed));
 
     let last_segment = if let Some(run) = last_finished {
-        let icon = if matches!(run.status, RunStatus::Succeeded) { "✓" } else { "✗" };
+        let icon = if matches!(run.status, RunStatus::Succeeded) {
+            "✓"
+        } else {
+            "✗"
+        };
         let kind_badge = match run.kind.as_str() {
-            "skill"     => "skill",
-            "task"      => "task",
-            "workflow"  => "wf",
+            "skill" => "skill",
+            "task" => "task",
+            "workflow" => "wf",
             "task-submit" => "task",
-            other       => other,
+            other => other,
         };
         let desc = run.task.chars().take(32).collect::<String>();
-        let ellipsis = if run.task.chars().count() > 32 { "…" } else { "" };
+        let ellipsis = if run.task.chars().count() > 32 {
+            "…"
+        } else {
+            ""
+        };
         format!("↩ {kind_badge}/{desc}{ellipsis} [{icon}]")
     } else {
         "↩ no runs yet".to_string()
@@ -2239,7 +2744,8 @@ fn write_statusline() {
     // ── Memory key count ──────────────────────────────────────────────────────
     let mem_count: usize = {
         let mem_store = memory_store();
-        ["user", "project", "skills", ""].iter()
+        ["user", "project", "skills", ""]
+            .iter()
             .filter_map(|ns| mem_store.scoped(ns).list_keys().ok())
             .map(|ks| ks.len())
             .sum()
@@ -2247,9 +2753,14 @@ fn write_statusline() {
 
     // ── Dashboard port ────────────────────────────────────────────────────────
     let dash_segment = {
-        let raw = memory_store().scoped("project")
-            .read("dashboard_port").ok().flatten().unwrap_or_default();
-        raw.trim().parse::<u16>()
+        let raw = memory_store()
+            .scoped("project")
+            .read("dashboard_port")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        raw.trim()
+            .parse::<u16>()
             .map(|p| format!("⬡ :{p}"))
             .unwrap_or_else(|_| "⬡ offline".to_string())
     };
@@ -2273,12 +2784,8 @@ fn write_statusline() {
 
 fn create_recorded_utility_run(config: &Config, kind: &str, task: &str) -> Result<String> {
     let provider = selected_runtime_provider(config);
-    let run = load_run_store().create_run(
-        kind,
-        task,
-        runtime_mode_label(config),
-        provider.as_deref(),
-    )?;
+    let run =
+        load_run_store().create_run(kind, task, runtime_mode_label(config), provider.as_deref())?;
     Ok(run.id)
 }
 
@@ -2292,7 +2799,9 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
                 Ok(result.output)
             }
             Err(error) => {
-                let _ = stack.run_store.finish_run(&run_id, false, error.to_string());
+                let _ = stack
+                    .run_store
+                    .finish_run(&run_id, false, error.to_string());
                 Err(error.into())
             }
         }
@@ -2322,7 +2831,9 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
                 Ok(output)
             }
             Err(error) => {
-                let _ = stack.run_store.finish_run(&run_id, false, error.to_string());
+                let _ = stack
+                    .run_store
+                    .finish_run(&run_id, false, error.to_string());
                 Err(error.into())
             }
         }
@@ -2333,11 +2844,12 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
         let mem_ctx = build_memory_context(&args);
 
         let rendered = mem_ctx.apply_to(
-            &skill.template()
+            &skill
+                .template()
                 .replace("{{args}}", &args)
                 .replace("{{ args }}", &args)
                 .replace("{{task}}", &args)
-                .replace("{{ task }}", &args)
+                .replace("{{ task }}", &args),
         );
 
         let run_id = create_delegate_run("skill", &format!("{trigger} {args}"))?;
@@ -2352,7 +2864,11 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
              the actual total tokens you used (input+output), your model name, \
              and the output field set to your full response text (this saves it to project memory \
              so future invocations have context and use fewer tokens).\n",
-            skill.name(), trigger, run_id, rendered, run_id,
+            skill.name(),
+            trigger,
+            run_id,
+            rendered,
+            run_id,
         );
         // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
         // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
@@ -2419,7 +2935,10 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
     let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
     let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
     let global_store = memory_store_for_scope("global");
-    let memory_global = global_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let memory_global = global_store
+        .scoped("user")
+        .read_top_n(10)
+        .unwrap_or_default();
     let memory_repo_brain = project_scoped
         .read("repo_brain")
         .ok()
@@ -2441,7 +2960,9 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
                         let val: String = val;
                         let matches = if !meta.words.is_empty() {
                             // Fast path: use pre-tokenized words index
-                            keywords.iter().any(|kw| meta.words.iter().any(|w| w.contains(kw.as_str())))
+                            keywords
+                                .iter()
+                                .any(|kw| meta.words.iter().any(|w| w.contains(kw.as_str())))
                         } else {
                             // Legacy fallback: full content scan
                             let val_lower = val.to_lowercase();
@@ -2468,18 +2989,29 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
 
 fn memory_read(scope: &str, key: &str) -> Result<Option<String>> {
     let store = memory_store_for_scope(scope);
-    store.scoped(scope).read(key).map_err(|e| anyhow::anyhow!("{}", e))
+    store
+        .scoped(scope)
+        .read(key)
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn memory_write(scope: &str, key: &str, value: &str) -> Result<()> {
     let store = memory_store_for_scope(scope);
-    store.scoped(scope).write(key, value).map_err(|e| anyhow::anyhow!("{}", e))
+    store
+        .scoped(scope)
+        .write(key, value)
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn memory_list(scope: &str) -> Result<Vec<String>> {
     let store = memory_store_for_scope(scope);
-    let effective_scope = if scope.is_empty() || scope == "global" { "" } else { scope };
-    store.scoped(effective_scope)
+    let effective_scope = if scope.is_empty() || scope == "global" {
+        ""
+    } else {
+        scope
+    };
+    store
+        .scoped(effective_scope)
         .list_keys()
         .map_err(|e| anyhow::anyhow!("{}", e))
 }
@@ -2538,10 +3070,10 @@ async fn workflow_resume(config: &Config, session: &str) -> Result<String> {
     }
 
     let store = load_run_store();
-    let request: agent007_workflows::WorkflowRunRequest = store
-        .read_json_artifact(session, "workflow-request.json")?;
-    let state: agent007_workflows::WorkflowRunState = store
-        .read_json_artifact(session, "workflow-state.json")?;
+    let request: agent007_workflows::WorkflowRunRequest =
+        store.read_json_artifact(session, "workflow-request.json")?;
+    let state: agent007_workflows::WorkflowRunState =
+        store.read_json_artifact(session, "workflow-state.json")?;
     let workflow_ref = store
         .read_json_artifact_optional::<agent007_workflows::WorkflowSourceRef>(
             session,
@@ -2569,10 +3101,15 @@ fn workflow_approve(
 ) -> Result<String> {
     with_hosted_session_lock(session, || {
         let store = load_run_store();
-        let mut state: agent007_workflows::WorkflowRunState = store
-            .read_json_artifact(session, "workflow-state.json")?;
+        let mut state: agent007_workflows::WorkflowRunState =
+            store.read_json_artifact(session, "workflow-state.json")?;
         let step_id = step
-            .or_else(|| state.pending_approval.as_ref().map(|pending| pending.step_id.clone()))
+            .or_else(|| {
+                state
+                    .pending_approval
+                    .as_ref()
+                    .map(|pending| pending.step_id.clone())
+            })
             .ok_or_else(|| anyhow::anyhow!("no pending approval found in session {}", session))?;
         let decision = parse_approval_decision(decision, content)?;
         state.record_approval_decision(&step_id, decision);
@@ -2677,10 +3214,10 @@ fn load_hosted_workflow_session(
     agent007_workflows::WorkflowRunState,
 )> {
     let store = load_run_store();
-    let request: agent007_workflows::WorkflowRunRequest = store
-        .read_json_artifact(session, "workflow-request.json")?;
-    let state: agent007_workflows::WorkflowRunState = store
-        .read_json_artifact(session, "workflow-state.json")?;
+    let request: agent007_workflows::WorkflowRunRequest =
+        store.read_json_artifact(session, "workflow-request.json")?;
+    let state: agent007_workflows::WorkflowRunState =
+        store.read_json_artifact(session, "workflow-state.json")?;
     let workflow_ref = store
         .read_json_artifact_optional::<agent007_workflows::WorkflowSourceRef>(
             session,
@@ -2924,11 +3461,14 @@ async fn execute_workflow_session(
     resume_state: Option<agent007_workflows::WorkflowRunState>,
     workflow_ref: Option<String>,
 ) -> Result<String> {
-    let (stack, run_id) = create_traced_stack(config, kind, &format!("{}: {}", def.name, task)).await?;
+    let (stack, run_id) =
+        create_traced_stack(config, kind, &format!("{}: {}", def.name, task)).await?;
     let runner = match resume_state {
-        Some(state) => stack
-            .workflow_runner
-            .resume_from(stack.run_store.clone(), run_id.clone(), state),
+        Some(state) => {
+            stack
+                .workflow_runner
+                .resume_from(stack.run_store.clone(), run_id.clone(), state)
+        }
         None => stack
             .workflow_runner
             .for_run(stack.run_store.clone(), run_id.clone()),
@@ -2953,26 +3493,26 @@ async fn execute_workflow_session(
             let _ = stack.run_store.finish_run(&run_id, true, &report);
             Ok(report)
         }
-        Err(error) => {
-            match &error {
-                agent007_workflows::WorkflowError::ApprovalRequired { id } => {
-                    let summary = format!(
-                        "Workflow '{}' is waiting for approval on step '{}'. Run ID: {}",
-                        def.name, id, run_id,
-                    );
-                    let _ = stack.run_store.finish_run_with_status(
-                        &run_id,
-                        agent007_core::run_store::RunStatus::AwaitingApproval,
-                        &summary,
-                    );
-                    Err(anyhow::anyhow!(summary))
-                }
-                _ => {
-                    let _ = stack.run_store.finish_run(&run_id, false, error.to_string());
-                    Err(anyhow::anyhow!("workflow run failed: {}", error))
-                }
+        Err(error) => match &error {
+            agent007_workflows::WorkflowError::ApprovalRequired { id } => {
+                let summary = format!(
+                    "Workflow '{}' is waiting for approval on step '{}'. Run ID: {}",
+                    def.name, id, run_id,
+                );
+                let _ = stack.run_store.finish_run_with_status(
+                    &run_id,
+                    agent007_core::run_store::RunStatus::AwaitingApproval,
+                    &summary,
+                );
+                Err(anyhow::anyhow!(summary))
             }
-        }
+            _ => {
+                let _ = stack
+                    .run_store
+                    .finish_run(&run_id, false, error.to_string());
+                Err(anyhow::anyhow!("workflow run failed: {}", error))
+            }
+        },
     }
 }
 
@@ -3004,26 +3544,29 @@ fn git_run(args: &[&str]) -> Result<String> {
 // ── zone check helper ─────────────────────────────────────────────────────────
 
 fn zone_check(config: &Config, path_str: &str, operation: &str) -> Result<String> {
-    use agent007_zones::{ZoneChecker, ZoneConfig, FileOp};
+    use agent007_zones::{FileOp, ZoneChecker, ZoneConfig};
     use std::path::Path;
 
     let zone_config = ZoneConfig {
-        forbidden:    config.zones.forbidden.clone(),
-        readonly:     config.zones.readonly.clone(),
-        sensitive:    config.zones.sensitive.clone(),
+        forbidden: config.zones.forbidden.clone(),
+        readonly: config.zones.readonly.clone(),
+        sensitive: config.zones.sensitive.clone(),
         unrestricted: config.zones.unrestricted.clone(),
     };
 
-    let checker = ZoneChecker::new(&zone_config)
-        .map_err(|e| anyhow::anyhow!("zone config error: {}", e))?;
+    let checker =
+        ZoneChecker::new(&zone_config).map_err(|e| anyhow::anyhow!("zone config error: {}", e))?;
 
     let file_op = match operation.to_lowercase().as_str() {
-        "read"    => FileOp::Read,
-        "write"   => FileOp::Write,
+        "read" => FileOp::Read,
+        "write" => FileOp::Write,
         "execute" => FileOp::Write, // map execute to write (most restrictive non-delete)
-        other     => return Err(anyhow::anyhow!(
-            "Unknown operation '{}'. Use 'read', 'write', or 'execute'.", other
-        )),
+        other => {
+            return Err(anyhow::anyhow!(
+                "Unknown operation '{}'. Use 'read', 'write', or 'execute'.",
+                other
+            ))
+        }
     };
 
     let path = Path::new(path_str);
@@ -3032,11 +3575,16 @@ fn zone_check(config: &Config, path_str: &str, operation: &str) -> Result<String
     match checker.check(path, file_op) {
         Ok(()) => Ok(format!(
             "ALLOWED: {} on '{}' (zone: {})",
-            operation, path_str, zone.as_str()
+            operation,
+            path_str,
+            zone.as_str()
         )),
         Err(violation) => Ok(format!(
             "DENIED: {} on '{}' (zone: {}): {}",
-            operation, path_str, zone.as_str(), violation
+            operation,
+            path_str,
+            zone.as_str(),
+            violation
         )),
     }
 }
@@ -3047,7 +3595,7 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
     let task_id = uuid_v4();
     let description = match persona {
         Some(ref p) => format!("[persona:{}] {}", p, task),
-        None        => task.clone(),
+        None => task.clone(),
     };
 
     if standalone_mode_available(config) {
@@ -3060,7 +3608,9 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
                 Ok(output)
             }
             Err(error) => {
-                let _ = stack.run_store.finish_run(&run_id, false, error.to_string());
+                let _ = stack
+                    .run_store
+                    .finish_run(&run_id, false, error.to_string());
                 Err(error.into())
             }
         }
@@ -3117,7 +3667,13 @@ fn skill_create(
     // Sanitise file name: replace spaces with underscores, keep alphanumeric + _-
     let filename = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let path = skills_dir.join(format!("{}.md", filename));
 
@@ -3138,8 +3694,8 @@ fn skill_create(
 /// Validates the YAML parses as a WorkflowDef before writing.
 fn workflow_create(name: &str, yaml: &str, overwrite: bool) -> Result<String> {
     // Validate YAML parses as a workflow before touching the filesystem
-    let _def: agent007_workflows::types::WorkflowDef = serde_yaml::from_str(yaml)
-        .map_err(|e| anyhow::anyhow!("invalid workflow YAML: {}", e))?;
+    let _def: agent007_workflows::types::WorkflowDef =
+        serde_yaml::from_str(yaml).map_err(|e| anyhow::anyhow!("invalid workflow YAML: {}", e))?;
 
     let workflows_dir = agent007_write_home().join("workflows");
     std::fs::create_dir_all(&workflows_dir)
@@ -3148,7 +3704,13 @@ fn workflow_create(name: &str, yaml: &str, overwrite: bool) -> Result<String> {
     // Sanitise file name: keep alphanumeric, hyphens, underscores
     let filename: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let path = workflows_dir.join(format!("{}.yaml", filename));
 
@@ -3174,12 +3736,8 @@ fn config_show(config: &Config) -> String {
 }
 
 async fn mcp_tools_list(config: &Config) -> Result<String> {
-    let (stack, run_id) = create_traced_stack(
-        config,
-        "mcp-tools-list",
-        "list downstream MCP tools",
-    )
-    .await?;
+    let (stack, run_id) =
+        create_traced_stack(config, "mcp-tools-list", "list downstream MCP tools").await?;
     let tools = stack.tool_executor.list_mcp_tools().await?;
     let payload: Vec<serde_json::Value> = tools
         .into_iter()
@@ -3204,14 +3762,20 @@ async fn mcp_tool_call(
 ) -> Result<String> {
     let trace_task = format!("call downstream MCP tool {name}");
     let (stack, run_id) = create_traced_stack(config, "mcp-tool-call", &trace_task).await?;
-    match stack.tool_executor.call_mcp_tool(agent_id, name, args).await {
+    match stack
+        .tool_executor
+        .call_mcp_tool(agent_id, name, args)
+        .await
+    {
         Ok(result) => {
             let output = serde_json::to_string_pretty(&result)?;
             let _ = stack.run_store.finish_run(&run_id, true, &output);
             Ok(output)
         }
         Err(error) => {
-            let _ = stack.run_store.finish_run(&run_id, false, error.to_string());
+            let _ = stack
+                .run_store
+                .finish_run(&run_id, false, error.to_string());
             Err(error.into())
         }
     }
@@ -3241,9 +3805,12 @@ fn run_history(limit: usize) -> Result<String> {
 fn run_show(id: &str) -> Result<String> {
     let store = load_run_store();
     let detail = store.load_run(id)?;
-    let workflow_request = store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-request.json")?;
-    let workflow_source = store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-source.json")?;
-    let workflow_state = store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-state.json")?;
+    let workflow_request =
+        store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-request.json")?;
+    let workflow_source =
+        store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-source.json")?;
+    let workflow_state =
+        store.read_json_artifact_optional::<serde_json::Value>(id, "workflow-state.json")?;
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "run": detail,
         "workflow_request": workflow_request,
@@ -3252,7 +3819,12 @@ fn run_show(id: &str) -> Result<String> {
     }))?)
 }
 
-fn compact_output_tool(config: &Config, command: &str, output: &str, level: &str) -> Result<String> {
+fn compact_output_tool(
+    config: &Config,
+    command: &str,
+    output: &str,
+    level: &str,
+) -> Result<String> {
     let level = parse_compact_level(level)?;
     let run_id = create_recorded_utility_run(config, "compact-output", command)?;
     let store = load_run_store();
@@ -3398,9 +3970,7 @@ fn budget_estimate_tool(
     reserve_tokens: u64,
     max_response_tokens: u64,
 ) -> Result<String> {
-    let text = text
-        .or_else(|| task.clone())
-        .unwrap_or_default();
+    let text = text.or_else(|| task.clone()).unwrap_or_default();
     if text.trim().is_empty() {
         return Err(anyhow::anyhow!("provide at least one of: task or text"));
     }
@@ -3440,8 +4010,8 @@ fn budget_estimate_tool(
 fn health_check(config: &Config) -> String {
     let home = agent007_home();
 
-    let memory_dir   = home.join("memory");
-    let skills_dir   = home.join("skills");
+    let memory_dir = home.join("memory");
+    let skills_dir = home.join("skills");
     let personas_dir = home.join("personas");
 
     let memory_ok = memory_dir.exists();
@@ -3462,10 +4032,16 @@ fn health_check(config: &Config) -> String {
 
     let available_providers = {
         let mut providers = Vec::new();
-        if std::env::var("ANTHROPIC_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
+        if std::env::var("ANTHROPIC_API_KEY")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        {
             providers.push("claude");
         }
-        if std::env::var("OPENAI_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
+        if std::env::var("OPENAI_API_KEY")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        {
             providers.push("codex");
         }
         if config.models.ollama.is_some() {
@@ -3480,10 +4056,9 @@ fn health_check(config: &Config) -> String {
             providers.join(", ")
         }
     };
-    let selected_provider = selected_runtime_provider(config)
-        .unwrap_or_else(|| "hosted-mcp".to_string());
-    let selected_model = selected_runtime_model(config)
-        .unwrap_or_else(|| "host-llm".to_string());
+    let selected_provider =
+        selected_runtime_provider(config).unwrap_or_else(|| "hosted-mcp".to_string());
+    let selected_model = selected_runtime_model(config).unwrap_or_else(|| "host-llm".to_string());
     let runtime_mode = runtime_mode_label(config);
 
     format!(
@@ -3518,7 +4093,7 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
 
     let path = {
         let yaml_path = workflows_dir.join(format!("{}.yaml", name));
-        let yml_path  = workflows_dir.join(format!("{}.yml", name));
+        let yml_path = workflows_dir.join(format!("{}.yml", name));
         if yaml_path.exists() {
             yaml_path
         } else if yml_path.exists() {
@@ -3526,7 +4101,8 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
         } else {
             return Err(anyhow::anyhow!(
                 "Workflow '{}' not found in {}",
-                name, workflows_dir.display()
+                name,
+                workflows_dir.display()
             ));
         }
     };
@@ -3551,9 +4127,11 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
         };
 
         let rendered_prompt = mem_ctx.apply_to(
-            &step.prompt.as_deref()
+            &step
+                .prompt
+                .as_deref()
                 .unwrap_or("")
-                .replace("{{task}}", task)
+                .replace("{{task}}", task),
         );
 
         let mut step_json = serde_json::json!({
@@ -3603,15 +4181,18 @@ fn agent_catalog() -> String {
     use agent007_core::PersonaProvider;
     let personas = registry.list();
 
-    let archetypes: Vec<serde_json::Value> = personas.iter().map(|p| {
-        serde_json::json!({
-            "name": p.name,
-            "description": p.description,
-            "preferred_model": p.preferred_model,
-            "allowed_tools": p.allowed_tools,
-            "system_prompt": p.system_prompt,
+    let archetypes: Vec<serde_json::Value> = personas
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "description": p.description,
+                "preferred_model": p.preferred_model,
+                "allowed_tools": p.allowed_tools,
+                "system_prompt": p.system_prompt,
+            })
         })
-    }).collect();
+        .collect();
 
     let catalog = serde_json::json!({
         "archetypes": archetypes,
@@ -3639,12 +4220,19 @@ fn agent_save(
 
     let filename = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .to_lowercase();
     let path = personas_dir.join(format!("{filename}.toml"));
 
-    let tools_str = allowed_tools.iter()
+    let tools_str = allowed_tools
+        .iter()
         .map(|t| format!("\"{}\"", t))
         .collect::<Vec<_>>()
         .join(", ");
@@ -3753,9 +4341,7 @@ fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path().extension().and_then(|x| x.to_str()) == Some(ext)
-                })
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some(ext))
                 .count()
         })
         .unwrap_or(0)
@@ -3801,62 +4387,64 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
                 }
             });
         } else {
-        // Start the dashboard inline regardless of whether stdin is a terminal.
-        // The MCP stdio protocol and the HTTP web server use completely different
-        // transports and coexist in the same process without conflict.
-        let stack = super::run::build_stack(&config).await?;
-        let standalone_mode = standalone_mode_available(&config);
-        let runtime_mode = runtime_mode_label(&config).to_string();
-        let provider_label = match (
-            selected_runtime_provider(&config),
-            selected_runtime_model(&config),
-        ) {
-            (Some(provider), Some(model)) if provider != model => format!("{provider} / {model}"),
-            (Some(provider), _) => provider,
-            _ => "hosted-mcp".to_string(),
-        };
+            // Start the dashboard inline regardless of whether stdin is a terminal.
+            // The MCP stdio protocol and the HTTP web server use completely different
+            // transports and coexist in the same process without conflict.
+            let stack = super::run::build_stack(&config).await?;
+            let standalone_mode = standalone_mode_available(&config);
+            let runtime_mode = runtime_mode_label(&config).to_string();
+            let provider_label = match (
+                selected_runtime_provider(&config),
+                selected_runtime_model(&config),
+            ) {
+                (Some(provider), Some(model)) if provider != model => {
+                    format!("{provider} / {model}")
+                }
+                (Some(provider), _) => provider,
+                _ => "hosted-mcp".to_string(),
+            };
 
-        shared_dispatcher = Some(stack.dispatcher.clone());
-        shared_learning = Some(stack.learning_dispatcher.clone());
+            shared_dispatcher = Some(stack.dispatcher.clone());
+            shared_learning = Some(stack.learning_dispatcher.clone());
 
-        let collector = stack.feedback_collector.clone();
-        stack.tracker.spawn(async move {
-            if let Err(e) = collector.run().await {
-                tracing::warn!("feedback collector error: {e}");
-            }
-        });
+            let collector = stack.feedback_collector.clone();
+            stack.tracker.spawn(async move {
+                if let Err(e) = collector.run().await {
+                    tracing::warn!("feedback collector error: {e}");
+                }
+            });
 
-        let web = agent007_web::WebServer::new(
-            stack.dispatcher.clone(),
-            stack.learning_dispatcher.clone(),
-            stack.model_router.clone(),
-            Some(stack.workflow_runner.clone()),
-            stack.cancel.clone(),
-            standalone_mode,
-            runtime_mode,
-            provider_label,
-        );
+            let web = agent007_web::WebServer::new(
+                stack.dispatcher.clone(),
+                stack.learning_dispatcher.clone(),
+                stack.model_router.clone(),
+                Some(stack.workflow_runner.clone()),
+                stack.cancel.clone(),
+                standalone_mode,
+                runtime_mode,
+                provider_label,
+            );
 
-        tokio::spawn(async move {
-            match find_free_port_with_listener(dashboard_port).await {
-                Ok((actual_port, listener)) => {
-                    eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
-                    persist_dashboard_port(actual_port);
-                    if let Err(e) = web.run_with_listener(listener).await {
-                        eprintln!("[agent007] web dashboard error: {e}");
+            tokio::spawn(async move {
+                match find_free_port_with_listener(dashboard_port).await {
+                    Ok((actual_port, listener)) => {
+                        eprintln!("[agent007] web dashboard: http://localhost:{actual_port}");
+                        persist_dashboard_port(actual_port);
+                        if let Err(e) = web.run_with_listener(listener).await {
+                            eprintln!("[agent007] web dashboard error: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[agent007] web dashboard disabled: could not bind a local port ({e})"
+                        );
                     }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "[agent007] web dashboard disabled: could not bind a local port ({e})"
-                    );
-                }
-            }
-        });
+            });
 
-        tracing::info!(
-            "agent007 MCP server starting (stdio) + web dashboard on port {dashboard_port}"
-        );
+            tracing::info!(
+                "agent007 MCP server starting (stdio) + web dashboard on port {dashboard_port}"
+            );
         } // end else already_running
     } else {
         tracing::info!("agent007 MCP server starting (stdio transport, dashboard disabled)");
@@ -3982,20 +4570,27 @@ async fn dashboard_port_is_same_project(port: u16) -> bool {
         .unwrap_or_default();
 
     let connect = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"));
-    let Ok(Ok(mut stream)) = tokio::time::timeout(Duration::from_millis(400), connect).await
-    else { return true; };
+    let Ok(Ok(mut stream)) = tokio::time::timeout(Duration::from_millis(400), connect).await else {
+        return true;
+    };
 
     let req = b"GET /api/stats HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    if stream.write_all(req).await.is_err() { return true; }
+    if stream.write_all(req).await.is_err() {
+        return true;
+    }
 
     let mut buf = Vec::new();
     let read = tokio::time::timeout(Duration::from_millis(400), stream.read_to_end(&mut buf));
-    if read.await.is_err() { return true; }
+    if read.await.is_err() {
+        return true;
+    }
 
     let body = String::from_utf8_lossy(&buf);
     // JSON body starts after the blank line separating headers from body
     let json_str = body.split("\r\n\r\n").nth(1).unwrap_or("");
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) else { return true; };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return true;
+    };
 
     let running_project = json
         .get("project_path")
@@ -4039,8 +4634,14 @@ mod tests {
     fn tool_defs_contains_persona_list_and_show() {
         let defs = Agent007Server::tool_defs();
         let names: Vec<&str> = defs.iter().map(|t| t.name.as_ref()).collect();
-        assert!(names.contains(&"agent007_persona_list"), "missing agent007_persona_list");
-        assert!(names.contains(&"agent007_persona_show"), "missing agent007_persona_show");
+        assert!(
+            names.contains(&"agent007_persona_list"),
+            "missing agent007_persona_list"
+        );
+        assert!(
+            names.contains(&"agent007_persona_show"),
+            "missing agent007_persona_show"
+        );
     }
 
     #[test]
@@ -4058,6 +4659,7 @@ mod tests {
         let defs = Agent007Server::tool_defs();
         let names: Vec<&str> = defs.iter().map(|t| t.name.as_ref()).collect();
         let expected = [
+            "agent007_dispatch",
             "agent007_memory_read",
             "agent007_memory_write",
             "agent007_memory_list",
@@ -4199,6 +4801,133 @@ output = "red"
     }
 
     #[test]
+    fn parse_dispatch_command_supports_workflow_alias_syntax() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        write_workflow_fixture(
+            tmp.path(),
+            "code-review",
+            r#"
+name = "Code Review"
+
+[[steps]]
+id = "review"
+agent = "Reviewer"
+prompt = "Review {{task}}"
+output = "notes"
+"#,
+        );
+
+        let parsed =
+            parse_dispatch_command("$agent007 wf code_review review current diff").unwrap();
+        assert_eq!(
+            parsed,
+            DispatchCommand::WorkflowRun {
+                name: "code-review".to_string(),
+                task: "review current diff".to_string(),
+            }
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn parse_dispatch_command_supports_skill_shorthand() {
+        let parsed = parse_dispatch_command("$agent007 skill brainstorm onboarding ideas").unwrap();
+        assert_eq!(
+            parsed,
+            DispatchCommand::SkillRun {
+                trigger: "/brainstorm".to_string(),
+                args: "onboarding ideas".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_dispatch_command_defaults_to_run_for_plain_text() {
+        let parsed = parse_dispatch_command("$agent007 refactor auth module").unwrap();
+        assert_eq!(
+            parsed,
+            DispatchCommand::Run {
+                task: "refactor auth module".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_dispatch_command_returns_help_for_empty_input() {
+        let parsed = parse_dispatch_command("   ").unwrap();
+        assert_eq!(
+            parsed,
+            DispatchCommand::Help {
+                topic: Some("overview".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn record_actual_tokens_recovers_stale_restart_failure() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("workflow", "recover me").unwrap();
+        assert_eq!(load_run_store().cleanup_stale_runs(), 1);
+
+        let message =
+            record_actual_tokens(&run_id, 2800, "host-llm", Some("final output")).unwrap();
+        assert!(message.contains("Recovered stale run"));
+
+        let detail = load_run_store().load_run(&run_id).unwrap();
+        assert!(matches!(
+            detail.metadata.status,
+            agent007_core::run_store::RunStatus::Succeeded
+        ));
+        assert_eq!(detail.metadata.provider.as_deref(), Some("host-llm"));
+        assert_eq!(
+            detail.metadata.output_preview.as_deref(),
+            Some("final output")
+        );
+
+        let summary: agent007_core::run_store::RunTokenSummary = load_run_store()
+            .read_json_artifact(&run_id, "token-summary.json")
+            .unwrap();
+        assert_eq!(summary.tokens, 2800);
+        assert_eq!(summary.requests, 1);
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn record_actual_tokens_skips_non_stale_finished_runs() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("workflow", "already done").unwrap();
+        load_run_store()
+            .finish_run(&run_id, false, "actual failure")
+            .unwrap();
+
+        let message = record_actual_tokens(&run_id, 42, "host-llm", Some("ignored")).unwrap();
+        assert!(message.contains("already finalized"));
+        assert!(message.contains("failed"));
+
+        let detail = load_run_store().load_run(&run_id).unwrap();
+        assert!(matches!(
+            detail.metadata.status,
+            agent007_core::run_store::RunStatus::Failed
+        ));
+        assert_eq!(
+            detail.metadata.output_preview.as_deref(),
+            Some("actual failure")
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
     fn uuid_v4_has_correct_format() {
         let id = uuid_v4();
         let parts: Vec<&str> = id.split('-').collect();
@@ -4209,7 +4938,11 @@ output = "red"
         assert_eq!(parts[3].len(), 4);
         assert_eq!(parts[4].len(), 12);
         // Version nibble must be '4'
-        assert!(parts[2].starts_with('4'), "UUID version nibble must be 4, got: {}", id);
+        assert!(
+            parts[2].starts_with('4'),
+            "UUID version nibble must be 4, got: {}",
+            id
+        );
     }
 
     #[test]
@@ -4312,19 +5045,17 @@ requires_approval = true
         let waiting: serde_json::Value = serde_json::from_str(&waiting).unwrap();
         assert_eq!(waiting["progress"]["status"], "awaiting-approval");
 
-        let approval = workflow_approve(
-            &session,
-            None,
-            "edit",
-            Some("approved plan".to_string()),
-        )
-        .unwrap();
+        let approval =
+            workflow_approve(&session, None, "edit", Some("approved plan".to_string())).unwrap();
         assert!(approval.contains("agent007_workflow_next"));
 
         let resumed = workflow_hosted_next(&session).unwrap();
         let resumed: serde_json::Value = serde_json::from_str(&resumed).unwrap();
         assert_eq!(resumed["progress"]["status"], "succeeded");
-        assert_eq!(resumed["workflow_state"]["outputs"]["plan"], "approved plan");
+        assert_eq!(
+            resumed["workflow_state"]["outputs"]["plan"],
+            "approved plan"
+        );
 
         std::env::remove_var("AGENT007_HOME");
     }
@@ -4449,7 +5180,9 @@ output = "review_report"
         let run_id = payload["run_id"].as_str().unwrap();
         let store = load_run_store();
         let detail = store.load_run(run_id).unwrap();
-        assert!(detail.artifacts.contains(&"compact-output.json".to_string()));
+        assert!(detail
+            .artifacts
+            .contains(&"compact-output.json".to_string()));
         assert!(detail.artifacts.contains(&"raw-output.txt".to_string()));
         std::env::remove_var("AGENT007_HOME");
     }
@@ -4486,7 +5219,11 @@ output = "review_report"
     fn zone_check_allowed_path() {
         let config = Config::default(); // no zones configured → everything unrestricted
         let result = zone_check(&config, "src/main.rs", "read").unwrap();
-        assert!(result.contains("ALLOWED"), "expected ALLOWED, got: {}", result);
+        assert!(
+            result.contains("ALLOWED"),
+            "expected ALLOWED, got: {}",
+            result
+        );
     }
 
     #[test]
@@ -4494,6 +5231,10 @@ output = "review_report"
         let mut config = Config::default();
         config.zones.forbidden = vec!["secrets/".to_string()];
         let result = zone_check(&config, "secrets/token", "read").unwrap();
-        assert!(result.contains("DENIED"), "expected DENIED, got: {}", result);
+        assert!(
+            result.contains("DENIED"),
+            "expected DENIED, got: {}",
+            result
+        );
     }
 }

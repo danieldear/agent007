@@ -4,7 +4,7 @@ use std::path::Path;
 
 use agent007_core::RunStore;
 use agent007_mcp::{McpClient, McpServerConfig};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn write_fixture_project(root: &Path) {
     fs::create_dir_all(root.join("src")).unwrap();
@@ -166,16 +166,12 @@ async fn live_mcp_server_exposes_and_records_new_compact_context_tools() {
     assert_eq!(compact["result"]["strategy"], "test-output");
     assert_eq!(compact["result"]["level"], "compact");
     let compact_run = store.load_run(compact_run_id).unwrap();
-    assert!(
-        compact_run
-            .artifacts
-            .contains(&"compact-output.json".to_string())
-    );
-    assert!(
-        compact_run
-            .artifacts
-            .contains(&"raw-output.txt".to_string())
-    );
+    assert!(compact_run
+        .artifacts
+        .contains(&"compact-output.json".to_string()));
+    assert!(compact_run
+        .artifacts
+        .contains(&"raw-output.txt".to_string()));
     let compact_text = store
         .read_text_artifact(compact_run_id, "compact-output.txt")
         .unwrap();
@@ -199,13 +195,14 @@ async fn live_mcp_server_exposes_and_records_new_compact_context_tools() {
             .unwrap(),
     );
     let context_run_id = context["run_id"].as_str().unwrap();
-    assert_eq!(context["bundle"]["repo_brain"]["project_name"], "fixture-project");
-    assert!(
-        context["bundle"]["compiled_context"]
-            .as_str()
-            .unwrap()
-            .contains("Task:")
+    assert_eq!(
+        context["bundle"]["repo_brain"]["project_name"],
+        "fixture-project"
     );
+    assert!(context["bundle"]["compiled_context"]
+        .as_str()
+        .unwrap()
+        .contains("Task:"));
     assert!(
         context["bundle"]["relevant_files"]
             .as_array()

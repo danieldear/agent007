@@ -1,7 +1,7 @@
 // crates/personas/src/loader.rs
-use std::path::Path;
-use agent007_core::PersonaSpec;
 use crate::error::PersonaError;
+use agent007_core::PersonaSpec;
+use std::path::Path;
 
 /// Deserialisation target — mirrors PersonaSpec for TOML parsing.
 #[derive(serde::Deserialize)]
@@ -72,17 +72,16 @@ allowed_tools = ["bash", "file_read", "file_write"]
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "MyCoder");
         assert_eq!(specs[0].preferred_model, "codex");
-        assert_eq!(specs[0].allowed_tools, vec!["bash", "file_read", "file_write"]);
+        assert_eq!(
+            specs[0].allowed_tools,
+            vec!["bash", "file_read", "file_write"]
+        );
     }
 
     #[test]
     fn ignores_non_toml_files() {
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("notes.txt"),
-            "not a toml persona",
-        )
-        .unwrap();
+        fs::write(dir.path().join("notes.txt"), "not a toml persona").unwrap();
         fs::write(
             dir.path().join("valid.toml"),
             r#"
@@ -109,7 +108,10 @@ allowed_tools = []
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("bad.toml"), "error should mention the file path");
+        assert!(
+            msg.contains("bad.toml"),
+            "error should mention the file path"
+        );
     }
 
     #[test]

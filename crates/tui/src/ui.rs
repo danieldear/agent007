@@ -1,8 +1,8 @@
-use ratatui::Frame;
+use crate::app::{AgentState, App};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 use ratatui::style::{Color, Modifier, Style};
-use crate::app::{App, AgentState};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
 
 /// Entry point called from EventLoop's terminal.draw() closure.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -59,8 +59,11 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let pause_hint = if app.paused { " [PAUSED]" } else { "" };
-    let block = Block::default().borders(Borders::ALL).title("agent007 v0.1.0");
-    let paragraph = Paragraph::new(format!("[q]uit [p]ause [?]help ↑↓ scroll logs{pause_hint}")).block(block);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("agent007 v0.1.0");
+    let paragraph =
+        Paragraph::new(format!("[q]uit [p]ause [?]help ↑↓ scroll logs{pause_hint}")).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -75,7 +78,9 @@ fn render_agents(frame: &mut Frame, area: Rect, app: &App) {
                 AgentState::Idle | AgentState::Complete => "○",
             };
             let style = match a.state {
-                AgentState::Active => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                AgentState::Active => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
                 AgentState::Complete => Style::default().fg(Color::DarkGray),
                 AgentState::Idle => Style::default(),
             };
@@ -126,7 +131,9 @@ fn render_model(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Logs (↑↓ scroll)");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Logs (↑↓ scroll)");
     let logs: Vec<&str> = app.logs.iter().map(|s| s.as_str()).collect();
     let skip = app.log_scroll.min(logs.len().saturating_sub(1));
     let text = logs[skip..].join("\n");
@@ -162,7 +169,9 @@ fn render_learning(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_optimizations(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Optimizations");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Optimizations");
     let items: Vec<ListItem> = app
         .recent_optimizations
         .iter()
@@ -183,7 +192,12 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     let popup_h = 14u16.min(area.height);
     let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup = Rect { x, y, width: popup_w, height: popup_h };
+    let popup = Rect {
+        x,
+        y,
+        width: popup_w,
+        height: popup_h,
+    };
 
     frame.render_widget(Clear, popup);
     let block = Block::default()
@@ -205,12 +219,11 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, popup);
 }
 
-
 mod tests {
     use super::*;
+    use crate::app::App;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
-    use crate::app::App;
 
     #[test]
     fn render_with_populated_app_does_not_panic() {
@@ -230,12 +243,23 @@ mod tests {
         let task2 = Task::new("Write tests for module B");
         let task1_id = task1.id;
 
-        app.handle_event(AgentEvent::TaskAssigned { agent_id: agent1.clone(), task: task1 });
-        app.handle_event(AgentEvent::TaskAssigned { agent_id: agent2.clone(), task: task2 });
+        app.handle_event(AgentEvent::TaskAssigned {
+            agent_id: agent1.clone(),
+            task: task1,
+        });
+        app.handle_event(AgentEvent::TaskAssigned {
+            agent_id: agent2.clone(),
+            task: task2,
+        });
 
         // Complete task1 so we have a mix of done/active
         let result = TaskResult::success(task1_id, "done".to_string());
-        app.handle_event(AgentEvent::TaskCompleted { agent_id: agent1, result, skill_name: None, model: None });
+        app.handle_event(AgentEvent::TaskCompleted {
+            agent_id: agent1,
+            result,
+            skill_name: None,
+            model: None,
+        });
 
         // Model usage
         app.handle_event(AgentEvent::ModelRequest {
@@ -250,7 +274,10 @@ mod tests {
         app.push_log("Task completed successfully".to_string());
 
         // 1 optimization via learning events
-        app.handle_learning_event(LearningEvent::FeedbackRecorded { agent_id: agent2.clone(), reward: 0.75 });
+        app.handle_learning_event(LearningEvent::FeedbackRecorded {
+            agent_id: agent2.clone(),
+            reward: 0.75,
+        });
         app.handle_learning_event(LearningEvent::PromptImproved {
             skill_name: "code-review".to_string(),
             old_reward: 0.4,

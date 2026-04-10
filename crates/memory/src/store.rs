@@ -1,9 +1,9 @@
+use crate::error::MemoryError;
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
-use crate::error::MemoryError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -40,7 +40,9 @@ pub struct MemoryMeta {
     pub words: Vec<String>,
 }
 
-fn default_confidence() -> f32 { 1.0 }
+fn default_confidence() -> f32 {
+    1.0
+}
 
 impl Default for MemoryMeta {
     fn default() -> Self {
@@ -123,7 +125,9 @@ fn tokenize(text: &str) -> Vec<String> {
 
 impl MemoryStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self { base_dir: base_dir.into() }
+        Self {
+            base_dir: base_dir.into(),
+        }
     }
 
     fn key_path(&self, namespace: &str, key: &str) -> PathBuf {
@@ -131,7 +135,10 @@ impl MemoryStore {
             self.base_dir.clone()
         } else {
             // Sanitize namespace just like key components to prevent path traversal
-            let safe_ns = namespace.replace("..", "").replace('/', "").replace('\\', "");
+            let safe_ns = namespace
+                .replace("..", "")
+                .replace('/', "")
+                .replace('\\', "");
             self.base_dir.join(safe_ns)
         };
         let parts: Vec<&str> = key.split(':').collect();
@@ -144,7 +151,10 @@ impl MemoryStore {
                         path = path.join(safe);
                     }
                 }
-                let safe_filename = filename.replace("..", "").replace('/', "").replace('\\', "");
+                let safe_filename = filename
+                    .replace("..", "")
+                    .replace('/', "")
+                    .replace('\\', "");
                 path.join(format!("{}.md", safe_filename))
             }
             None => path.join(format!("{}.md", key)),
@@ -155,7 +165,10 @@ impl MemoryStore {
         if namespace.is_empty() {
             self.base_dir.clone()
         } else {
-            let safe_ns = namespace.replace("..", "").replace('/', "").replace('\\', "");
+            let safe_ns = namespace
+                .replace("..", "")
+                .replace('/', "")
+                .replace('\\', "");
             self.base_dir.join(safe_ns)
         }
     }
@@ -173,8 +186,8 @@ impl MemoryStore {
         if !path.exists() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| MemoryError::Io { path, source: e })?;
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| MemoryError::Io { path, source: e })?;
         let (content, meta) = parse_frontmatter(&raw);
         if meta.is_expired() {
             // Silently skip expired entries; optionally could delete the file here
@@ -183,13 +196,17 @@ impl MemoryStore {
         Ok(Some(content))
     }
 
-    fn read_with_meta_ns(&self, namespace: &str, key: &str) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
+    fn read_with_meta_ns(
+        &self,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
         let path = self.key_path(namespace, key);
         if !path.exists() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| MemoryError::Io { path, source: e })?;
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| MemoryError::Io { path, source: e })?;
         let (content, meta) = parse_frontmatter(&raw);
         if meta.is_expired() {
             return Ok(None);
@@ -202,16 +219,17 @@ impl MemoryStore {
         if !path.exists() {
             return Ok(());
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| MemoryError::Io { path: path.clone(), source: e })?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| MemoryError::Io {
+            path: path.clone(),
+            source: e,
+        })?;
         let (content, mut meta) = parse_frontmatter(&raw);
         meta.access_count += 1;
         meta.updated_at = Utc::now();
         // Boost confidence on access — frequently read entries stay relevant
         meta.confidence = (meta.confidence + 0.03).min(1.0);
         let file_content = write_frontmatter(&meta, &content);
-        std::fs::write(&path, file_content)
-            .map_err(|e| MemoryError::Io { path, source: e })
+        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
     }
 
     fn list_keys_ns(&self, namespace: &str) -> Result<Vec<String>, MemoryError> {
@@ -241,12 +259,16 @@ impl MemoryStore {
     fn write_ns(&self, namespace: &str, key: &str, value: &str) -> Result<(), MemoryError> {
         let path = self.key_path(namespace, key);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| MemoryError::Io { path: parent.to_path_buf(), source: e })?;
+            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
         let mut meta = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .map_err(|e| MemoryError::Io { path: path.clone(), source: e })?;
+            let raw = std::fs::read_to_string(&path).map_err(|e| MemoryError::Io {
+                path: path.clone(),
+                source: e,
+            })?;
             let (_, mut existing) = parse_frontmatter(&raw);
             existing.updated_at = Utc::now();
             existing
@@ -256,8 +278,7 @@ impl MemoryStore {
         // Feature 2: pre-tokenize for fast RAG matching
         meta.words = tokenize(value);
         let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content)
-            .map_err(|e| MemoryError::Io { path, source: e })?;
+        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })?;
         // Feature 1: decay confidence of all other keys in namespace (skip repo_brain)
         let _ = self.decay_pass(namespace, key);
         // Feature 3: auto-link temporal co-writes
@@ -275,9 +296,13 @@ impl MemoryStore {
         for entry in entries.flatten() {
             let fname = entry.file_name();
             let fname_str = fname.to_string_lossy();
-            if !fname_str.ends_with(".md") { continue; }
+            if !fname_str.ends_with(".md") {
+                continue;
+            }
             let file_key = fname_str.trim_end_matches(".md");
-            if file_key == skip_key || file_key == "repo_brain" { continue; }
+            if file_key == skip_key || file_key == "repo_brain" {
+                continue;
+            }
             let path = entry.path();
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let (content, mut meta) = parse_frontmatter(&raw);
@@ -301,9 +326,13 @@ impl MemoryStore {
         for entry in entries.flatten() {
             let fname = entry.file_name();
             let fname_str = fname.to_string_lossy();
-            if !fname_str.ends_with(".md") { continue; }
+            if !fname_str.ends_with(".md") {
+                continue;
+            }
             let file_key = fname_str.trim_end_matches(".md").to_string();
-            if file_key == new_key { continue; }
+            if file_key == new_key {
+                continue;
+            }
             let path = entry.path();
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let (_, meta) = parse_frontmatter(&raw);
@@ -312,7 +341,9 @@ impl MemoryStore {
                 }
             }
         }
-        if co_written.is_empty() { return Ok(()); }
+        if co_written.is_empty() {
+            return Ok(());
+        }
         // Add backlinks from co-written keys → new_key
         for peer_key in &co_written {
             let peer_path = self.key_path(namespace, peer_key);
@@ -320,7 +351,9 @@ impl MemoryStore {
                 let (content, mut meta) = parse_frontmatter(&raw);
                 if !meta.related_to.contains(&new_key.to_string()) {
                     meta.related_to.push(new_key.to_string());
-                    if meta.related_to.len() > 5 { meta.related_to.remove(0); }
+                    if meta.related_to.len() > 5 {
+                        meta.related_to.remove(0);
+                    }
                     let updated = write_frontmatter(&meta, &content);
                     let _ = std::fs::write(&peer_path, updated);
                 }
@@ -333,7 +366,9 @@ impl MemoryStore {
             for peer_key in &co_written {
                 if !meta.related_to.contains(peer_key) {
                     meta.related_to.push(peer_key.clone());
-                    if meta.related_to.len() > 5 { meta.related_to.remove(0); }
+                    if meta.related_to.len() > 5 {
+                        meta.related_to.remove(0);
+                    }
                 }
             }
             let updated = write_frontmatter(&meta, &content);
@@ -342,11 +377,19 @@ impl MemoryStore {
         Ok(())
     }
 
-    fn write_with_meta_ns(&self, namespace: &str, key: &str, value: &str, mut meta: MemoryMeta) -> Result<(), MemoryError> {
+    fn write_with_meta_ns(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &str,
+        mut meta: MemoryMeta,
+    ) -> Result<(), MemoryError> {
         let path = self.key_path(namespace, key);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| MemoryError::Io { path: parent.to_path_buf(), source: e })?;
+            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
         // Preserve original created_at if the file already exists
         if path.exists() {
@@ -357,8 +400,7 @@ impl MemoryStore {
         }
         meta.updated_at = Utc::now();
         let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content)
-            .map_err(|e| MemoryError::Io { path, source: e })
+        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
     }
 
     pub fn scoped(self: &Arc<Self>, namespace: &str) -> ScopedMemoryStore {
@@ -378,8 +420,14 @@ fn collect_keys_recursive(
     dir: &std::path::Path,
     keys: &mut Vec<String>,
 ) -> Result<(), MemoryError> {
-    for entry in std::fs::read_dir(dir).map_err(|e| MemoryError::Io { path: dir.to_path_buf(), source: e })? {
-        let entry = entry.map_err(|e| MemoryError::Io { path: dir.to_path_buf(), source: e })?;
+    for entry in std::fs::read_dir(dir).map_err(|e| MemoryError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })? {
+        let entry = entry.map_err(|e| MemoryError::Io {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
         let path = entry.path();
         if path.is_dir() {
             collect_keys_recursive(root, &path, keys)?;
@@ -417,8 +465,14 @@ impl ScopedMemoryStore {
 
     /// Write a value with explicit metadata (e.g. to set entry_type = Procedural).
     /// Preserves `created_at` if the key already exists.
-    pub fn write_with_meta(&self, key: &str, value: &str, meta: MemoryMeta) -> Result<(), MemoryError> {
-        self.inner.write_with_meta_ns(&self.namespace, key, value, meta)
+    pub fn write_with_meta(
+        &self,
+        key: &str,
+        value: &str,
+        meta: MemoryMeta,
+    ) -> Result<(), MemoryError> {
+        self.inner
+            .write_with_meta_ns(&self.namespace, key, value, meta)
     }
 
     pub fn read_with_meta(&self, key: &str) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
@@ -475,7 +529,9 @@ impl ScopedMemoryStore {
             if let Ok(Some((value, meta))) = self.inner.read_with_meta_ns(&self.namespace, key) {
                 let age_secs = (now - meta.updated_at).num_seconds().max(0) as f64;
                 let recency = 1.0 / (age_secs / 3600.0 + 1.0); // decays over hours
-                let score = 0.5 * recency + 0.3 * (meta.access_count as f64).ln_1p() + 0.2 * meta.confidence as f64;
+                let score = 0.5 * recency
+                    + 0.3 * (meta.access_count as f64).ln_1p()
+                    + 0.2 * meta.confidence as f64;
                 scored.push((score, key.clone(), value));
             }
         }
@@ -486,7 +542,11 @@ impl ScopedMemoryStore {
 
         // Sort by score descending; reserve one slot for repo_brain if present
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let remaining_slots = if brain_entry.is_some() { n.saturating_sub(1) } else { n };
+        let remaining_slots = if brain_entry.is_some() {
+            n.saturating_sub(1)
+        } else {
+            n
+        };
         scored.truncate(remaining_slots);
 
         let mut parts = Vec::new();
@@ -582,10 +642,26 @@ mod tests {
         let store = Arc::new(MemoryStore::new(dir.path()));
         store.write("key", "value").unwrap();
         let scoped = store.global();
-        assert_eq!(scoped.read_with_meta("key").unwrap().unwrap().1.access_count, 0);
+        assert_eq!(
+            scoped
+                .read_with_meta("key")
+                .unwrap()
+                .unwrap()
+                .1
+                .access_count,
+            0
+        );
         scoped.touch("key").unwrap();
         scoped.touch("key").unwrap();
-        assert_eq!(scoped.read_with_meta("key").unwrap().unwrap().1.access_count, 2);
+        assert_eq!(
+            scoped
+                .read_with_meta("key")
+                .unwrap()
+                .unwrap()
+                .1
+                .access_count,
+            2
+        );
     }
 
     #[test]
@@ -594,7 +670,10 @@ mod tests {
         let path = dir.path().join("key.md");
         std::fs::write(&path, "legacy content").unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
-        assert_eq!(store.read("key").unwrap(), Some("legacy content".to_string()));
+        assert_eq!(
+            store.read("key").unwrap(),
+            Some("legacy content".to_string())
+        );
     }
 
     #[test]
@@ -607,7 +686,10 @@ mod tests {
         let expected = dir.path().join("project").join("arch").join("overview.md");
         assert!(expected.exists());
         // Reading back should return content without frontmatter
-        assert_eq!(scoped.read("arch:overview").unwrap(), Some("the system design".to_string()));
+        assert_eq!(
+            scoped.read("arch:overview").unwrap(),
+            Some("the system design".to_string())
+        );
     }
 
     #[test]
@@ -660,7 +742,10 @@ mod tests {
         std::fs::write(&path, raw).unwrap();
 
         let store = Arc::new(MemoryStore::new(dir.path()));
-        assert_eq!(store.read("fresh").unwrap(), Some("fresh content".to_string()));
+        assert_eq!(
+            store.read("fresh").unwrap(),
+            Some("fresh content".to_string())
+        );
     }
 
     #[test]
@@ -692,7 +777,10 @@ mod tests {
     fn parse_duration_str_parses_days_hours_minutes() {
         assert_eq!(parse_duration_str("7d"), Some(chrono::Duration::days(7)));
         assert_eq!(parse_duration_str("24h"), Some(chrono::Duration::hours(24)));
-        assert_eq!(parse_duration_str("90m"), Some(chrono::Duration::minutes(90)));
+        assert_eq!(
+            parse_duration_str("90m"),
+            Some(chrono::Duration::minutes(90))
+        );
         assert_eq!(parse_duration_str("invalid"), None);
     }
 
@@ -704,15 +792,25 @@ mod tests {
 
         // Write 5 entries + repo_brain
         for i in 0..5 {
-            scoped.write(&format!("entry-{i}"), &format!("value-{i}")).unwrap();
+            scoped
+                .write(&format!("entry-{i}"), &format!("value-{i}"))
+                .unwrap();
         }
-        scoped.write("repo_brain", "# Architecture overview").unwrap();
+        scoped
+            .write("repo_brain", "# Architecture overview")
+            .unwrap();
 
         // Top-3 should include repo_brain first and 2 others
         let result = scoped.read_top_n(3).unwrap();
-        assert!(result.starts_with("### repo_brain"), "repo_brain should be first");
+        assert!(
+            result.starts_with("### repo_brain"),
+            "repo_brain should be first"
+        );
         // Should contain at most 3 blocks
-        let blocks = result.split("\n\n").filter(|s| s.starts_with("### ")).count();
+        let blocks = result
+            .split("\n\n")
+            .filter(|s| s.starts_with("### "))
+            .count();
         assert!(blocks <= 3, "expected at most 3 blocks, got {blocks}");
     }
 
@@ -735,7 +833,8 @@ mod tests {
             assert!(
                 p.starts_with(&base),
                 "file escaped base dir: {} not under {}",
-                p.display(), base.display()
+                p.display(),
+                base.display()
             );
         }
         // And verify the value is readable via the sanitized path
@@ -748,15 +847,31 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
-        scoped.write("feature", "implement authentication with JWT tokens").unwrap();
+        scoped
+            .write("feature", "implement authentication with JWT tokens")
+            .unwrap();
         let (_, meta) = scoped.read_with_meta("feature").unwrap().unwrap();
-        assert!(meta.words.contains(&"implement".to_string()), "words should contain 'implement'");
-        assert!(meta.words.contains(&"authentication".to_string()), "words should contain 'authentication'");
-        assert!(meta.words.contains(&"jwt".to_string()), "words should contain 'jwt' (lowercased)");
-        assert!(meta.words.contains(&"tokens".to_string()), "words should contain 'tokens'");
+        assert!(
+            meta.words.contains(&"implement".to_string()),
+            "words should contain 'implement'"
+        );
+        assert!(
+            meta.words.contains(&"authentication".to_string()),
+            "words should contain 'authentication'"
+        );
+        assert!(
+            meta.words.contains(&"jwt".to_string()),
+            "words should contain 'jwt' (lowercased)"
+        );
+        assert!(
+            meta.words.contains(&"tokens".to_string()),
+            "words should contain 'tokens'"
+        );
         // Short words (< 3 chars) should not appear
-        assert!(!meta.words.contains(&"with".to_string()) || meta.words.contains(&"with".to_string()),
-            "words index built"); // 'with' is 4 chars, this is a sanity check
+        assert!(
+            !meta.words.contains(&"with".to_string()) || meta.words.contains(&"with".to_string()),
+            "words index built"
+        ); // 'with' is 4 chars, this is a sanity check
     }
 
     #[test]
@@ -767,12 +882,21 @@ mod tests {
         // Write key A first
         scoped.write("alpha", "alpha content").unwrap();
         let (_, meta_before) = scoped.read_with_meta("alpha").unwrap().unwrap();
-        assert!((meta_before.confidence - 1.0).abs() < 0.001, "new entry starts at 1.0 confidence");
+        assert!(
+            (meta_before.confidence - 1.0).abs() < 0.001,
+            "new entry starts at 1.0 confidence"
+        );
         // Write key B — should decay alpha
         scoped.write("beta", "beta content").unwrap();
         let (_, meta_after) = scoped.read_with_meta("alpha").unwrap().unwrap();
-        assert!(meta_after.confidence < 1.0, "alpha confidence should decay after writing beta");
-        assert!((meta_after.confidence - 0.995).abs() < 0.001, "decay should be ×0.995");
+        assert!(
+            meta_after.confidence < 1.0,
+            "alpha confidence should decay after writing beta"
+        );
+        assert!(
+            (meta_after.confidence - 0.995).abs() < 0.001,
+            "decay should be ×0.995"
+        );
     }
 
     #[test]
@@ -789,10 +913,16 @@ mod tests {
         // Touch A — should boost confidence
         scoped.touch("alpha").unwrap();
         let (_, meta_boosted) = scoped.read_with_meta("alpha").unwrap().unwrap();
-        assert!(meta_boosted.confidence > before, "touch should boost confidence");
+        assert!(
+            meta_boosted.confidence > before,
+            "touch should boost confidence"
+        );
         // Expected = min(before + 0.03, 1.0)
         let expected = (before + 0.03f32).min(1.0);
-        assert!((meta_boosted.confidence - expected).abs() < 0.001, "boost should be +0.03 (capped at 1.0)");
+        assert!(
+            (meta_boosted.confidence - expected).abs() < 0.001,
+            "boost should be +0.03 (capped at 1.0)"
+        );
     }
 
     #[test]
@@ -805,11 +935,15 @@ mod tests {
         scoped.write("beta", "second entry").unwrap();
         // beta should have alpha in related_to (written within 10min)
         let (_, beta_meta) = scoped.read_with_meta("beta").unwrap().unwrap();
-        assert!(beta_meta.related_to.contains(&"alpha".to_string()),
-            "beta should auto-link to alpha (co-written within 10min)");
+        assert!(
+            beta_meta.related_to.contains(&"alpha".to_string()),
+            "beta should auto-link to alpha (co-written within 10min)"
+        );
         // alpha should also have beta in related_to (backlink)
         let (_, alpha_meta) = scoped.read_with_meta("alpha").unwrap().unwrap();
-        assert!(alpha_meta.related_to.contains(&"beta".to_string()),
-            "alpha should auto-link to beta (backlink from temporal edge)");
+        assert!(
+            alpha_meta.related_to.contains(&"beta".to_string()),
+            "alpha should auto-link to beta (backlink from temporal edge)"
+        );
     }
 }

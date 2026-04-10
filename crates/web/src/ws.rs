@@ -1,40 +1,29 @@
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::{State, WebSocketUpgrade},
     response::IntoResponse,
 };
-use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 
-use agent007_core::paths::agent007_home;
-use agent007_core::dispatcher::Dispatcher;
-use crate::server::AppState;
 use crate::metrics::DashboardMetrics;
+use crate::server::AppState;
+use agent007_core::dispatcher::Dispatcher;
+use agent007_core::paths::agent007_home;
 
 /// Messages broadcast to WebSocket clients.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum WsMessage {
-    AgentEvent {
-        source: String,
-        payload: Value,
-    },
-    LearningEvent {
-        avg_reward: f64,
-        payload: Value,
-    },
-    StatusUpdate {
-        metrics: DashboardMetrics,
-    },
+    AgentEvent { source: String, payload: Value },
+    LearningEvent { avg_reward: f64, payload: Value },
+    StatusUpdate { metrics: DashboardMetrics },
 }
 
 /// axum handler — upgrades the HTTP connection to a WebSocket, then streams
 /// `AgentEvent` and `LearningEvent` to the browser.
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

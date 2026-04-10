@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::sync::Arc;
 use agent007_models::provider::ModelProvider;
 use agent007_models::types::{CompletionRequest, Message, Role};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct OptimizerConfig {
     pub threshold: f32,
@@ -65,10 +65,7 @@ impl PromptOptimizer {
         }
 
         // Compute average reward
-        let rewards: Vec<f32> = entries
-            .iter()
-            .filter_map(|e| e.reward)
-            .collect();
+        let rewards: Vec<f32> = entries.iter().filter_map(|e| e.reward).collect();
 
         let avg_reward = if rewards.is_empty() {
             0.0f32
@@ -91,12 +88,8 @@ impl PromptOptimizer {
         let failure_examples: String = entries
             .iter()
             .filter_map(|e| match &e.outcome {
-                crate::types::Outcome::Failure { reason } => {
-                    Some(format!("- Failure: {}", reason))
-                }
-                crate::types::Outcome::ToolError { tool } => {
-                    Some(format!("- ToolError: {}", tool))
-                }
+                crate::types::Outcome::Failure { reason } => Some(format!("- Failure: {}", reason)),
+                crate::types::Outcome::ToolError { tool } => Some(format!("- ToolError: {}", tool)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -156,9 +149,10 @@ impl PromptOptimizer {
         }
 
         // Emit OptimizerTriggered event
-        self.learning_dispatcher.publish(crate::types::LearningEvent::OptimizerTriggered {
-            skill_name: skill_name.to_string(),
-        })?;
+        self.learning_dispatcher
+            .publish(crate::types::LearningEvent::OptimizerTriggered {
+                skill_name: skill_name.to_string(),
+            })?;
 
         Ok(())
     }
@@ -172,7 +166,10 @@ impl PromptOptimizer {
         // name and a slugified version (spaces → hyphens, lower-cased).
         let candidates = [
             skills_dir.join(format!("{}.md", skill_name)),
-            skills_dir.join(format!("{}.md", skill_name.to_lowercase().replace(' ', "-"))),
+            skills_dir.join(format!(
+                "{}.md",
+                skill_name.to_lowercase().replace(' ', "-")
+            )),
         ];
 
         let skill_path = match candidates.iter().find(|p| p.exists()) {
@@ -199,7 +196,10 @@ impl PromptOptimizer {
         // Split into at most 3 parts: ["", frontmatter, old_template].
         let parts: Vec<&str> = content.splitn(3, "---").collect();
         if parts.len() < 3 {
-            tracing::warn!(skill = skill_name, "optimizer: skill file has unexpected format; skipping write-back");
+            tracing::warn!(
+                skill = skill_name,
+                "optimizer: skill file has unexpected format; skipping write-back"
+            );
             return;
         }
 
@@ -215,17 +215,17 @@ impl PromptOptimizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent007_core::types::{AgentId, PromptRef};
-    use agent007_memory::store::MemoryStore;
-    use agent007_models::mock::MockProvider;
     use crate::dispatcher::LearningDispatcher;
     use crate::store::LearningStore;
     use crate::types::{FeedbackEntry, LearningEvent, Outcome};
+    use agent007_core::types::{AgentId, PromptRef};
+    use agent007_memory::store::MemoryStore;
+    use agent007_models::mock::MockProvider;
+    use chrono::Utc;
     use futures::StreamExt as _;
     use std::sync::Arc;
     use tempfile::TempDir;
     use uuid::Uuid;
-    use chrono::Utc;
 
     fn make_store() -> (LearningStore, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -262,13 +262,22 @@ mod tests {
 
         // Insert 5 entries with high reward (0.5 > threshold 0.3)
         for _ in 0..5 {
-            store.record_feedback(&make_entry("skill-a", Outcome::Success, 0.5)).unwrap();
+            store
+                .record_feedback(&make_entry("skill-a", Outcome::Success, 0.5))
+                .unwrap();
         }
 
-        optimizer.maybe_optimize("skill-a", &store, "original prompt").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-a", &store, "original prompt")
+            .await
+            .unwrap();
 
         // Provider should not be called
-        assert_eq!(provider.call_count(), 0, "model should not be called when reward >= threshold");
+        assert_eq!(
+            provider.call_count(),
+            0,
+            "model should not be called when reward >= threshold"
+        );
 
         // No new version stored
         let versions = store.get_prompt_versions("skill-a").unwrap();
@@ -293,12 +302,21 @@ mod tests {
 
         // Insert 5 entries with low reward (0.2 < threshold 0.3)
         for _ in 0..5 {
-            store.record_feedback(
-                &make_entry("skill-b", Outcome::Failure { reason: "timeout".to_string() }, 0.2)
-            ).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "skill-b",
+                    Outcome::Failure {
+                        reason: "timeout".to_string(),
+                    },
+                    0.2,
+                ))
+                .unwrap();
         }
 
-        optimizer.maybe_optimize("skill-b", &store, "original prompt").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-b", &store, "original prompt")
+            .await
+            .unwrap();
 
         // Provider should have been called once
         assert_eq!(provider.call_count(), 1, "model should be called once");
@@ -311,13 +329,11 @@ mod tests {
         assert_eq!(versions[0].skill_name, "skill-b");
 
         // OptimizerTriggered event should be emitted
-        let event = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            event_stream.next(),
-        )
-        .await
-        .expect("timed out waiting for event")
-        .expect("stream ended");
+        let event =
+            tokio::time::timeout(std::time::Duration::from_millis(100), event_stream.next())
+                .await
+                .expect("timed out waiting for event")
+                .expect("stream ended");
 
         assert!(
             matches!(event, LearningEvent::OptimizerTriggered { ref skill_name } if skill_name == "skill-b"),
@@ -340,15 +356,28 @@ mod tests {
 
         // Insert only 3 entries (< trigger_count of 10), with low reward
         for _ in 0..3 {
-            store.record_feedback(
-                &make_entry("skill-c", Outcome::Failure { reason: "error".to_string() }, 0.1)
-            ).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "skill-c",
+                    Outcome::Failure {
+                        reason: "error".to_string(),
+                    },
+                    0.1,
+                ))
+                .unwrap();
         }
 
-        optimizer.maybe_optimize("skill-c", &store, "original prompt").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-c", &store, "original prompt")
+            .await
+            .unwrap();
 
         // Provider should not be called
-        assert_eq!(provider.call_count(), 0, "model should not be called when entry count < trigger_count");
+        assert_eq!(
+            provider.call_count(),
+            0,
+            "model should not be called when entry count < trigger_count"
+        );
 
         // No versions stored
         let versions = store.get_prompt_versions("skill-c").unwrap();
@@ -370,19 +399,31 @@ mod tests {
 
         // Insert enough low-reward entries
         for _ in 0..10 {
-            store.record_feedback(
-                &make_entry("skill-d", Outcome::ToolError { tool: "bash".to_string() }, 0.1)
-            ).unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "skill-d",
+                    Outcome::ToolError {
+                        tool: "bash".to_string(),
+                    },
+                    0.1,
+                ))
+                .unwrap();
         }
 
         // First optimization — should produce version 1
-        optimizer.maybe_optimize("skill-d", &store, "original prompt").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-d", &store, "original prompt")
+            .await
+            .unwrap();
         let versions = store.get_prompt_versions("skill-d").unwrap();
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].version, 1);
 
         // Second optimization — should produce version 2
-        optimizer.maybe_optimize("skill-d", &store, "original prompt").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-d", &store, "original prompt")
+            .await
+            .unwrap();
         let versions = store.get_prompt_versions("skill-d").unwrap();
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[1].version, 2);
@@ -417,13 +458,21 @@ mod tests {
             .with_skills_dir(skills_dir.path());
 
         for _ in 0..5 {
-            store.record_feedback(
-                &make_entry("skill-e", Outcome::Failure { reason: "bad output".to_string() }, 0.1),
-            )
-            .unwrap();
+            store
+                .record_feedback(&make_entry(
+                    "skill-e",
+                    Outcome::Failure {
+                        reason: "bad output".to_string(),
+                    },
+                    0.1,
+                ))
+                .unwrap();
         }
 
-        optimizer.maybe_optimize("skill-e", &store, "original template body").await.unwrap();
+        optimizer
+            .maybe_optimize("skill-e", &store, "original template body")
+            .await
+            .unwrap();
 
         // Read back the skill file and verify the template was updated
         let updated = std::fs::read_to_string(&skill_file).unwrap();

@@ -19,6 +19,12 @@ The template body is rendered with [Tera](https://keats.github.io/tera/). The `{
 
 ## Running a skill
 
+**Command-style dispatch (Codex-friendly):**
+```
+agent007_dispatch command="$agent007 skill /my-skill my arguments here"
+agent007_dispatch command="$agent007 /my-skill my arguments here"
+```
+
 **Via MCP tool (from your AI editor):**
 ```
 agent007_skill_run trigger="/my-skill" args="my arguments here"
@@ -28,6 +34,8 @@ agent007_skill_run trigger="/my-skill" args="my arguments here"
 ```bash
 agent007 skill run /my-skill "my arguments here"
 ```
+
+`agent007_dispatch` is additive convenience. Direct skill tools still work.
 
 ## Installing skills
 
@@ -84,7 +92,7 @@ All built-in skills ship compiled into the binary and are available immediately 
 
 ## Hooks on skill execution
 
-When a skill runs via `agent007_skill_run`, the `on_skill_execute` hook fires with:
+When a skill runs via `agent007_skill_run` (including dispatch-routed skill calls), the `on_skill_execute` hook fires with:
 - `HOOK_SKILL` — the trigger name
 - `HOOK_ARGS` — the args passed to the skill
 

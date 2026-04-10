@@ -1,9 +1,9 @@
 // crates/personas/src/registry.rs
-use std::collections::HashMap;
-use std::path::Path;
-use agent007_core::{PersonaProvider, PersonaSpec};
 use crate::error::PersonaError;
 use crate::loader::load_user_overrides;
+use agent007_core::{PersonaProvider, PersonaSpec};
+use std::collections::HashMap;
+use std::path::Path;
 
 pub struct PersonaRegistry {
     personas: HashMap<String, PersonaSpec>,
@@ -347,7 +347,9 @@ mod tests {
     #[test]
     fn test_designer_persona_exists_and_uses_codex() {
         let registry = PersonaRegistry::built_in();
-        let spec = registry.get("TestDesigner").expect("TestDesigner must exist");
+        let spec = registry
+            .get("TestDesigner")
+            .expect("TestDesigner must exist");
         assert_eq!(spec.preferred_model, "codex");
     }
 
@@ -355,8 +357,16 @@ mod tests {
     fn all_personas_have_non_empty_system_prompt_and_description() {
         let registry = PersonaRegistry::built_in();
         for spec in registry.list() {
-            assert!(!spec.system_prompt.is_empty(), "empty system_prompt for {}", spec.name);
-            assert!(!spec.description.is_empty(), "empty description for {}", spec.name);
+            assert!(
+                !spec.system_prompt.is_empty(),
+                "empty system_prompt for {}",
+                spec.name
+            );
+            assert!(
+                !spec.description.is_empty(),
+                "empty description for {}",
+                spec.name
+            );
         }
     }
 
@@ -371,13 +381,27 @@ mod tests {
         let registry = PersonaRegistry::built_in();
         let names: Vec<String> = registry.list().into_iter().map(|p| p.name).collect();
         for expected in &[
-            "Researcher", "Architect", "Coder", "TestDesigner",
-            "SecurityReviewer", "PerformanceEngineer", "DocumentationWriter",
-            "DependencyManager", "DebugAgent", "CodeReviewer",
-            "ExpertCoder", "UIUXDesigner", "DocsManager",
-            "DevOpsEngineer", "DataEngineer",
+            "Researcher",
+            "Architect",
+            "Coder",
+            "TestDesigner",
+            "SecurityReviewer",
+            "PerformanceEngineer",
+            "DocumentationWriter",
+            "DependencyManager",
+            "DebugAgent",
+            "CodeReviewer",
+            "ExpertCoder",
+            "UIUXDesigner",
+            "DocsManager",
+            "DevOpsEngineer",
+            "DataEngineer",
         ] {
-            assert!(names.contains(&expected.to_string()), "missing persona: {}", expected);
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing persona: {}",
+                expected
+            );
         }
     }
 

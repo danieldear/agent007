@@ -92,8 +92,8 @@ impl TestRunner {
                 continue;
             }
 
-            let v: serde_json::Value = serde_json::from_str(line)
-                .map_err(|e| TestingError::ParseError(e.to_string()))?;
+            let v: serde_json::Value =
+                serde_json::from_str(line).map_err(|e| TestingError::ParseError(e.to_string()))?;
 
             let event_type = v["type"].as_str().unwrap_or("");
 
@@ -143,7 +143,14 @@ impl TestRunner {
         }
 
         let failed = failures.len();
-        Ok((RunSummary { total, passed, failed }, failures))
+        Ok((
+            RunSummary {
+                total,
+                passed,
+                failed,
+            },
+            failures,
+        ))
     }
 
     /// Tests that were passing in `previous` but now appear in `current_failures`.
@@ -216,7 +223,11 @@ mod tests {
         let previous = FailureReport {
             run_id: "prev".into(),
             timestamp: "t".into(),
-            summary: RunSummary { total: 2, passed: 2, failed: 0 },
+            summary: RunSummary {
+                total: 2,
+                passed: 2,
+                failed: 0,
+            },
             failures: vec![],
             coverage: CoverageResult::default(),
             regressions: vec![],
@@ -236,7 +247,11 @@ mod tests {
         let previous = FailureReport {
             run_id: "prev".into(),
             timestamp: "t".into(),
-            summary: RunSummary { total: 1, passed: 0, failed: 1 },
+            summary: RunSummary {
+                total: 1,
+                passed: 0,
+                failed: 1,
+            },
             failures: vec![TestFailure {
                 test: "foo::bar".into(),
                 error: "old".into(),
@@ -265,7 +280,11 @@ mod tests {
         let report = FailureReport {
             run_id: "test-id".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
-            summary: RunSummary { total: 3, passed: 3, failed: 0 },
+            summary: RunSummary {
+                total: 3,
+                passed: 3,
+                failed: 0,
+            },
             failures: vec![],
             coverage: CoverageResult::default(),
             regressions: vec![],

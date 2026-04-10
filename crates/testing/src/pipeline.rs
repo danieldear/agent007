@@ -60,11 +60,10 @@ impl TestStrategist {
         // Extract JSON block if the model wrapped it in markdown
         let json = extract_json_block(&resp.content);
 
-        serde_json::from_str::<TestPlan>(&json)
-            .map_err(|e| TestingError::StageFailed {
-                stage: "TestStrategist".into(),
-                reason: format!("could not parse TestPlan JSON: {e}"),
-            })
+        serde_json::from_str::<TestPlan>(&json).map_err(|e| TestingError::StageFailed {
+            stage: "TestStrategist".into(),
+            reason: format!("could not parse TestPlan JSON: {e}"),
+        })
     }
 }
 
@@ -111,11 +110,10 @@ impl TestDesigner {
 
         let json = extract_json_block(&resp.content);
 
-        serde_json::from_str::<Vec<TestCase>>(&json)
-            .map_err(|e| TestingError::StageFailed {
-                stage: "TestDesigner".into(),
-                reason: format!("could not parse TestCase list JSON: {e}"),
-            })
+        serde_json::from_str::<Vec<TestCase>>(&json).map_err(|e| TestingError::StageFailed {
+            stage: "TestDesigner".into(),
+            reason: format!("could not parse TestCase list JSON: {e}"),
+        })
     }
 }
 
@@ -193,10 +191,7 @@ pub struct DebugLoop {
 }
 
 impl DebugLoop {
-    pub async fn run(
-        &self,
-        mut report: FailureReport,
-    ) -> Result<FailureReport, TestingError> {
+    pub async fn run(&self, mut report: FailureReport) -> Result<FailureReport, TestingError> {
         if report.failures.is_empty() {
             return Ok(report);
         }
@@ -261,11 +256,7 @@ pub struct TestPipeline {
 }
 
 impl TestPipeline {
-    pub async fn run(
-        &self,
-        task: &str,
-        working_dir: &Path,
-    ) -> Result<FailureReport, TestingError> {
+    pub async fn run(&self, task: &str, working_dir: &Path) -> Result<FailureReport, TestingError> {
         tracing::info!(task, "TestPipeline: starting");
 
         // Stage 1: Strategy
@@ -356,7 +347,8 @@ mod tests {
 
     #[test]
     fn extract_json_block_bare() {
-        let input = r#"{"scope":"all","priority":"high","coverage_target":80,"test_types":["unit"]}"#;
+        let input =
+            r#"{"scope":"all","priority":"high","coverage_target":80,"test_types":["unit"]}"#;
         assert_eq!(extract_json_block(input), input);
     }
 

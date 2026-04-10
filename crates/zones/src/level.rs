@@ -22,24 +22,28 @@ impl ZoneLevel {
     pub fn priority(self) -> u8 {
         match self {
             ZoneLevel::Unrestricted => 0,
-            ZoneLevel::Readonly     => 1,
-            ZoneLevel::Sensitive    => 2,
-            ZoneLevel::Forbidden    => 3,
+            ZoneLevel::Readonly => 1,
+            ZoneLevel::Sensitive => 2,
+            ZoneLevel::Forbidden => 3,
         }
     }
 
     /// Most restrictive level wins (used when merging multiple ZoneConfigs).
     pub fn most_restrictive(self, other: ZoneLevel) -> ZoneLevel {
-        if other.priority() > self.priority() { other } else { self }
+        if other.priority() > self.priority() {
+            other
+        } else {
+            self
+        }
     }
 
     /// Returns the string label used in audit log JSON.
     pub fn as_str(self) -> &'static str {
         match self {
             ZoneLevel::Unrestricted => "unrestricted",
-            ZoneLevel::Readonly     => "readonly",
-            ZoneLevel::Sensitive    => "sensitive",
-            ZoneLevel::Forbidden    => "forbidden",
+            ZoneLevel::Readonly => "readonly",
+            ZoneLevel::Sensitive => "sensitive",
+            ZoneLevel::Forbidden => "forbidden",
         }
     }
 }
@@ -48,8 +52,8 @@ impl FileOp {
     /// Returns the string label used in audit log JSON.
     pub fn as_str(self) -> &'static str {
         match self {
-            FileOp::Read   => "read",
-            FileOp::Write  => "write",
+            FileOp::Read => "read",
+            FileOp::Write => "write",
             FileOp::Delete => "delete",
         }
     }
@@ -62,8 +66,8 @@ mod tests {
     #[test]
     fn zone_level_priority_ordering() {
         assert!(ZoneLevel::Unrestricted.priority() < ZoneLevel::Readonly.priority());
-        assert!(ZoneLevel::Readonly.priority()     < ZoneLevel::Sensitive.priority());
-        assert!(ZoneLevel::Sensitive.priority()    < ZoneLevel::Forbidden.priority());
+        assert!(ZoneLevel::Readonly.priority() < ZoneLevel::Sensitive.priority());
+        assert!(ZoneLevel::Sensitive.priority() < ZoneLevel::Forbidden.priority());
     }
 
     #[test]
@@ -85,15 +89,15 @@ mod tests {
     #[test]
     fn zone_level_as_str() {
         assert_eq!(ZoneLevel::Unrestricted.as_str(), "unrestricted");
-        assert_eq!(ZoneLevel::Readonly.as_str(),     "readonly");
-        assert_eq!(ZoneLevel::Sensitive.as_str(),    "sensitive");
-        assert_eq!(ZoneLevel::Forbidden.as_str(),    "forbidden");
+        assert_eq!(ZoneLevel::Readonly.as_str(), "readonly");
+        assert_eq!(ZoneLevel::Sensitive.as_str(), "sensitive");
+        assert_eq!(ZoneLevel::Forbidden.as_str(), "forbidden");
     }
 
     #[test]
     fn file_op_as_str() {
-        assert_eq!(FileOp::Read.as_str(),   "read");
-        assert_eq!(FileOp::Write.as_str(),  "write");
+        assert_eq!(FileOp::Read.as_str(), "read");
+        assert_eq!(FileOp::Write.as_str(), "write");
         assert_eq!(FileOp::Delete.as_str(), "delete");
     }
 }

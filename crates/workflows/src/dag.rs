@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use petgraph::graph::DiGraph;
-use petgraph::algo::toposort;
 use crate::error::WorkflowError;
-use crate::types::{WorkflowDef, StepType, RouteConfig};
+use crate::types::{RouteConfig, StepType, WorkflowDef};
+use petgraph::algo::toposort;
+use petgraph::graph::DiGraph;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct ValidatedDag {
@@ -41,10 +41,13 @@ impl<'a> DagValidator<'a> {
 
         for step in &self.def.steps {
             if step.r#type == StepType::Evaluator {
-                let eval = step.evaluate.as_ref().ok_or_else(|| WorkflowError::InvalidEvaluator {
-                    id: step.id.clone(),
-                    reason: "evaluator step must have an 'evaluate' config".to_string(),
-                })?;
+                let eval =
+                    step.evaluate
+                        .as_ref()
+                        .ok_or_else(|| WorkflowError::InvalidEvaluator {
+                            id: step.id.clone(),
+                            reason: "evaluator step must have an 'evaluate' config".to_string(),
+                        })?;
 
                 if !step_ids.contains(&eval.on_pass.as_str()) {
                     return Err(WorkflowError::InvalidEvaluator {
@@ -72,10 +75,13 @@ impl<'a> DagValidator<'a> {
         let mut router_branches = Vec::new();
         for step in &self.def.steps {
             if step.r#type == StepType::Router {
-                let routes = step.routes.as_ref().ok_or_else(|| WorkflowError::InvalidRouter {
-                    id: step.id.clone(),
-                    reason: "router step must have 'routes' config".to_string(),
-                })?;
+                let routes = step
+                    .routes
+                    .as_ref()
+                    .ok_or_else(|| WorkflowError::InvalidRouter {
+                        id: step.id.clone(),
+                        reason: "router step must have 'routes' config".to_string(),
+                    })?;
 
                 for route in routes {
                     if !step_ids.contains(&route.goto.as_str()) {
@@ -101,18 +107,27 @@ impl<'a> DagValidator<'a> {
         }
 
         let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let node_indices: Vec<_> = self.def.steps.iter()
+        let node_indices: Vec<_> = self
+            .def
+            .steps
+            .iter()
             .map(|s| graph.add_node(s.id.clone()))
             .collect();
-        let id_to_node: HashMap<String, _> = self.def.steps.iter()
+        let id_to_node: HashMap<String, _> = self
+            .def
+            .steps
+            .iter()
             .enumerate()
             .map(|(i, s)| (s.id.clone(), node_indices[i]))
             .collect();
 
         // Built-in input variables injected at runtime — not produced by any step.
         const BUILTIN_INPUTS: &[&str] = &[
-            "memory.project", "memory.user", "memory.global",
-            "rag_context", "task",
+            "memory.project",
+            "memory.user",
+            "memory.global",
+            "rag_context",
+            "task",
         ];
 
         for step in &self.def.steps {
@@ -122,12 +137,13 @@ impl<'a> DagValidator<'a> {
                 if BUILTIN_INPUTS.contains(&inp.as_str()) {
                     continue;
                 }
-                let producer = output_to_step.get(inp).ok_or_else(|| {
-                    WorkflowError::UnknownInput {
-                        id: step.id.clone(),
-                        input: inp.clone(),
-                    }
-                })?;
+                let producer =
+                    output_to_step
+                        .get(inp)
+                        .ok_or_else(|| WorkflowError::UnknownInput {
+                            id: step.id.clone(),
+                            input: inp.clone(),
+                        })?;
 
                 if evaluator_back_edge_set.contains_key(&(step.id.as_str(), producer.as_str())) {
                     continue;
@@ -138,12 +154,12 @@ impl<'a> DagValidator<'a> {
             }
 
             for dep in step.depends_on.iter().flatten() {
-                let from_node = id_to_node.get(dep).ok_or_else(|| {
-                    WorkflowError::UnknownInput {
+                let from_node = id_to_node
+                    .get(dep)
+                    .ok_or_else(|| WorkflowError::UnknownInput {
                         id: step.id.clone(),
                         input: dep.clone(),
-                    }
-                })?;
+                    })?;
 
                 if evaluator_back_edge_set.contains_key(&(step.id.as_str(), dep.as_str())) {
                     continue;
@@ -153,8 +169,7 @@ impl<'a> DagValidator<'a> {
             }
         }
 
-        let topo_order = toposort(&graph, None)
-            .map_err(|_| WorkflowError::CycleDetected)?;
+        let topo_order = toposort(&graph, None).map_err(|_| WorkflowError::CycleDetected)?;
 
         let mut level: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();
         for &node in &topo_order {
@@ -183,15 +198,23 @@ impl<'a> DagValidator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{StepDef, WorkflowDef, StepType, EvaluateConfig, RouteConfig};
+    use crate::types::{EvaluateConfig, RouteConfig, StepDef, StepType, WorkflowDef};
 
     fn make_step(id: &str, inputs: &[&str], depends_on: &[&str], output: Option<&str>) -> StepDef {
         StepDef {
             id: id.to_string(),
             agent: "TestAgent".to_string(),
             model: None,
-            inputs: if inputs.is_empty() { None } else { Some(inputs.iter().map(|s| s.to_string()).collect()) },
-            depends_on: if depends_on.is_empty() { None } else { Some(depends_on.iter().map(|s| s.to_string()).collect()) },
+            inputs: if inputs.is_empty() {
+                None
+            } else {
+                Some(inputs.iter().map(|s| s.to_string()).collect())
+            },
+            depends_on: if depends_on.is_empty() {
+                None
+            } else {
+                Some(depends_on.iter().map(|s| s.to_string()).collect())
+            },
             prompt: Some("do {{task}}".to_string()),
             skill: None,
             output: output.map(|s| s.to_string()),
@@ -204,7 +227,12 @@ mod tests {
     }
 
     fn make_def(steps: Vec<StepDef>) -> WorkflowDef {
-        WorkflowDef { name: "test".to_string(), description: None, steps, budget: None }
+        WorkflowDef {
+            name: "test".to_string(),
+            description: None,
+            steps,
+            budget: None,
+        }
     }
 
     #[test]
@@ -250,11 +278,12 @@ mod tests {
 
     #[test]
     fn unknown_input_artifact_is_detected() {
-        let def = make_def(vec![
-            make_step("a", &["nonexistent_output"], &[], None),
-        ]);
+        let def = make_def(vec![make_step("a", &["nonexistent_output"], &[], None)]);
         let err = DagValidator::new(&def).validate().unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::UnknownInput { .. }));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::UnknownInput { .. }
+        ));
     }
 
     #[test]
@@ -294,7 +323,10 @@ mod tests {
             make_step("done", &[], &["review"], None),
         ]);
         let result = DagValidator::new(&def).validate();
-        assert!(result.is_ok(), "evaluator back-edge should not be detected as a cycle");
+        assert!(
+            result.is_ok(),
+            "evaluator back-edge should not be detected as a cycle"
+        );
         let dag = result.unwrap();
         assert_eq!(dag.back_edges.len(), 1);
         assert_eq!(dag.back_edges[0].evaluator_step, "review");
@@ -306,8 +338,16 @@ mod tests {
         let mut router_step = make_step("classify", &[], &[], Some("classification"));
         router_step.r#type = StepType::Router;
         router_step.routes = Some(vec![
-            RouteConfig { when: Some("frontend".to_string()), goto: "ui".to_string(), default: false },
-            RouteConfig { when: None, goto: "api".to_string(), default: true },
+            RouteConfig {
+                when: Some("frontend".to_string()),
+                goto: "ui".to_string(),
+                default: false,
+            },
+            RouteConfig {
+                when: None,
+                goto: "api".to_string(),
+                default: true,
+            },
         ]);
 
         let def = make_def(vec![
@@ -326,9 +366,11 @@ mod tests {
     fn router_with_invalid_goto_fails() {
         let mut router_step = make_step("classify", &[], &[], None);
         router_step.r#type = StepType::Router;
-        router_step.routes = Some(vec![
-            RouteConfig { when: Some("x".to_string()), goto: "nonexistent".to_string(), default: false },
-        ]);
+        router_step.routes = Some(vec![RouteConfig {
+            when: Some("x".to_string()),
+            goto: "nonexistent".to_string(),
+            default: false,
+        }]);
 
         let def = make_def(vec![router_step]);
         let result = DagValidator::new(&def).validate();
@@ -347,19 +389,38 @@ mod tests {
 
     #[test]
     fn builtin_inputs_do_not_trigger_unknown_input_error() {
-        let def = make_def(vec![
-            make_step("a", &["memory.project", "memory.user", "memory.global", "rag_context", "task"], &[], None),
-        ]);
+        let def = make_def(vec![make_step(
+            "a",
+            &[
+                "memory.project",
+                "memory.user",
+                "memory.global",
+                "rag_context",
+                "task",
+            ],
+            &[],
+            None,
+        )]);
         let result = DagValidator::new(&def).validate();
-        assert!(result.is_ok(), "builtin inputs should not fail validation: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "builtin inputs should not fail validation: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn non_builtin_unknown_input_still_fails() {
-        let def = make_def(vec![
-            make_step("a", &["definitely_unknown_output"], &[], None),
-        ]);
+        let def = make_def(vec![make_step(
+            "a",
+            &["definitely_unknown_output"],
+            &[],
+            None,
+        )]);
         let err = DagValidator::new(&def).validate().unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::UnknownInput { .. }));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::UnknownInput { .. }
+        ));
     }
 }

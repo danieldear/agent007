@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use async_trait::async_trait;
-use tracing::instrument;
 use crate::error::ModelError;
 use crate::provider::ModelProvider;
 use crate::types::{CompletionRequest, CompletionResponse};
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::instrument;
 
 pub struct ModelRouter {
     providers: HashMap<String, Arc<dyn ModelProvider>>,
@@ -29,18 +29,17 @@ impl ModelRouter {
     }
 
     pub fn add_rule(&mut self, task_type: &str, provider_name: &str) {
-        self.rules.insert(task_type.to_string(), provider_name.to_string());
+        self.rules
+            .insert(task_type.to_string(), provider_name.to_string());
     }
 
     pub fn alias(&mut self, alias: &str, provider_name: &str) {
-        self.aliases.insert(alias.to_string(), provider_name.to_string());
+        self.aliases
+            .insert(alias.to_string(), provider_name.to_string());
     }
 
     fn resolve_provider_name<'a>(&'a self, key: &'a str) -> &'a str {
-        self.aliases
-            .get(key)
-            .map(String::as_str)
-            .unwrap_or(key)
+        self.aliases.get(key).map(String::as_str).unwrap_or(key)
     }
 
     /// Route a task type to the appropriate provider.
@@ -57,17 +56,20 @@ impl ModelRouter {
         };
 
         // Look up provider, fall back to default if not found
-        let provider = self.providers
+        let provider = self
+            .providers
             .get(provider_name)
             .cloned()
             .unwrap_or_else(|| {
                 self.providers
                     .get(self.default.as_str())
                     .cloned()
-                    .unwrap_or_else(|| panic!(
+                    .unwrap_or_else(|| {
+                        panic!(
                         "default provider '{}' is not registered — call register() before route()",
                         self.default
-                    ))
+                    )
+                    })
             });
         tracing::Span::current().record("provider", provider.name());
         provider
@@ -111,9 +113,15 @@ mod tests {
 
     fn make_router() -> ModelRouter {
         let mut r = ModelRouter::new("claude");
-        r.register("claude", Arc::new(MockProvider::new("claude-resp", "claude")));
+        r.register(
+            "claude",
+            Arc::new(MockProvider::new("claude-resp", "claude")),
+        );
         r.register("codex", Arc::new(MockProvider::new("codex-resp", "codex")));
-        r.register("ollama", Arc::new(MockProvider::new("ollama-resp", "ollama")));
+        r.register(
+            "ollama",
+            Arc::new(MockProvider::new("ollama-resp", "ollama")),
+        );
         r
     }
 
@@ -128,7 +136,7 @@ mod tests {
         let mut r = make_router();
         r.add_rule("code_completion", "codex");
         assert_eq!(r.route("code_completion").name(), "codex");
-        assert_eq!(r.route("reasoning").name(), "claude");  // no rule → default
+        assert_eq!(r.route("reasoning").name(), "claude"); // no rule → default
     }
 
     #[tokio::test]
@@ -136,11 +144,20 @@ mod tests {
         use crate::types::{CompletionRequest, Message, Role};
         let mut r = make_router();
         r.add_rule("code_completion", "codex");
-        let resp = r.route("code_completion").complete(CompletionRequest {
-            model: "any".into(),
-            messages: vec![Message { role: Role::User, content: "write code".into() }],
-            max_tokens: None, temperature: None, system: None,
-        }).await.unwrap();
+        let resp = r
+            .route("code_completion")
+            .complete(CompletionRequest {
+                model: "any".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: "write code".into(),
+                }],
+                max_tokens: None,
+                temperature: None,
+                system: None,
+            })
+            .await
+            .unwrap();
         assert_eq!(resp.content, "codex-resp");
     }
 
@@ -151,13 +168,19 @@ mod tests {
         r.alias("claude-sonnet-4-6", "claude");
         r.alias("gpt-5.3-codex", "codex");
 
-        let resp = r.complete(CompletionRequest {
-            model: "gpt-5.3-codex".into(),
-            messages: vec![Message { role: Role::User, content: "write code".into() }],
-            max_tokens: None,
-            temperature: None,
-            system: None,
-        }).await.unwrap();
+        let resp = r
+            .complete(CompletionRequest {
+                model: "gpt-5.3-codex".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: "write code".into(),
+                }],
+                max_tokens: None,
+                temperature: None,
+                system: None,
+            })
+            .await
+            .unwrap();
 
         assert_eq!(resp.content, "codex-resp");
     }

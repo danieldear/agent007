@@ -1,5 +1,5 @@
-use std::path::Path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct HookConfig {
@@ -21,7 +21,9 @@ struct HookEntry {
     enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// On-disk wrapper for the `[[hooks]]` array format.
 #[derive(Debug, Deserialize)]
@@ -32,8 +34,11 @@ struct ArrayHookFile {
 
 impl HookConfig {
     pub fn load(path: &Path) -> Result<Self, crate::error::HookError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::error::HookError::ConfigRead { path: path.to_path_buf(), source: e })?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| crate::error::HookError::ConfigRead {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
 
         // Try flat format first (`pre_agent_run = "cmd"`).
         // If that succeeds and at least one field is set, use it.
@@ -51,8 +56,8 @@ impl HookConfig {
         }
 
         // Fall back to `[[hooks]]` array format.
-        let file: ArrayHookFile = toml::from_str(&content)
-            .map_err(crate::error::HookError::ConfigParse)?;
+        let file: ArrayHookFile =
+            toml::from_str(&content).map_err(crate::error::HookError::ConfigParse)?;
 
         let mut cfg = HookConfig::default();
         for entry in file.hooks {
@@ -61,15 +66,18 @@ impl HookConfig {
             }
             let cmd = Some(entry.command);
             match entry.event.as_str() {
-                "task_start" | "pre_agent_run"   => cfg.pre_agent_run   = cmd,
+                "task_start" | "pre_agent_run" => cfg.pre_agent_run = cmd,
                 "task_complete" | "post_agent_run" => cfg.post_agent_run = cmd,
-                "post_task_complete"               => cfg.post_task_complete = cmd,
-                "pre_tool_call"                    => cfg.pre_tool_call  = cmd,
-                "post_tool_call" | "tool_blocked"  => cfg.post_tool_call = cmd,
-                "on_memory_write"                  => cfg.on_memory_write = cmd,
-                "on_skill_execute"                 => cfg.on_skill_execute = cmd,
+                "post_task_complete" => cfg.post_task_complete = cmd,
+                "pre_tool_call" => cfg.pre_tool_call = cmd,
+                "post_tool_call" | "tool_blocked" => cfg.post_tool_call = cmd,
+                "on_memory_write" => cfg.on_memory_write = cmd,
+                "on_skill_execute" => cfg.on_skill_execute = cmd,
                 other => {
-                    tracing::warn!(event = other, "unknown hook event name in hooks.toml — skipping");
+                    tracing::warn!(
+                        event = other,
+                        "unknown hook event name in hooks.toml — skipping"
+                    );
                 }
             }
         }
@@ -110,10 +118,14 @@ mod tests {
     #[test]
     fn parse_hooks_toml_with_values() {
         let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, r#"
+        writeln!(
+            f,
+            r#"
 pre_agent_run = "echo pre"
 post_agent_run = "echo post"
-"#).unwrap();
+"#
+        )
+        .unwrap();
         let cfg = HookConfig::load(f.path()).unwrap();
         assert_eq!(cfg.pre_agent_run.as_deref(), Some("echo pre"));
         assert_eq!(cfg.post_agent_run.as_deref(), Some("echo post"));

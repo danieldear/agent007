@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -104,11 +104,7 @@ impl RunStore {
     }
 
     pub fn append_event(&self, run_id: &str, event: &AgentEvent) -> Result<(), CoreError> {
-        self.append_entry(
-            run_id,
-            "agent-event",
-            serde_json::to_value(event)?,
-        )?;
+        self.append_entry(run_id, "agent-event", serde_json::to_value(event)?)?;
         if let AgentEvent::ModelRequest { token_estimate, .. } = event {
             self.bump_token_summary(run_id, *token_estimate)?;
         }
@@ -208,9 +204,7 @@ impl RunStore {
             // finished_at=None come from the hosted workflow path (update_run_status)
             // and represent legitimate human-in-the-loop pauses — failing them on
             // restart is incorrect. They persist so the user can resume or cancel manually.
-            if matches!(metadata.status, RunStatus::Running)
-                && metadata.finished_at.is_none()
-            {
+            if matches!(metadata.status, RunStatus::Running) && metadata.finished_at.is_none() {
                 metadata.status = RunStatus::Failed;
                 metadata.finished_at = Some(Utc::now());
                 let preview = "terminated: server restarted";
@@ -327,11 +321,7 @@ impl RunStore {
         self.read_json_artifact(run_id, filename).map(Some)
     }
 
-    pub fn read_text_artifact(
-        &self,
-        run_id: &str,
-        filename: &str,
-    ) -> Result<String, CoreError> {
+    pub fn read_text_artifact(&self, run_id: &str, filename: &str) -> Result<String, CoreError> {
         let artifact_path = self.artifact_path(run_id, filename);
         std::fs::read_to_string(&artifact_path)
             .map_err(|error| CoreError::io(&artifact_path, error))
@@ -356,7 +346,8 @@ impl RunStore {
         }
 
         let mut artifacts = Vec::new();
-        let entries = std::fs::read_dir(&run_dir).map_err(|error| CoreError::io(&run_dir, error))?;
+        let entries =
+            std::fs::read_dir(&run_dir).map_err(|error| CoreError::io(&run_dir, error))?;
         for entry in entries {
             let entry = entry.map_err(|error| CoreError::io(&run_dir, error))?;
             let path = entry.path();
@@ -423,8 +414,8 @@ impl RunStore {
         if !log_path.exists() {
             return Ok(false);
         }
-        let file = std::fs::File::open(&log_path)
-            .map_err(|error| CoreError::io(&log_path, error))?;
+        let file =
+            std::fs::File::open(&log_path).map_err(|error| CoreError::io(&log_path, error))?;
         let reader = BufReader::new(file);
         for line in reader.lines() {
             let line = line.map_err(|error| CoreError::io(&log_path, error))?;
@@ -477,8 +468,8 @@ impl RunStore {
         if !log_path.exists() {
             return Ok(RunTokenSummary::default());
         }
-        let file = std::fs::File::open(&log_path)
-            .map_err(|error| CoreError::io(&log_path, error))?;
+        let file =
+            std::fs::File::open(&log_path).map_err(|error| CoreError::io(&log_path, error))?;
         let reader = BufReader::new(file);
         let mut summary = RunTokenSummary::default();
         for line in reader.lines() {
@@ -573,7 +564,9 @@ fn shared_token_summary_lock(base_dir: &PathBuf) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
         OnceLock::new();
     let locks = LOCKS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let mut guard = locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard
         .entry(base_dir.clone())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -685,7 +678,9 @@ mod tests {
     async fn dispatcher_trace_persists_agent_events() {
         let dir = tempfile::tempdir().unwrap();
         let store = RunStore::new(dir.path());
-        let run = store.create_run("task", "trace me", "standalone", Some("mock")).unwrap();
+        let run = store
+            .create_run("task", "trace me", "standalone", Some("mock"))
+            .unwrap();
         let dispatcher = LocalDispatcher::new(8);
         let trace = store
             .spawn_dispatcher_trace(
@@ -724,9 +719,13 @@ mod tests {
     fn list_runs_returns_latest_first() {
         let dir = tempfile::tempdir().unwrap();
         let store = RunStore::new(dir.path());
-        let first = store.create_run("task", "first", "standalone", Some("codex")).unwrap();
+        let first = store
+            .create_run("task", "first", "standalone", Some("codex"))
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        let second = store.create_run("task", "second", "standalone", Some("codex")).unwrap();
+        let second = store
+            .create_run("task", "second", "standalone", Some("codex"))
+            .unwrap();
 
         let runs = store.list_runs(10).unwrap();
         assert_eq!(runs[0].id, second.id);
@@ -739,10 +738,14 @@ mod tests {
         let store = RunStore::new(dir.path());
 
         // Create two runs: one that finishes normally, one left open (simulates crash)
-        let finished = store.create_run("task", "done", "standalone", None).unwrap();
+        let finished = store
+            .create_run("task", "done", "standalone", None)
+            .unwrap();
         store.finish_run(&finished.id, true, "ok").unwrap();
 
-        let stale = store.create_run("task", "stale", "standalone", None).unwrap();
+        let stale = store
+            .create_run("task", "stale", "standalone", None)
+            .unwrap();
         assert_eq!(stale.status, RunStatus::Running);
         assert!(stale.finished_at.is_none());
 
@@ -752,7 +755,10 @@ mod tests {
         let updated = store.load_run(&stale.id).unwrap().metadata;
         assert_eq!(updated.status, RunStatus::Failed);
         assert!(updated.finished_at.is_some());
-        assert_eq!(updated.output_preview.as_deref(), Some("terminated: server restarted"));
+        assert_eq!(
+            updated.output_preview.as_deref(),
+            Some("terminated: server restarted")
+        );
 
         // The already-finished run should not be touched
         let still_ok = store.load_run(&finished.id).unwrap().metadata;

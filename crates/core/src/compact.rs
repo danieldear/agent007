@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::budget::{CompactLevel, estimate_tokens};
+use crate::budget::{estimate_tokens, CompactLevel};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactOutput {
@@ -19,11 +19,7 @@ pub struct CompactOutput {
     pub summary: String,
 }
 
-pub fn compact_command_output(
-    command: &str,
-    output: &str,
-    level: CompactLevel,
-) -> CompactOutput {
+pub fn compact_command_output(command: &str, output: &str, level: CompactLevel) -> CompactOutput {
     let strategy = command_key(command);
     let summary = match strategy.as_str() {
         "git-status" => compact_git_status(output),
@@ -160,9 +156,12 @@ fn compact_git_diff(output: &str, level: CompactLevel) -> String {
 
     let file_limit = level_limit(level, 8, 5, 3);
     let hunk_limit = level_limit(level, 3, 2, 1);
-    let mut lines = vec![
-        format!("Git diff summary: {} files changed, +{} / -{}", files.len(), adds, dels),
-    ];
+    let mut lines = vec![format!(
+        "Git diff summary: {} files changed, +{} / -{}",
+        files.len(),
+        adds,
+        dels
+    )];
     for (file, hunks) in files.iter().take(file_limit) {
         lines.push(format!("FILE {}", file));
         for hunk in hunks.iter().take(hunk_limit) {
@@ -170,7 +169,10 @@ fn compact_git_diff(output: &str, level: CompactLevel) -> String {
         }
     }
     if files.len() > file_limit {
-        lines.push(format!("... {} more files omitted", files.len() - file_limit));
+        lines.push(format!(
+            "... {} more files omitted",
+            files.len() - file_limit
+        ));
     }
     lines.join("\n")
 }
@@ -191,7 +193,10 @@ fn compact_test_output(output: &str, level: CompactLevel) -> String {
             errors += 1;
         } else if trimmed.starts_with("warning:") {
             warnings += 1;
-        } else if trimmed.contains("test result:") || trimmed.contains("passed in") || trimmed == "PASS" {
+        } else if trimmed.contains("test result:")
+            || trimmed.contains("passed in")
+            || trimmed == "PASS"
+        {
             summary = Some(trimmed.to_string());
         }
     }
@@ -215,7 +220,10 @@ fn compact_test_output(output: &str, level: CompactLevel) -> String {
             lines.push(format!("  {}", failure));
         }
         if failures.len() > fail_limit {
-            lines.push(format!("... {} more failures omitted", failures.len() - fail_limit));
+            lines.push(format!(
+                "... {} more failures omitted",
+                failures.len() - fail_limit
+            ));
         }
     }
     lines.join("\n")
@@ -226,7 +234,9 @@ fn compact_search_output(output: &str, level: CompactLevel) -> String {
     for line in output.lines() {
         let mut parts = line.splitn(3, ':');
         let Some(path) = parts.next() else { continue };
-        let Some(line_no) = parts.next() else { continue };
+        let Some(line_no) = parts.next() else {
+            continue;
+        };
         let Some(rest) = parts.next() else { continue };
         by_file
             .entry(path.to_string())
@@ -248,7 +258,10 @@ fn compact_search_output(output: &str, level: CompactLevel) -> String {
         }
     }
     if by_file.len() > file_limit {
-        lines.push(format!("... {} more files omitted", by_file.len() - file_limit));
+        lines.push(format!(
+            "... {} more files omitted",
+            by_file.len() - file_limit
+        ));
     }
     lines.join("\n")
 }
@@ -267,7 +280,10 @@ fn compact_list_output(output: &str, level: CompactLevel) -> String {
         lines.push(entry.to_string());
     }
     if entries.len() > limit {
-        lines.push(format!("... {} more entries omitted", entries.len() - limit));
+        lines.push(format!(
+            "... {} more entries omitted",
+            entries.len() - limit
+        ));
     }
     lines.join("\n")
 }
@@ -301,7 +317,10 @@ fn compact_read_output(output: &str, level: CompactLevel) -> String {
             lines.push(format!("  {}", signature));
         }
         if signatures.len() > signature_limit {
-            lines.push(format!("... {} more signatures omitted", signatures.len() - signature_limit));
+            lines.push(format!(
+                "... {} more signatures omitted",
+                signatures.len() - signature_limit
+            ));
         }
     }
     lines.push("Excerpt:".to_string());
@@ -334,9 +353,21 @@ fn compact_generic_output(output: &str, level: CompactLevel) -> String {
 
 fn looks_like_signature(line: &str) -> bool {
     let prefixes = [
-        "fn ", "pub fn ", "async fn ", "pub async fn ", "struct ", "pub struct ",
-        "enum ", "pub enum ", "trait ", "pub trait ", "impl ", "class ",
-        "interface ", "def ", "function ",
+        "fn ",
+        "pub fn ",
+        "async fn ",
+        "pub async fn ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "trait ",
+        "pub trait ",
+        "impl ",
+        "class ",
+        "interface ",
+        "def ",
+        "function ",
     ];
     prefixes.iter().any(|prefix| line.starts_with(prefix))
 }
@@ -350,7 +381,11 @@ fn push_group(lines: &mut Vec<String>, label: &str, items: &[String], limit: usi
         lines.push(format!("  {}", item));
     }
     if items.len() > limit {
-        lines.push(format!("... {} more {} entries omitted", items.len() - limit, label.to_lowercase()));
+        lines.push(format!(
+            "... {} more {} entries omitted",
+            items.len() - limit,
+            label.to_lowercase()
+        ));
     }
 }
 

@@ -157,13 +157,14 @@ agent007 replay <run-id>       Replay a past run
 
 ---
 
-## MCP tools (44 total)
+## MCP tools (45+ total)
 
 These are available to your AI editor once `agent007 serve` is running.
 
 ### Core
 | Tool | Description |
 |------|-------------|
+| `agent007_dispatch` | Dispatch a command-style request to run/skill/workflow tools (`$agent007 ...`) |
 | `agent007_run` | Run a task through the full agent stack |
 | `agent007_task_submit` | Submit a task to the orchestrator queue |
 | `agent007_help` | Show available tools and capabilities |
@@ -349,6 +350,18 @@ Vector search via LanceDB is available when configured.
 | Zed | `~/.config/zed/settings.json` | `agent007 init --zed` |
 
 `agent007 init` (no flags) registers all of the above at once.
+
+### Codex command-style dispatch
+
+From Codex, you can use one MCP tool for slash-like ergonomics:
+
+```
+agent007_dispatch command="$agent007 wf tdd add login rate limiting"
+agent007_dispatch command="$agent007 skill /brainstorm onboarding ideas"
+agent007_dispatch command="$agent007 run refactor auth module"
+```
+
+This is additive convenience; direct tools (`agent007_workflow_run`, `agent007_skill_run`, `agent007_run`) still work.
 
 ---
 

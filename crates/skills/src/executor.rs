@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::error::SkillError;
+use crate::types::Skill;
 use agent007_lsp_client::LspClient;
 use agent007_memory::{Retriever, ScopedMemoryStore};
 use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
-use crate::error::SkillError;
-use crate::types::Skill;
+use std::sync::Arc;
 
 pub struct SkillExecutor {
     provider: Arc<dyn ModelProvider>,
@@ -47,26 +47,54 @@ impl SkillExecutor {
 
     pub async fn execute(&self, skill: &Skill, args: &str) -> Result<String, SkillError> {
         // 1. RAG context
-        let rag_context = self.retriever.retrieve(args).await
-            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
+        let rag_context = self
+            .retriever
+            .retrieve(args)
+            .await
+            .map_err(|e| SkillError::Memory {
+                name: skill.name().to_string(),
+                source: e,
+            })?;
 
         // 2. Read memory values — data lives at <scope>/<key>.md, so read the full scope
-        let memory_user = self.memory.inner.scoped("user").read_all()
-            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
-        let memory_project = self.memory.inner.scoped("project").read_all()
-            .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?;
+        let memory_user =
+            self.memory
+                .inner
+                .scoped("user")
+                .read_all()
+                .map_err(|e| SkillError::Memory {
+                    name: skill.name().to_string(),
+                    source: e,
+                })?;
+        let memory_project = self
+            .memory
+            .inner
+            .scoped("project")
+            .read_all()
+            .map_err(|e| SkillError::Memory {
+                name: skill.name().to_string(),
+                source: e,
+            })?;
         let memory_global = match &self.global_memory {
-            Some(store) => store.read_all()
-                .map_err(|e| SkillError::Memory { name: skill.name().to_string(), source: e })?,
+            Some(store) => store.read_all().map_err(|e| SkillError::Memory {
+                name: skill.name().to_string(),
+                source: e,
+            })?,
             None => String::new(),
         };
 
         // 3. LSP context — auto-detect language server and inject diagnostics/symbols
-        let lsp_context_str = if self.lsp_inject_categories.iter().any(|c| c == skill.category()) {
+        let lsp_context_str = if self
+            .lsp_inject_categories
+            .iter()
+            .any(|c| c == skill.category())
+        {
             let cwd = std::env::current_dir().unwrap_or_default();
             if let Some((_lang, server_cmd)) = LspClient::detect_language(&cwd) {
                 let client = LspClient::new(server_cmd);
-                client.query(&cwd, &[]).await
+                client
+                    .query(&cwd, &[])
+                    .await
                     .map(|ctx| ctx.to_prompt_string())
                     .unwrap_or_default()
             } else {
@@ -82,16 +110,23 @@ impl SkillExecutor {
         ctx.insert("task", args);
         ctx.insert("rag_context", &rag_context);
         ctx.insert("lsp_context", &lsp_context_str);
-        ctx.insert("memory", &serde_json::json!({
-            "user": memory_user,
-            "project": memory_project,
-            "global": memory_global,
-        }));
+        ctx.insert(
+            "memory",
+            &serde_json::json!({
+                "user": memory_user,
+                "project": memory_project,
+                "global": memory_global,
+            }),
+        );
         ctx.insert("date", &chrono::Utc::now().format("%Y-%m-%d").to_string());
 
         // 4. Render template (autoescape = false to avoid HTML-escaping memory content)
-        let rendered = tera::Tera::one_off(skill.template(), &ctx, false)
-            .map_err(|e| SkillError::TemplateRender { name: skill.name().to_string(), source: e })?;
+        let rendered = tera::Tera::one_off(skill.template(), &ctx, false).map_err(|e| {
+            SkillError::TemplateRender {
+                name: skill.name().to_string(),
+                source: e,
+            }
+        })?;
 
         // 5. Resolve provider: use category-based routing if router is available
         let provider: Arc<dyn ModelProvider> = if let Some(router) = &self.router {
@@ -102,14 +137,22 @@ impl SkillExecutor {
 
         let request = CompletionRequest {
             model: skill.model().to_string(),
-            messages: vec![Message { role: Role::User, content: rendered }],
+            messages: vec![Message {
+                role: Role::User,
+                content: rendered,
+            }],
             max_tokens: None,
             temperature: None,
             system: None,
         };
 
-        let response = provider.complete(request).await
-            .map_err(|e| SkillError::Model { name: skill.name().to_string(), source: e })?;
+        let response = provider
+            .complete(request)
+            .await
+            .map_err(|e| SkillError::Model {
+                name: skill.name().to_string(),
+                source: e,
+            })?;
 
         Ok(response.content)
     }
@@ -118,11 +161,16 @@ impl SkillExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent007_memory::{MemoryError, MemoryStore, Retriever, SearchResult, VectorDB};
-    use agent007_models::{EmbeddingProvider, ModelError, ModelProvider, CompletionRequest, CompletionResponse};
-    use async_trait::async_trait;
     use crate::types::{Skill, SkillFrontmatter};
-    use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+    use agent007_memory::{MemoryError, MemoryStore, Retriever, SearchResult, VectorDB};
+    use agent007_models::{
+        CompletionRequest, CompletionResponse, EmbeddingProvider, ModelError, ModelProvider,
+    };
+    use async_trait::async_trait;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
     use tempfile::TempDir;
 
     struct MockModelProvider {
@@ -136,12 +184,19 @@ mod tests {
                 last_model: Arc::new(Mutex::new(None)),
             }
         }
-        fn call_count(&self) -> usize { self.calls.load(Ordering::SeqCst) }
-        fn last_model(&self) -> Option<String> { self.last_model.lock().unwrap().clone() }
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+        fn last_model(&self) -> Option<String> {
+            self.last_model.lock().unwrap().clone()
+        }
     }
     #[async_trait]
     impl ModelProvider for MockModelProvider {
-        async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, ModelError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             *self.last_model.lock().unwrap() = Some(request.model.clone());
             Ok(CompletionResponse {
@@ -151,7 +206,9 @@ mod tests {
                 output_tokens: None,
             })
         }
-        fn name(&self) -> &str { "mock" }
+        fn name(&self) -> &str {
+            "mock"
+        }
     }
 
     struct FixedEmbedder;
@@ -160,14 +217,29 @@ mod tests {
         async fn embed(&self, _text: &str) -> Result<Vec<f32>, ModelError> {
             Ok(vec![0.0; 4])
         }
-        fn name(&self) -> &str { "fixed" }
+        fn name(&self) -> &str {
+            "fixed"
+        }
     }
 
-    struct FixedVectorDB { fragment: String }
+    struct FixedVectorDB {
+        fragment: String,
+    }
     #[async_trait]
     impl VectorDB for FixedVectorDB {
-        async fn upsert(&self, _id: &str, _v: Vec<f32>, _p: serde_json::Value) -> Result<(), MemoryError> { Ok(()) }
-        async fn search(&self, _q: Vec<f32>, _limit: usize) -> Result<Vec<SearchResult>, MemoryError> {
+        async fn upsert(
+            &self,
+            _id: &str,
+            _v: Vec<f32>,
+            _p: serde_json::Value,
+        ) -> Result<(), MemoryError> {
+            Ok(())
+        }
+        async fn search(
+            &self,
+            _q: Vec<f32>,
+            _limit: usize,
+        ) -> Result<Vec<SearchResult>, MemoryError> {
             Ok(vec![SearchResult {
                 id: "x".to_string(),
                 score: 1.0,
@@ -193,7 +265,9 @@ mod tests {
 
     fn make_executor(dir: &std::path::Path, provider: Arc<MockModelProvider>) -> SkillExecutor {
         let embedder = Arc::new(FixedEmbedder) as Arc<dyn EmbeddingProvider>;
-        let db = Arc::new(FixedVectorDB { fragment: "rag-fragment".to_string() }) as Arc<dyn VectorDB>;
+        let db = Arc::new(FixedVectorDB {
+            fragment: "rag-fragment".to_string(),
+        }) as Arc<dyn VectorDB>;
         let retriever = Arc::new(Retriever::new(embedder, db, 1));
         let store = Arc::new(MemoryStore::new(dir));
         let memory = store.global();
@@ -205,7 +279,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let provider = Arc::new(MockModelProvider::new());
         let executor = make_executor(dir.path(), Arc::clone(&provider));
-        let skill = make_skill("User: {{memory.user}} RAG: {{rag_context}} Args: {{args}}", "claude");
+        let skill = make_skill(
+            "User: {{memory.user}} RAG: {{rag_context}} Args: {{args}}",
+            "claude",
+        );
         let result = executor.execute(&skill, "hello").await.unwrap();
         assert_eq!(result, "mock-output");
     }

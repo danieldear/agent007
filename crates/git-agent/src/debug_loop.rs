@@ -1,9 +1,9 @@
 // crates/git-agent/src/debug_loop.rs
-use std::sync::Arc;
 use crate::agent::GitAgent;
 use crate::error::GitAgentError;
-use agent007_models::provider::ModelProvider;
 use agent007_core::dispatcher::Dispatcher;
+use agent007_models::provider::ModelProvider;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct TestFailure {
@@ -42,9 +42,7 @@ impl DebugLoop {
         let workdir = git_agent
             .repo
             .workdir()
-            .ok_or_else(|| {
-                GitAgentError::ImpactAnalysis("bare repository not supported".into())
-            })?
+            .ok_or_else(|| GitAgentError::ImpactAnalysis("bare repository not supported".into()))?
             .to_path_buf();
 
         let mut iterations = 0;
@@ -140,9 +138,7 @@ pub fn parse_nextest_failures(output: &str) -> Vec<TestFailure> {
 
 /// Build a prompt asking the model to fix the given test failures.
 fn build_fix_prompt(failures: &[TestFailure], workdir: &std::path::Path) -> String {
-    let mut prompt = String::from(
-        "The following tests are failing. Propose a minimal fix.\n\n",
-    );
+    let mut prompt = String::from("The following tests are failing. Propose a minimal fix.\n\n");
     for f in failures {
         prompt.push_str(&format!(
             "## Failing test: {}\nError output:\n{}\n\n",
@@ -151,7 +147,11 @@ fn build_fix_prompt(failures: &[TestFailure], workdir: &std::path::Path) -> Stri
         // Attempt to read the source file for context
         if let Some(file_path) = test_name_to_path(&f.test_name, workdir) {
             if let Ok(content) = std::fs::read_to_string(&file_path) {
-                prompt.push_str(&format!("### Source ({}):\n```rust\n{}\n```\n\n", file_path.display(), content));
+                prompt.push_str(&format!(
+                    "### Source ({}):\n```rust\n{}\n```\n\n",
+                    file_path.display(),
+                    content
+                ));
             }
         }
     }
@@ -170,7 +170,10 @@ fn test_name_to_path(test_name: &str, workdir: &std::path::Path) -> Option<std::
         return None;
     }
     // Try src/<part1>/<part2>.rs etc.
-    let candidate = workdir.join("src").join(parts[..parts.len() - 1].join("/")).with_extension("rs");
+    let candidate = workdir
+        .join("src")
+        .join(parts[..parts.len() - 1].join("/"))
+        .with_extension("rs");
     if candidate.exists() {
         Some(candidate)
     } else {

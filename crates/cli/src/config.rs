@@ -1,7 +1,7 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use anyhow::Result;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CoreConfig {
@@ -10,10 +10,19 @@ pub struct CoreConfig {
     #[serde(default = "default_task_queue_capacity")]
     pub task_queue_capacity: usize,
 }
-fn default_max_agents() -> usize { 8 }
-fn default_task_queue_capacity() -> usize { 256 }
+fn default_max_agents() -> usize {
+    8
+}
+fn default_task_queue_capacity() -> usize {
+    256
+}
 impl Default for CoreConfig {
-    fn default() -> Self { Self { max_agents: default_max_agents(), task_queue_capacity: default_task_queue_capacity() } }
+    fn default() -> Self {
+        Self {
+            max_agents: default_max_agents(),
+            task_queue_capacity: default_task_queue_capacity(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -32,22 +41,30 @@ pub struct OllamaModelConfig {
     #[serde(default = "default_ollama_model")]
     pub default_model: String,
 }
-fn default_ollama_url() -> String { "http://localhost:11434".to_string() }
-fn default_ollama_model() -> String { "llama3".to_string() }
+fn default_ollama_url() -> String {
+    "http://localhost:11434".to_string()
+}
+fn default_ollama_model() -> String {
+    "llama3".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudeModelConfig {
     #[serde(default = "default_claude_model")]
     pub default_model: String,
 }
-fn default_claude_model() -> String { "claude-sonnet-4-6".to_string() }
+fn default_claude_model() -> String {
+    "claude-sonnet-4-6".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CodexModelConfig {
     #[serde(default = "default_codex_model")]
     pub default_model: String,
 }
-fn default_codex_model() -> String { "gpt-5.3-codex".to_string() }
+fn default_codex_model() -> String {
+    "gpt-5.3-codex".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelsConfig {
@@ -58,14 +75,20 @@ pub struct ModelsConfig {
     pub codex: Option<CodexModelConfig>,
     pub ollama: Option<OllamaModelConfig>,
 }
-fn default_model() -> String { "claude".to_string() }
+fn default_model() -> String {
+    "claude".to_string()
+}
 impl Default for ModelsConfig {
     fn default() -> Self {
         Self {
             default: default_model(),
             routing: None,
-            claude: Some(ClaudeModelConfig { default_model: default_claude_model() }),
-            codex: Some(CodexModelConfig { default_model: default_codex_model() }),
+            claude: Some(ClaudeModelConfig {
+                default_model: default_claude_model(),
+            }),
+            codex: Some(CodexModelConfig {
+                default_model: default_codex_model(),
+            }),
             ollama: None,
         }
     }
@@ -221,9 +244,15 @@ pub struct IdeConfig {
     #[serde(default = "default_ide_port")]
     pub port: u16,
 }
-fn default_ide_port() -> u16 { 7007 }
+fn default_ide_port() -> u16 {
+    7007
+}
 impl Default for IdeConfig {
-    fn default() -> Self { Self { port: default_ide_port() } }
+    fn default() -> Self {
+        Self {
+            port: default_ide_port(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -237,12 +266,27 @@ pub struct RewardWeightsConfig {
     #[serde(default = "default_retries_weight")]
     pub retries: f32,
 }
-fn default_completion_weight() -> f32 { 0.4 }
-fn default_user_rating_weight() -> f32 { 0.3 }
-fn default_tool_errors_weight() -> f32 { 0.2 }
-fn default_retries_weight() -> f32 { 0.1 }
+fn default_completion_weight() -> f32 {
+    0.4
+}
+fn default_user_rating_weight() -> f32 {
+    0.3
+}
+fn default_tool_errors_weight() -> f32 {
+    0.2
+}
+fn default_retries_weight() -> f32 {
+    0.1
+}
 impl Default for RewardWeightsConfig {
-    fn default() -> Self { Self { completion: 0.4, user_rating: 0.3, tool_errors: 0.2, retries: 0.1 } }
+    fn default() -> Self {
+        Self {
+            completion: 0.4,
+            user_rating: 0.3,
+            tool_errors: 0.2,
+            retries: 0.1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -258,11 +302,25 @@ pub struct LearningConfig {
     #[serde(default)]
     pub reward_weights: RewardWeightsConfig,
 }
-fn default_optimizer_threshold() -> f32 { 0.3 }
-fn default_optimizer_trigger_count() -> usize { 10 }
-fn default_optimizer_model() -> String { "claude".to_string() }
+fn default_optimizer_threshold() -> f32 {
+    0.3
+}
+fn default_optimizer_trigger_count() -> usize {
+    10
+}
+fn default_optimizer_model() -> String {
+    "claude".to_string()
+}
 impl Default for LearningConfig {
-    fn default() -> Self { Self { enabled: false, optimizer_threshold: 0.3, optimizer_trigger_count: 10, optimizer_model: "claude".to_string(), reward_weights: RewardWeightsConfig::default() } }
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            optimizer_threshold: 0.3,
+            optimizer_trigger_count: 10,
+            optimizer_model: "claude".to_string(),
+            reward_weights: RewardWeightsConfig::default(),
+        }
+    }
 }
 
 /// Zone access levels for file paths (globs).
@@ -278,7 +336,9 @@ pub struct ZonesConfig {
     pub unrestricted: Vec<String>,
 }
 
-fn default_lsp_enabled() -> bool { true }
+fn default_lsp_enabled() -> bool {
+    true
+}
 fn default_lsp_inject_categories() -> Vec<String> {
     vec!["code_completion".to_string(), "reasoning".to_string()]
 }
@@ -311,8 +371,14 @@ impl LspConfig {
             servers.insert("rust".to_string(), "rust-analyzer".to_string());
         }
         if which_on_path("typescript-language-server") {
-            servers.insert("typescript".to_string(), "typescript-language-server --stdio".to_string());
-            servers.insert("javascript".to_string(), "typescript-language-server --stdio".to_string());
+            servers.insert(
+                "typescript".to_string(),
+                "typescript-language-server --stdio".to_string(),
+            );
+            servers.insert(
+                "javascript".to_string(),
+                "typescript-language-server --stdio".to_string(),
+            );
         }
         if which_on_path("pyright") {
             servers.insert("python".to_string(), "pyright --stdio".to_string());
@@ -488,12 +554,50 @@ retries = 0.1
         assert_eq!(config.core.max_agents, 4);
         assert_eq!(config.core.task_queue_capacity, 128);
         assert_eq!(config.models.default, "claude");
-        assert_eq!(config.models.routing.as_ref().unwrap().code_completion.as_deref(), Some("codex"));
-        assert_eq!(config.models.ollama.as_ref().unwrap().base_url, "http://localhost:11434");
-        assert_eq!(config.models.default_model_for_provider("claude"), "claude-sonnet-4-6");
-        assert_eq!(config.models.default_model_for_provider("codex"), "gpt-5.3-codex");
-        assert_eq!(config.memory.as_ref().unwrap().rag.as_ref().unwrap().enabled, true);
-        assert_eq!(config.memory.as_ref().unwrap().rag.as_ref().unwrap().vector_db, "lancedb");
+        assert_eq!(
+            config
+                .models
+                .routing
+                .as_ref()
+                .unwrap()
+                .code_completion
+                .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            config.models.ollama.as_ref().unwrap().base_url,
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            config.models.default_model_for_provider("claude"),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(
+            config.models.default_model_for_provider("codex"),
+            "gpt-5.3-codex"
+        );
+        assert_eq!(
+            config
+                .memory
+                .as_ref()
+                .unwrap()
+                .rag
+                .as_ref()
+                .unwrap()
+                .enabled,
+            true
+        );
+        assert_eq!(
+            config
+                .memory
+                .as_ref()
+                .unwrap()
+                .rag
+                .as_ref()
+                .unwrap()
+                .vector_db,
+            "lancedb"
+        );
         assert_eq!(config.ide.port, 7007);
         assert_eq!(config.learning.enabled, true);
         assert_eq!(config.learning.reward_weights.completion, 0.4);
@@ -515,7 +619,9 @@ retries = 0.1
             ("codex".to_string(), "gpt-5.3-codex".to_string())
         );
         assert_eq!(
-            config.models.resolve_provider_and_model(Some("claude-sonnet-4-6")),
+            config
+                .models
+                .resolve_provider_and_model(Some("claude-sonnet-4-6")),
             ("claude".to_string(), "claude-sonnet-4-6".to_string())
         );
         assert_eq!(
@@ -523,7 +629,9 @@ retries = 0.1
             ("codex".to_string(), "gpt-5.4".to_string())
         );
         assert_eq!(
-            config.models.resolve_provider_and_model(Some("ollama/phi4")),
+            config
+                .models
+                .resolve_provider_and_model(Some("ollama/phi4")),
             ("ollama".to_string(), "phi4".to_string())
         );
     }
@@ -555,13 +663,16 @@ NODE_ENV = "production"
         assert_eq!(entry.command, "npx");
         assert_eq!(entry.args[0], "-y");
         assert_eq!(entry.cwd.as_deref(), Some("/tmp"));
-        assert_eq!(entry.env.get("NODE_ENV").map(String::as_str), Some("production"));
+        assert_eq!(
+            entry.env.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
     }
 
     #[test]
     fn config_load_respects_agent007_config_env() {
-        use tempfile::NamedTempFile;
         use std::io::Write;
+        use tempfile::NamedTempFile;
         let _guard = ENV_LOCK.lock().unwrap();
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(SAMPLE_CONFIG.as_bytes()).unwrap();

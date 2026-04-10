@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use serde_json::{json, Value};
 use crate::error::ModelError;
 use crate::provider::ModelProvider;
 use crate::types::{CompletionRequest, CompletionResponse, Message, Role};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 pub struct ClaudeProvider {
     api_key: String,
@@ -17,7 +17,14 @@ impl ClaudeProvider {
         }
     }
 
-    pub fn build_body(&self, model: &str, messages: &[Message], max_tokens: Option<u32>, temperature: Option<f32>, system: Option<&str>) -> String {
+    pub fn build_body(
+        &self,
+        model: &str,
+        messages: &[Message],
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        system: Option<&str>,
+    ) -> String {
         // Filter out system messages from the messages array
         let filtered_messages: Vec<_> = messages
             .iter()
@@ -114,7 +121,10 @@ mod tests {
     #[test]
     fn claude_builds_correct_request_body() {
         let p = ClaudeProvider::new("key", "claude-sonnet-4-6");
-        let msgs = vec![Message { role: Role::User, content: "hi".to_string() }];
+        let msgs = vec![Message {
+            role: Role::User,
+            content: "hi".to_string(),
+        }];
         let body = p.build_body("claude-sonnet-4-6", &msgs, Some(100), None, None);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["model"], "claude-sonnet-4-6");
@@ -127,8 +137,14 @@ mod tests {
     fn claude_filters_system_messages_from_messages_array() {
         let p = ClaudeProvider::new("key", "claude-sonnet-4-6");
         let msgs = vec![
-            Message { role: Role::System, content: "you are helpful".to_string() },
-            Message { role: Role::User, content: "hello".to_string() },
+            Message {
+                role: Role::System,
+                content: "you are helpful".to_string(),
+            },
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+            },
         ];
         let body = p.build_body("claude-sonnet-4-6", &msgs, None, None, None);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();

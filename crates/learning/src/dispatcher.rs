@@ -13,12 +13,17 @@ impl LearningDispatcher {
         Self { sender: tx }
     }
 
-    pub fn publish(&self, event: crate::types::LearningEvent) -> Result<(), crate::error::LearningError> {
+    pub fn publish(
+        &self,
+        event: crate::types::LearningEvent,
+    ) -> Result<(), crate::error::LearningError> {
         let _ = self.sender.send(event);
         Ok(())
     }
 
-    pub fn subscribe(&self) -> Pin<Box<dyn futures::Stream<Item = crate::types::LearningEvent> + Send>> {
+    pub fn subscribe(
+        &self,
+    ) -> Pin<Box<dyn futures::Stream<Item = crate::types::LearningEvent> + Send>> {
         let rx = self.sender.subscribe();
         let stream = BroadcastStream::new(rx).filter_map(|r| async move { r.ok() });
         Box::pin(stream)

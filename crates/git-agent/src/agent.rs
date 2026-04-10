@@ -1,6 +1,6 @@
 // crates/git-agent/src/agent.rs
-use std::path::{Path, PathBuf};
 use crate::error::GitAgentError;
+use std::path::{Path, PathBuf};
 
 pub struct GitAgent {
     pub(crate) repo: git2::Repository,
@@ -40,11 +40,7 @@ impl GitAgent {
     }
 
     /// Stage the given relative file paths and create a commit.
-    pub fn auto_commit(
-        &self,
-        message: &str,
-        files: &[&Path],
-    ) -> Result<git2::Oid, GitAgentError> {
+    pub fn auto_commit(&self, message: &str, files: &[&Path]) -> Result<git2::Oid, GitAgentError> {
         let mut index = self.repo.index()?;
         for file in files {
             index.add_path(file)?;
@@ -55,21 +51,12 @@ impl GitAgent {
         let tree = self.repo.find_tree(tree_id)?;
         let sig = self.repo.signature()?;
 
-        let parent_commit = self
-            .repo
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok());
+        let parent_commit = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok());
 
         let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
-        let oid = self.repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            message,
-            &tree,
-            &parents,
-        )?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
         Ok(oid)
     }
 
@@ -147,17 +134,14 @@ impl GitAgent {
 
         match detect_platform(url) {
             Platform::GitHub { owner, repo } => {
-                let token = std::env::var("GITHUB_TOKEN")
-                    .map_err(|_| GitAgentError::MissingToken)?;
-                let api_url = format!(
-                    "https://api.github.com/repos/{}/{}/pulls",
-                    owner, repo
-                );
+                let token =
+                    std::env::var("GITHUB_TOKEN").map_err(|_| GitAgentError::MissingToken)?;
+                let api_url = format!("https://api.github.com/repos/{}/{}/pulls", owner, repo);
                 post_github_pr(&client, &api_url, &token, title, body, head, base).await
             }
             Platform::GitLab { owner, repo } => {
-                let token = std::env::var("GITLAB_TOKEN")
-                    .map_err(|_| GitAgentError::MissingToken)?;
+                let token =
+                    std::env::var("GITLAB_TOKEN").map_err(|_| GitAgentError::MissingToken)?;
                 // GitLab requires URL-encoded project path
                 let project = format!("{}/{}", owner, repo);
                 let encoded = project.replace('/', "%2F");
@@ -267,9 +251,9 @@ mod tests {
         let repo = git2::Repository::open(dir.path()).unwrap();
         let statuses = repo.statuses(None).unwrap();
         // unstaged.txt should still be untracked / modified
-        let has_unstaged = statuses.iter().any(|s| {
-            s.path().map(|p| p.contains("unstaged")).unwrap_or(false)
-        });
+        let has_unstaged = statuses
+            .iter()
+            .any(|s| s.path().map(|p| p.contains("unstaged")).unwrap_or(false));
         assert!(has_unstaged, "unstaged.txt should not have been committed");
     }
 
@@ -327,7 +311,10 @@ mod tests {
             result.err()
         );
         // After rollback, r.txt should exist in working tree
-        assert!(dir.path().join("r.txt").exists(), "r.txt should be restored after rollback");
+        assert!(
+            dir.path().join("r.txt").exists(),
+            "r.txt should be restored after rollback"
+        );
     }
 
     #[test]

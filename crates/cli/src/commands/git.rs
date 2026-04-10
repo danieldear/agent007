@@ -1,8 +1,8 @@
 // crates/cli/src/commands/git.rs
+use agent007_git_agent::GitAgent;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
-use agent007_git_agent::GitAgent;
 
 #[derive(Parser, Debug)]
 pub struct GitArgs {
@@ -43,7 +43,10 @@ pub enum GitAction {
     },
 }
 
-pub async fn execute(_config: std::sync::Arc<crate::config::Config>, action: GitAction) -> Result<()> {
+pub async fn execute(
+    _config: std::sync::Arc<crate::config::Config>,
+    action: GitAction,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let agent = GitAgent::open(&cwd)?;
 
@@ -57,7 +60,12 @@ pub async fn execute(_config: std::sync::Arc<crate::config::Config>, action: Git
             let oid = agent.auto_commit(&message, &file_refs)?;
             println!("Committed: {}", oid);
         }
-        GitAction::Pr { title, body, head, base } => {
+        GitAction::Pr {
+            title,
+            body,
+            head,
+            base,
+        } => {
             let url = agent.create_pr(&title, &body, &head, &base).await?;
             println!("PR created: {}", url);
         }

@@ -1,6 +1,6 @@
+use crate::error::WorkflowError;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use crate::error::WorkflowError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -46,7 +46,8 @@ impl ApprovalGate {
         std::io::stderr().flush().ok();
 
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input)
+        std::io::stdin()
+            .read_line(&mut input)
             .map_err(WorkflowError::Io)?;
 
         match ApprovalResponse::parse(&input) {
@@ -60,12 +61,12 @@ impl ApprovalGate {
             }),
             ApprovalResponse::Edit => {
                 let editor = std::env::var("EDITOR").ok();
-                let edited = open_in_editor(content, editor.as_deref()).await.map_err(|e| {
-                    WorkflowError::StepFailed {
+                let edited = open_in_editor(content, editor.as_deref())
+                    .await
+                    .map_err(|e| WorkflowError::StepFailed {
                         id: step_id.to_string(),
                         reason: format!("editor failed: {}", e),
-                    }
-                })?;
+                    })?;
                 Ok(ApprovalDecision {
                     decision: ApprovalDecisionKind::Edit,
                     content: Some(edited),
@@ -83,9 +84,7 @@ pub async fn open_in_editor(content: &str, editor: Option<&str>) -> std::io::Res
         .or_else(|| std::env::var("EDITOR").ok())
         .unwrap_or_else(|| "vi".to_string());
 
-    let mut tmpfile = tempfile::Builder::new()
-        .suffix(".txt")
-        .tempfile()?;
+    let mut tmpfile = tempfile::Builder::new().suffix(".txt").tempfile()?;
     tmpfile.write_all(content.as_bytes())?;
     tmpfile.flush()?;
 
@@ -98,9 +97,10 @@ pub async fn open_in_editor(content: &str, editor: Option<&str>) -> std::io::Res
         std::process::Command::new(&editor_clone)
             .arg(&path_clone)
             .status()
-    }).await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    })
+    .await
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
     std::fs::read_to_string(&path)
 }

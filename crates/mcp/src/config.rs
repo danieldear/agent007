@@ -29,7 +29,9 @@ name = "github"
 command = "npx @modelcontextprotocol/server-github"
 "#;
         #[derive(serde::Deserialize)]
-        struct ServerList { servers: Vec<McpServerConfig> }
+        struct ServerList {
+            servers: Vec<McpServerConfig>,
+        }
         let list: ServerList = toml::from_str(toml_str).unwrap();
         assert_eq!(list.servers.len(), 2);
         assert_eq!(list.servers[0].name, "filesystem");
@@ -42,7 +44,10 @@ command = "npx @modelcontextprotocol/server-github"
     #[test]
     fn empty_servers_deserializes_to_empty_vec() {
         #[derive(serde::Deserialize)]
-        struct ServerList { #[serde(default)] servers: Vec<McpServerConfig> }
+        struct ServerList {
+            #[serde(default)]
+            servers: Vec<McpServerConfig>,
+        }
         let list: ServerList = toml::from_str("").unwrap();
         assert_eq!(list.servers.len(), 0);
     }
@@ -68,6 +73,9 @@ NODE_ENV = "production"
         assert_eq!(server.command, "npx");
         assert_eq!(server.args[1], "@modelcontextprotocol/server-filesystem");
         assert_eq!(server.cwd.as_deref(), Some("/tmp"));
-        assert_eq!(server.env.get("NODE_ENV").map(String::as_str), Some("production"));
+        assert_eq!(
+            server.env.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
     }
 }

@@ -8,9 +8,8 @@ use agent007_core::persona::PersonaProvider;
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind};
 use crate::error::WorkflowError;
 use crate::runner::{
-    build_step_dependents, check_budget, evaluate_condition, evaluate_decision_field,
-    estimate_tokens, match_route, render_prompt, reset_steps_from_target,
-    step_is_ready,
+    build_step_dependents, check_budget, estimate_tokens, evaluate_condition,
+    evaluate_decision_field, match_route, render_prompt, reset_steps_from_target, step_is_ready,
 };
 use crate::state::{PendingApproval, WorkflowRunState, WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{StepDef, StepType, WorkflowDef};
@@ -105,10 +104,12 @@ impl HostedWorkflowEngine {
             .iter()
             .map(|step| (step.id.clone(), step.clone()))
             .collect();
-        let step = step_map.get(step_id).ok_or_else(|| WorkflowError::StepFailed {
-            id: step_id.to_string(),
-            reason: "unknown workflow step".to_string(),
-        })?;
+        let step = step_map
+            .get(step_id)
+            .ok_or_else(|| WorkflowError::StepFailed {
+                id: step_id.to_string(),
+                reason: "unknown workflow step".to_string(),
+            })?;
 
         let step_state = state
             .steps
@@ -123,11 +124,15 @@ impl HostedWorkflowEngine {
             WorkflowStepStatus::Completed | WorkflowStepStatus::Skipped => {
                 return Err(WorkflowError::StepFailed {
                     id: step_id.to_string(),
-                    reason: format!("step '{}' is already {}", step_id, match step_state.status {
-                        WorkflowStepStatus::Completed => "completed",
-                        WorkflowStepStatus::Skipped => "skipped",
-                        _ => unreachable!(),
-                    }),
+                    reason: format!(
+                        "step '{}' is already {}",
+                        step_id,
+                        match step_state.status {
+                            WorkflowStepStatus::Completed => "completed",
+                            WorkflowStepStatus::Skipped => "skipped",
+                            _ => unreachable!(),
+                        }
+                    ),
                 });
             }
             WorkflowStepStatus::AwaitingApproval => {
@@ -143,7 +148,11 @@ impl HostedWorkflowEngine {
                 ));
             }
             WorkflowStepStatus::Pending => {
-                let completed = state.completed_steps.iter().cloned().collect::<HashSet<_>>();
+                let completed = state
+                    .completed_steps
+                    .iter()
+                    .cloned()
+                    .collect::<HashSet<_>>();
                 if !step_is_ready(step, &state.outputs, &completed) {
                     return Err(WorkflowError::StepFailed {
                         id: step_id.to_string(),
@@ -194,20 +203,29 @@ impl HostedWorkflowEngine {
             let Some(step_id) = awaiting_step else {
                 break;
             };
-            let step = step_map.get(&step_id).ok_or_else(|| WorkflowError::StepFailed {
-                id: step_id.clone(),
-                reason: "workflow state references an unknown step".to_string(),
-            })?;
-            let decision = state.approval_decision(&step_id).ok_or_else(|| WorkflowError::StepFailed {
-                id: step_id.clone(),
-                reason: "approval decision is missing".to_string(),
-            })?;
+            let step = step_map
+                .get(&step_id)
+                .ok_or_else(|| WorkflowError::StepFailed {
+                    id: step_id.clone(),
+                    reason: "workflow state references an unknown step".to_string(),
+                })?;
+            let decision =
+                state
+                    .approval_decision(&step_id)
+                    .ok_or_else(|| WorkflowError::StepFailed {
+                        id: step_id.clone(),
+                        reason: "approval decision is missing".to_string(),
+                    })?;
             match decision.decision {
                 ApprovalDecisionKind::Approve | ApprovalDecisionKind::Edit => {
-                    let content = decision.content.clone().ok_or_else(|| WorkflowError::StepFailed {
-                        id: step_id.clone(),
-                        reason: "approval decision is missing content".to_string(),
-                    })?;
+                    let content =
+                        decision
+                            .content
+                            .clone()
+                            .ok_or_else(|| WorkflowError::StepFailed {
+                                id: step_id.clone(),
+                                reason: "approval decision is missing content".to_string(),
+                            })?;
                     self.complete_step(def, state, step, &content);
                 }
                 ApprovalDecisionKind::Deny => {
@@ -238,10 +256,7 @@ impl HostedWorkflowEngine {
             ));
         }
         if state.pending_approval.is_some() || state.status == WorkflowRunStatus::WaitingApproval {
-            return Ok(self.awaiting_approval_progress(
-                state,
-                "workflow is waiting for approval",
-            ));
+            return Ok(self.awaiting_approval_progress(state, "workflow is waiting for approval"));
         }
 
         let running_steps = state
@@ -284,7 +299,11 @@ impl HostedWorkflowEngine {
             .iter()
             .map(|step| (step.id.clone(), step.clone()))
             .collect();
-        let completed = state.completed_steps.iter().cloned().collect::<HashSet<_>>();
+        let completed = state
+            .completed_steps
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
 
         let mut ready_ids = Vec::new();
         for batch in &validated.batches {
@@ -292,7 +311,8 @@ impl HostedWorkflowEngine {
                 let Some(step) = step_map.get(step_id) else {
                     continue;
                 };
-                let Some(step_state) = state.steps.iter().find(|candidate| candidate.id == step.id) else {
+                let Some(step_state) = state.steps.iter().find(|candidate| candidate.id == step.id)
+                else {
                     continue;
                 };
                 if step_state.status != WorkflowStepStatus::Pending {
@@ -309,10 +329,9 @@ impl HostedWorkflowEngine {
 
         if ready_ids.is_empty() {
             state.mark_failed(None, "workflow has no ready or running steps");
-            return Ok(self.failed_progress(
-                state,
-                "workflow has no ready or running steps".to_string(),
-            ));
+            return Ok(
+                self.failed_progress(state, "workflow has no ready or running steps".to_string())
+            );
         }
 
         if dispatch_ready {
@@ -351,12 +370,13 @@ impl HostedWorkflowEngine {
         step: &StepDef,
     ) -> Result<HostedWorkflowStep, WorkflowError> {
         let prompt_template = load_step_template(step)?;
-        let prompt = render_prompt(&prompt_template, &state.task, &state.outputs).map_err(|error| {
-            WorkflowError::TemplateError {
-                id: step.id.clone(),
-                reason: error.to_string(),
-            }
-        })?;
+        let prompt =
+            render_prompt(&prompt_template, &state.task, &state.outputs).map_err(|error| {
+                WorkflowError::TemplateError {
+                    id: step.id.clone(),
+                    reason: error.to_string(),
+                }
+            })?;
         let persona = self.persona_provider.get(&step.agent);
         let model_hint = if let Some(model) = &step.model {
             model.clone()
@@ -418,9 +438,11 @@ impl HostedWorkflowEngine {
         };
 
         match decision.decision {
-            ApprovalDecisionKind::Approve | ApprovalDecisionKind::Edit => SubmissionResolution::Content(
-                decision.content.unwrap_or_else(|| output.to_string()),
-            ),
+            ApprovalDecisionKind::Approve | ApprovalDecisionKind::Edit => {
+                SubmissionResolution::Content(
+                    decision.content.unwrap_or_else(|| output.to_string()),
+                )
+            }
             ApprovalDecisionKind::Deny => SubmissionResolution::Failed(
                 WorkflowError::ApprovalDenied(step.id.clone()).to_string(),
             ),
@@ -511,7 +533,11 @@ impl HostedWorkflowEngine {
                     }
 
                     let target = eval.on_fail.clone();
-                    let mut completed = state.completed_steps.iter().cloned().collect::<HashSet<_>>();
+                    let mut completed = state
+                        .completed_steps
+                        .iter()
+                        .cloned()
+                        .collect::<HashSet<_>>();
                     let mut skipped = state.skipped_steps.iter().cloned().collect::<HashSet<_>>();
                     let mut rewind_outputs = state.outputs.clone();
                     let mut reset_ids = reset_steps_from_target(
@@ -665,10 +691,12 @@ fn load_step_template(step: &StepDef) -> Result<String, WorkflowError> {
     if let Some(skill_trigger) = &step.skill {
         let skills_dir = agent007_core::paths::agent007_home().join("skills");
         let loader = agent007_skills::SkillLoader::new(&skills_dir);
-        let skills = loader.load_all().map_err(|error| WorkflowError::StepFailed {
-            id: step.id.clone(),
-            reason: format!("failed to load skills: {error}"),
-        })?;
+        let skills = loader
+            .load_all()
+            .map_err(|error| WorkflowError::StepFailed {
+                id: step.id.clone(),
+                reason: format!("failed to load skills: {error}"),
+            })?;
         return skills
             .into_iter()
             .find(|skill| skill.trigger() == skill_trigger)
@@ -735,7 +763,10 @@ mod tests {
             .submit_step_output(&def, &mut state, "research", "notes v1")
             .unwrap();
         assert_eq!(complete.status, HostedWorkflowProgressStatus::Succeeded);
-        assert_eq!(state.outputs.get("notes").map(String::as_str), Some("notes v1"));
+        assert_eq!(
+            state.outputs.get("notes").map(String::as_str),
+            Some("notes v1")
+        );
     }
 
     #[test]
@@ -749,7 +780,10 @@ mod tests {
         let waiting = engine
             .submit_step_output(&def, &mut state, "research", "draft plan")
             .unwrap();
-        assert_eq!(waiting.status, HostedWorkflowProgressStatus::AwaitingApproval);
+        assert_eq!(
+            waiting.status,
+            HostedWorkflowProgressStatus::AwaitingApproval
+        );
         assert!(state.pending_approval.is_some());
 
         state.record_approval_decision(

@@ -176,7 +176,9 @@ mod tests {
     fn failure_no_extras_returns_negative_one() {
         // Only completion signal present; renormalized weight = 1.0; -1.0 * 1.0 = -1.0
         let ctx = ScoringContext {
-            outcome: Outcome::Failure { reason: "timeout".to_string() },
+            outcome: Outcome::Failure {
+                reason: "timeout".to_string(),
+            },
             user_rating: None,
             tool_error_count: None,
             total_tool_calls: None,
@@ -184,7 +186,10 @@ mod tests {
             max_retries: None,
         };
         let result = scorer().score(&ctx);
-        assert!((result - (-1.0)).abs() < 1e-6, "expected -1.0, got {result}");
+        assert!(
+            (result - (-1.0)).abs() < 1e-6,
+            "expected -1.0, got {result}"
+        );
     }
 
     #[test]
@@ -200,7 +205,10 @@ mod tests {
             max_retries: None,
         };
         let result = scorer().score(&ctx);
-        assert!((result - 1.0).abs() < 1e-6, "expected +1.0 for perfect user rating, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-6,
+            "expected +1.0 for perfect user rating, got {result}"
+        );
     }
 
     #[test]
@@ -217,7 +225,10 @@ mod tests {
         };
         let result = scorer().score(&ctx);
         let expected = 0.1_f32 / 0.7_f32;
-        assert!((result - expected).abs() < 1e-5, "expected ~{expected}, got {result}");
+        assert!(
+            (result - expected).abs() < 1e-5,
+            "expected ~{expected}, got {result}"
+        );
     }
 
     #[test]
@@ -235,7 +246,10 @@ mod tests {
         };
         let result = scorer().score(&ctx);
         let expected = (1.0_f32 * (0.4 / 0.6)) + ((-0.5_f32) * (0.2 / 0.6));
-        assert!((result - expected).abs() < 1e-5, "expected ~{expected}, got {result}");
+        assert!(
+            (result - expected).abs() < 1e-5,
+            "expected ~{expected}, got {result}"
+        );
     }
 
     #[test]
@@ -253,7 +267,10 @@ mod tests {
         };
         let result = scorer().score(&ctx);
         let expected = 1.0_f32 * (0.4 / 0.5) + (-1.0_f32) * (0.1 / 0.5);
-        assert!((result - expected).abs() < 1e-5, "expected ~{expected}, got {result}");
+        assert!(
+            (result - expected).abs() < 1e-5,
+            "expected ~{expected}, got {result}"
+        );
     }
 
     #[test]
@@ -261,7 +278,9 @@ mod tests {
         // Even in extreme cases, result stays in [-1.0, +1.0]
         // Failure + all bad signals => should clamp to -1.0
         let ctx = ScoringContext {
-            outcome: Outcome::Failure { reason: "crash".to_string() },
+            outcome: Outcome::Failure {
+                reason: "crash".to_string(),
+            },
             user_rating: None,
             tool_error_count: Some(10),
             total_tool_calls: Some(10),
@@ -269,7 +288,10 @@ mod tests {
             max_retries: Some(5),
         };
         let result = scorer().score(&ctx);
-        assert!(result >= -1.0 && result <= 1.0, "result {result} out of bounds");
+        assert!(
+            result >= -1.0 && result <= 1.0,
+            "result {result} out of bounds"
+        );
         // UserRating perfect success also bounded
         let ctx2 = ScoringContext {
             outcome: Outcome::UserRating { score: 1.0 },
@@ -280,7 +302,10 @@ mod tests {
             max_retries: None,
         };
         let result2 = scorer().score(&ctx2);
-        assert!(result2 >= -1.0 && result2 <= 1.0, "result2 {result2} out of bounds");
+        assert!(
+            result2 >= -1.0 && result2 <= 1.0,
+            "result2 {result2} out of bounds"
+        );
     }
 
     #[test]
@@ -296,7 +321,9 @@ mod tests {
             max_retries: None,
         };
         let ctx_failure = ScoringContext {
-            outcome: Outcome::Failure { reason: "x".to_string() },
+            outcome: Outcome::Failure {
+                reason: "x".to_string(),
+            },
             user_rating: None,
             tool_error_count: None,
             total_tool_calls: None,
@@ -322,6 +349,9 @@ mod tests {
         };
         let result = scorer().score(&ctx);
         let expected = 0.4_f32 + 0.3_f32 + 0.0_f32 + 0.0_f32; // all weights sum to 1.0 so no renorm effect
-        assert!((result - expected).abs() < 1e-5, "expected ~{expected}, got {result}");
+        assert!(
+            (result - expected).abs() < 1e-5,
+            "expected ~{expected}, got {result}"
+        );
     }
 }

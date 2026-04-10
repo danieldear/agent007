@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use crate::{AgentDef, AgentType, CustomAgentError, SubTaskResult};
 use agent007_core::dispatcher::Dispatcher;
 use agent007_core::persona::PersonaProvider;
 use agent007_memory::store::ScopedMemoryStore;
-use agent007_models::router::ModelRouter;
 use agent007_models::provider::ModelProvider;
+use agent007_models::router::ModelRouter;
 use agent007_models::types::{CompletionRequest, Message, Role};
-use crate::{AgentDef, AgentType, CustomAgentError, SubTaskResult};
+use std::sync::Arc;
 
 pub struct SubOrchestrator {
     pub def: AgentDef,
@@ -27,7 +27,15 @@ impl SubOrchestrator {
         depth: usize,
         max_depth: usize,
     ) -> Self {
-        Self { def, scoped_memory, model_router, persona_provider, dispatcher, depth, max_depth }
+        Self {
+            def,
+            scoped_memory,
+            model_router,
+            persona_provider,
+            dispatcher,
+            depth,
+            max_depth,
+        }
     }
 
     /// Decompose the task into subtasks and execute via allowed worker personas.
@@ -42,7 +50,9 @@ impl SubOrchestrator {
     pub async fn run(&self, task: &str) -> Result<SubTaskResult, CustomAgentError> {
         // Depth guard
         if self.depth >= self.max_depth {
-            return Err(CustomAgentError::MaxDepthExceeded { max: self.max_depth });
+            return Err(CustomAgentError::MaxDepthExceeded {
+                max: self.max_depth,
+            });
         }
 
         // Guard: if allowed_workers is Some([]) no workers can be dispatched
@@ -61,14 +71,15 @@ impl SubOrchestrator {
         let plan_prompt = format!(
             "You are {}. Decompose this task into subtasks, one per allowed worker.\n\
              Allowed workers: {:?}\nTask: {}",
-            self.def.name,
-            self.def.allowed_workers,
-            task
+            self.def.name, self.def.allowed_workers, task
         );
 
         let request = CompletionRequest {
             model: self.def.model.clone().unwrap_or_else(|| "default".into()),
-            messages: vec![Message { role: Role::User, content: plan_prompt }],
+            messages: vec![Message {
+                role: Role::User,
+                content: plan_prompt,
+            }],
             max_tokens: None,
             temperature: None,
             system: Some(self.def.system_prompt.clone()),
@@ -91,17 +102,19 @@ impl SubOrchestrator {
         let files_changed = Vec::new();
 
         for (worker_name, subtask) in &subtasks {
-            let persona = self
-                .persona_provider
-                .get(worker_name)
-                .ok_or_else(|| CustomAgentError::WorkerNotAllowed {
+            let persona = self.persona_provider.get(worker_name).ok_or_else(|| {
+                CustomAgentError::WorkerNotAllowed {
                     name: worker_name.clone(),
-                })?;
+                }
+            })?;
 
             // Use the model router to dispatch the subtask with the persona's system prompt
             let subtask_request = CompletionRequest {
                 model: self.def.model.clone().unwrap_or_else(|| "default".into()),
-                messages: vec![Message { role: Role::User, content: subtask.clone() }],
+                messages: vec![Message {
+                    role: Role::User,
+                    content: subtask.clone(),
+                }],
                 max_tokens: None,
                 temperature: None,
                 system: Some(persona.system_prompt.clone()),
@@ -187,7 +200,10 @@ mod tests {
     fn make_orch(def: AgentDef, depth: usize) -> SubOrchestrator {
         let dir = tempdir().unwrap();
         let inner_store = Arc::new(MemoryStore::new(dir.path()));
-        let ns = def.memory_namespace.clone().unwrap_or_else(|| def.name.clone());
+        let ns = def
+            .memory_namespace
+            .clone()
+            .unwrap_or_else(|| def.name.clone());
         let scoped = Arc::new(inner_store.scoped(&ns));
         let mock = Arc::new(MockProvider::new("mock response", "mock"));
         let mut router = ModelRouter::new("mock");
@@ -253,7 +269,10 @@ mod tests {
         let mut def = make_def("StrictOrch", Some("ns"));
         def.allowed_workers = Some(vec![]); // no workers permitted
         let orch = make_orch(def, 0);
-        let err = orch.run("do something requiring a worker").await.unwrap_err();
+        let err = orch
+            .run("do something requiring a worker")
+            .await
+            .unwrap_err();
         assert!(matches!(err, CustomAgentError::WorkerNotAllowed { .. }));
     }
 
@@ -263,17 +282,14 @@ mod tests {
         // depth == max_depth means we are already at the limit
         let orch = make_orch(def, 3); // depth=3, max_depth=3
         let err = orch.run("some task").await.unwrap_err();
-        assert!(matches!(
-            err,
-            CustomAgentError::MaxDepthExceeded { max: 3 }
-        ));
+        assert!(matches!(err, CustomAgentError::MaxDepthExceeded { max: 3 }));
     }
 
     #[tokio::test]
     async fn run_at_depth_below_max_does_not_error_on_depth() {
         let def = make_def("ShallowOrch", Some("ns"));
         let orch = make_orch(def, 2); // depth=2, max_depth=3 — within limits
-        // Should not produce MaxDepthExceeded; any other result is acceptable here
+                                      // Should not produce MaxDepthExceeded; any other result is acceptable here
         let err = orch.run("task").await;
         assert!(!matches!(
             err,

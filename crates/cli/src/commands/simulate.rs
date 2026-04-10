@@ -61,7 +61,11 @@ pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
             let dispatcher = agent007_core::dispatcher::LocalDispatcher::new(16)
                 as Arc<dyn agent007_core::dispatcher::Dispatcher>;
 
-            let pipeline = SimulationPipeline { provider: mock, memory, dispatcher };
+            let pipeline = SimulationPipeline {
+                provider: mock,
+                memory,
+                dispatcher,
+            };
             let report = pipeline.run(&tmpl).await?;
 
             println!("\n=== Simulation Report: {} ===", report.template_name);
@@ -78,7 +82,11 @@ pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
 
         SimulateAction::Validate { template } => {
             let tmpl = loader.load(&template)?;
-            println!("Template '{}' is valid ({} scenario(s)).", tmpl.name, tmpl.scenarios.len());
+            println!(
+                "Template '{}' is valid ({} scenario(s)).",
+                tmpl.name,
+                tmpl.scenarios.len()
+            );
         }
     }
 
@@ -99,12 +107,16 @@ mod tests {
     #[test]
     fn parse_simulate_run() {
         let args = SimulateArgs::try_parse_from(["simulate", "run", "wifi-rtt"]).unwrap();
-        assert!(matches!(args.action, SimulateAction::Run { ref template } if template == "wifi-rtt"));
+        assert!(
+            matches!(args.action, SimulateAction::Run { ref template } if template == "wifi-rtt")
+        );
     }
 
     #[test]
     fn parse_simulate_validate() {
         let args = SimulateArgs::try_parse_from(["simulate", "validate", "wifi-roaming"]).unwrap();
-        assert!(matches!(args.action, SimulateAction::Validate { ref template } if template == "wifi-roaming"));
+        assert!(
+            matches!(args.action, SimulateAction::Validate { ref template } if template == "wifi-roaming")
+        );
     }
 }

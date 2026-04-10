@@ -29,7 +29,11 @@ pub enum CoreError {
     Serialization(#[from] serde_json::Error),
 
     #[error("I/O error at {path}: {source}")]
-    Io { path: PathBuf, #[source] source: std::io::Error },
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("Shutdown in progress")]
     ShuttingDown,

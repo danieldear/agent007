@@ -1,7 +1,7 @@
 // crates/cli/src/commands/checkpoint.rs
+use agent007_git_agent::GitAgent;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use agent007_git_agent::GitAgent;
 
 #[derive(Parser, Debug)]
 pub struct CheckpointArgs {
@@ -20,7 +20,10 @@ pub enum CheckpointAction {
     List,
 }
 
-pub async fn execute(_config: std::sync::Arc<crate::config::Config>, action: CheckpointAction) -> Result<()> {
+pub async fn execute(
+    _config: std::sync::Arc<crate::config::Config>,
+    action: CheckpointAction,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let mut agent = GitAgent::open(&cwd)?;
 

@@ -5,11 +5,11 @@ use crate::level::ZoneLevel;
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct ZoneConfig {
     #[serde(default)]
-    pub forbidden:    Vec<String>,
+    pub forbidden: Vec<String>,
     #[serde(default)]
-    pub readonly:     Vec<String>,
+    pub readonly: Vec<String>,
     #[serde(default)]
-    pub sensitive:    Vec<String>,
+    pub sensitive: Vec<String>,
     #[serde(default)]
     pub unrestricted: Vec<String>,
 }
@@ -18,9 +18,9 @@ impl ZoneConfig {
     /// Return the pattern list for a given ZoneLevel.
     pub fn patterns_for(&self, level: ZoneLevel) -> &[String] {
         match level {
-            ZoneLevel::Forbidden    => &self.forbidden,
-            ZoneLevel::Readonly     => &self.readonly,
-            ZoneLevel::Sensitive    => &self.sensitive,
+            ZoneLevel::Forbidden => &self.forbidden,
+            ZoneLevel::Readonly => &self.readonly,
+            ZoneLevel::Sensitive => &self.sensitive,
             ZoneLevel::Unrestricted => &self.unrestricted,
         }
     }
@@ -96,15 +96,15 @@ unrestricted = ["src/", "tests/", "docs/"]
     #[test]
     fn patterns_for_returns_correct_slice() {
         let config = ZoneConfig {
-            forbidden:    vec!["a".to_string()],
-            readonly:     vec!["b".to_string()],
-            sensitive:    vec!["c".to_string()],
+            forbidden: vec!["a".to_string()],
+            readonly: vec!["b".to_string()],
+            sensitive: vec!["c".to_string()],
             unrestricted: vec!["d".to_string()],
         };
         use crate::level::ZoneLevel;
-        assert_eq!(config.patterns_for(ZoneLevel::Forbidden),    &["a"]);
-        assert_eq!(config.patterns_for(ZoneLevel::Readonly),     &["b"]);
-        assert_eq!(config.patterns_for(ZoneLevel::Sensitive),    &["c"]);
+        assert_eq!(config.patterns_for(ZoneLevel::Forbidden), &["a"]);
+        assert_eq!(config.patterns_for(ZoneLevel::Readonly), &["b"]);
+        assert_eq!(config.patterns_for(ZoneLevel::Sensitive), &["c"]);
         assert_eq!(config.patterns_for(ZoneLevel::Unrestricted), &["d"]);
     }
 }

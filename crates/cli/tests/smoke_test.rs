@@ -37,13 +37,19 @@ async fn smoke_test_agents_run_and_emit_events() {
     // Verify ModelRequest event emitted with opaque prompt ref (no raw prompt text)
     use futures::StreamExt;
     let e1 = events.next().await.unwrap();
-    assert!(matches!(e1, AgentEvent::ModelRequest { .. }),
-        "expected ModelRequest event, got {:?}", e1);
+    assert!(
+        matches!(e1, AgentEvent::ModelRequest { .. }),
+        "expected ModelRequest event, got {:?}",
+        e1
+    );
 
     // Verify TaskCompleted event emitted
     let e2 = events.next().await.unwrap();
-    assert!(matches!(e2, AgentEvent::TaskCompleted { .. }),
-        "expected TaskCompleted event, got {:?}", e2);
+    assert!(
+        matches!(e2, AgentEvent::TaskCompleted { .. }),
+        "expected TaskCompleted event, got {:?}",
+        e2
+    );
 
     // Verify the model was actually called (not short-circuited)
     assert_eq!(mock.call_count(), 1);

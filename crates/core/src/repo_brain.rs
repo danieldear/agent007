@@ -41,9 +41,11 @@ impl RepoBrainBuilder {
             .to_string();
         let ecosystems = self.detect_ecosystems();
         let entrypoints = self.find_entrypoints();
-        let workflows = collect_file_stems(&self.agent_home.join("workflows"), &["toml", "yaml", "yml"])?;
+        let workflows =
+            collect_file_stems(&self.agent_home.join("workflows"), &["toml", "yaml", "yml"])?;
         let skills = collect_file_stems(&self.agent_home.join("skills"), &["md"])?;
-        let memory_notes = collect_file_stems(&self.agent_home.join("memory").join("project"), &["md"])?;
+        let memory_notes =
+            collect_file_stems(&self.agent_home.join("memory").join("project"), &["md"])?;
         let conventions = self.collect_conventions();
         let recommended_commands = recommended_commands(&ecosystems);
         let ecosystem_label = if ecosystems.is_empty() {
@@ -82,7 +84,8 @@ impl RepoBrainBuilder {
         if self.root.join("package.json").exists() {
             ecosystems.push("node".to_string());
         }
-        if self.root.join("pyproject.toml").exists() || self.root.join("requirements.txt").exists() {
+        if self.root.join("pyproject.toml").exists() || self.root.join("requirements.txt").exists()
+        {
             ecosystems.push("python".to_string());
         }
         if self.root.join("go.mod").exists() {
@@ -150,8 +153,14 @@ fn collect_file_stems(dir: &Path, exts: &[&str]) -> Result<Vec<String>, CoreErro
         if !path.is_file() {
             continue;
         }
-        let ext = path.extension().and_then(|value| value.to_str()).unwrap_or_default();
-        if !exts.iter().any(|candidate| ext.eq_ignore_ascii_case(candidate)) {
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !exts
+            .iter()
+            .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+        {
             continue;
         }
         if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
@@ -192,16 +201,34 @@ mod tests {
     fn builds_repo_brain_from_project_layout() {
         let root = tempfile::tempdir().unwrap();
         let agent_home = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
-        fs::write(root.path().join("AGENTS.md"), "Use cargo test\nPrefer concise diffs\n").unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("AGENTS.md"),
+            "Use cargo test\nPrefer concise diffs\n",
+        )
+        .unwrap();
         fs::create_dir_all(root.path().join("src")).unwrap();
         fs::write(root.path().join("src/main.rs"), "fn main() {}\n").unwrap();
         fs::create_dir_all(agent_home.path().join("workflows")).unwrap();
-        fs::write(agent_home.path().join("workflows").join("ship.toml"), "name='ship'\n").unwrap();
+        fs::write(
+            agent_home.path().join("workflows").join("ship.toml"),
+            "name='ship'\n",
+        )
+        .unwrap();
         fs::create_dir_all(agent_home.path().join("skills")).unwrap();
-        fs::write(agent_home.path().join("skills").join("review.md"), "---\n---\n").unwrap();
+        fs::write(
+            agent_home.path().join("skills").join("review.md"),
+            "---\n---\n",
+        )
+        .unwrap();
 
-        let brain = RepoBrainBuilder::new(root.path(), agent_home.path()).build().unwrap();
+        let brain = RepoBrainBuilder::new(root.path(), agent_home.path())
+            .build()
+            .unwrap();
         assert!(brain.ecosystems.contains(&"rust".to_string()));
         assert!(brain.entrypoints.contains(&"src/main.rs".to_string()));
         assert!(brain.workflows.contains(&"ship".to_string()));

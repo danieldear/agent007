@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
-use crate::config::Config;
 use super::run::{selected_runtime_model, selected_runtime_provider, standalone_mode_available};
+use crate::config::Config;
 
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
@@ -85,7 +85,11 @@ pub async fn execute(
         project_dir.join(".codex")
     };
     let copilot_scope_dir = project_dir.join(".vscode");
-    let scope_label = if global { "~/.agent007/ (global)" } else { ".agent007/ (project-local)" };
+    let scope_label = if global {
+        "~/.agent007/ (global)"
+    } else {
+        ".agent007/ (project-local)"
+    };
     let mut ide_targets = Vec::new();
     if do_claude {
         ide_targets.push("Claude Code");
@@ -142,7 +146,12 @@ pub async fn execute(
     let skills_dir_seed = home.join("skills");
     let mut built_in_skill_count = 0usize;
     for (filename, content) in crate::built_in_skills::ALL_SKILLS {
-        if write_file(&skills_dir_seed.join(filename), content, &format!("skills/{filename}"), force)? {
+        if write_file(
+            &skills_dir_seed.join(filename),
+            content,
+            &format!("skills/{filename}"),
+            force,
+        )? {
             built_in_skill_count += 1;
         }
     }
@@ -153,14 +162,54 @@ pub async fn execute(
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
     let wf_dir = home.join("workflows");
-    write_file(&wf_dir.join("log-analysis.yaml"),  WORKFLOW_LOG_ANALYSIS,  "workflows/log-analysis.yaml", force)?;
-    write_file(&wf_dir.join("code-review.yaml"),   WORKFLOW_CODE_REVIEW,   "workflows/code-review.yaml",  force)?;
-    write_file(&wf_dir.join("security-audit.yaml"),WORKFLOW_SECURITY_AUDIT,"workflows/security-audit.yaml",force)?;
-    write_file(&wf_dir.join("sparc.yaml"),         WORKFLOW_SPARC,         "workflows/sparc.yaml",        force)?;
-    write_file(&wf_dir.join("tdd.yaml"),           WORKFLOW_TDD,           "workflows/tdd.yaml",          force)?;
-    write_file(&wf_dir.join("ideation.yaml"),      WORKFLOW_IDEATION,      "workflows/ideation.yaml",     force)?;
-    write_file(&wf_dir.join("feature.yaml"),       WORKFLOW_FEATURE,       "workflows/feature.yaml",      force)?;
-    write_file(&wf_dir.join("brainstorm.yaml"),    WORKFLOW_BRAINSTORM,    "workflows/brainstorm.yaml",   force)?;
+    write_file(
+        &wf_dir.join("log-analysis.yaml"),
+        WORKFLOW_LOG_ANALYSIS,
+        "workflows/log-analysis.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("code-review.yaml"),
+        WORKFLOW_CODE_REVIEW,
+        "workflows/code-review.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("security-audit.yaml"),
+        WORKFLOW_SECURITY_AUDIT,
+        "workflows/security-audit.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("sparc.yaml"),
+        WORKFLOW_SPARC,
+        "workflows/sparc.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("tdd.yaml"),
+        WORKFLOW_TDD,
+        "workflows/tdd.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("ideation.yaml"),
+        WORKFLOW_IDEATION,
+        "workflows/ideation.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("feature.yaml"),
+        WORKFLOW_FEATURE,
+        "workflows/feature.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("brainstorm.yaml"),
+        WORKFLOW_BRAINSTORM,
+        "workflows/brainstorm.yaml",
+        force,
+    )?;
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
@@ -172,13 +221,22 @@ pub async fn execute(
     };
     let mut persona_count = 0usize;
     for spec in &personas {
-        let filename = spec.name
+        let filename = spec
+            .name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>()
             .to_lowercase();
         let path = personas_dir.join(format!("{filename}.toml"));
-        let tools_str = spec.allowed_tools.iter()
+        let tools_str = spec
+            .allowed_tools
+            .iter()
             .map(|t| format!("\"{}\"", t))
             .collect::<Vec<_>>()
             .join(", ");
@@ -222,7 +280,9 @@ pub async fn execute(
         register_mcp_in_settings("agent007", &claude_scope_dir, force)?;
         step += 1;
 
-        section(&format!("{step}. Installing slash commands for Claude Code"));
+        section(&format!(
+            "{step}. Installing slash commands for Claude Code"
+        ));
         let commands_dir = claude_scope_dir.join("commands");
         if !commands_dir.exists() {
             std::fs::create_dir_all(&commands_dir)?;
@@ -284,7 +344,13 @@ pub async fn execute(
                         .and_then(|c| {
                             c.lines()
                                 .find(|l| l.trim_start_matches(' ').starts_with("description:"))
-                                .map(|l| l.trim_start_matches("description:").trim().trim_matches('>').trim().to_string())
+                                .map(|l| {
+                                    l.trim_start_matches("description:")
+                                        .trim()
+                                        .trim_matches('>')
+                                        .trim()
+                                        .to_string()
+                                })
                         })
                         .unwrap_or_else(|| format!("Run the {stem} workflow"));
                     let cmd_content = format!(
@@ -306,8 +372,16 @@ pub async fn execute(
             std::fs::create_dir_all(&agents_dir)?;
             ok("agents/ created");
         }
-        write_if_missing(&agents_dir.join("agent007-architect.md"), CLAUDE_AGENT_ARCHITECT, "agents/agent007-architect.md")?;
-        write_if_missing(&agents_dir.join("agent007-analyst.md"),   CLAUDE_AGENT_ANALYST,   "agents/agent007-analyst.md")?;
+        write_if_missing(
+            &agents_dir.join("agent007-architect.md"),
+            CLAUDE_AGENT_ARCHITECT,
+            "agents/agent007-architect.md",
+        )?;
+        write_if_missing(
+            &agents_dir.join("agent007-analyst.md"),
+            CLAUDE_AGENT_ANALYST,
+            "agents/agent007-analyst.md",
+        )?;
         step += 1;
     }
 
@@ -328,7 +402,9 @@ pub async fn execute(
     }
 
     if do_copilot {
-        section(&format!("{step}. Registering MCP server with Copilot (VS Code)"));
+        section(&format!(
+            "{step}. Registering MCP server with Copilot (VS Code)"
+        ));
         register_copilot_mcp(&copilot_scope_dir, "agent007", force)?;
         step += 1;
     }
@@ -354,7 +430,10 @@ pub async fn execute(
     if anthropic_key.is_empty() {
         info("ANTHROPIC_API_KEY not set");
     } else {
-        ok(&format!("ANTHROPIC_API_KEY set ({} chars)", anthropic_key.len()));
+        ok(&format!(
+            "ANTHROPIC_API_KEY set ({} chars)",
+            anthropic_key.len()
+        ));
     }
     if openai_key.is_empty() {
         info("OPENAI_API_KEY not set");
@@ -362,22 +441,33 @@ pub async fn execute(
         ok(&format!("OPENAI_API_KEY set ({} chars)", openai_key.len()));
     }
     if standalone_mode_available(&config) {
-        let provider = selected_runtime_provider(&config)
-            .unwrap_or_else(|| "unknown".to_string());
-        let model = selected_runtime_model(&config)
-            .unwrap_or_else(|| "unknown".to_string());
-        ok(&format!("standalone mode available via {provider} ({model})"));
+        let provider = selected_runtime_provider(&config).unwrap_or_else(|| "unknown".to_string());
+        let model = selected_runtime_model(&config).unwrap_or_else(|| "unknown".to_string());
+        ok(&format!(
+            "standalone mode available via {provider} ({model})"
+        ));
     } else {
         info("No standalone provider configured — hosted MCP mode active (host LLM handles reasoning via MCP)");
         info("Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or [models.ollama] for standalone mode");
     }
 
-    let git_ok = std::process::Command::new("git").arg("--version").output().is_ok();
-    if git_ok { ok("git available") } else { warn("git not found in PATH") }
+    let git_ok = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok();
+    if git_ok {
+        ok("git available")
+    } else {
+        warn("git not found in PATH")
+    }
 
     // ── 10. Summary ────────────────────────────────────────────────────────
     let skill_count = std::fs::read_dir(&home.join("skills"))
-        .map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md")).count())
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                .count()
+        })
         .unwrap_or(0);
 
     println!();
@@ -402,7 +492,9 @@ pub async fn execute(
     println!("{DIM}Quick start (from Claude Code / Cursor / Codex / Copilot):{RESET}");
     println!("  Use agent007 tools via MCP for hosted mode");
     println!("  Or configure Ollama / OPENAI_API_KEY / ANTHROPIC_API_KEY for standalone execution");
-    println!("  Codex: MCP registered in .codex/config.toml, agent descriptions in .codex/agents.md");
+    println!(
+        "  Codex: MCP registered in .codex/config.toml, agent descriptions in .codex/agents.md"
+    );
     println!("  Copilot uses .vscode/mcp.json with servers.agent007");
     println!();
 
@@ -430,7 +522,10 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
         .unwrap();
 
     if servers.contains_key("agent007") && !force {
-        ok(&format!("agent007 already registered in {}", settings_path.display()));
+        ok(&format!(
+            "agent007 already registered in {}",
+            settings_path.display()
+        ));
         return Ok(());
     }
 
@@ -442,11 +537,12 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
 
     // Wire the statusLine so Claude Code shows live agent007 stats below the prompt.
     let obj = root.as_object_mut().unwrap();
-    obj.entry("statusLine")
-        .or_insert_with(|| serde_json::json!({
+    obj.entry("statusLine").or_insert_with(|| {
+        serde_json::json!({
             "type": "command",
             "command": "cat ~/.agent007/statusline 2>/dev/null || echo 'agent007 | ready'"
-        }));
+        })
+    });
 
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -481,7 +577,10 @@ fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> 
         .unwrap();
 
     if servers.contains_key("agent007") && !force {
-        ok(&format!("agent007 already registered in {}", mcp_path.display()));
+        ok(&format!(
+            "agent007 already registered in {}",
+            mcp_path.display()
+        ));
         return Ok(());
     }
 
@@ -533,7 +632,10 @@ fn register_copilot_mcp(vscode_dir: &Path, cmd: &str, force: bool) -> Result<()>
         .unwrap();
 
     if servers.contains_key("agent007") && !force {
-        ok(&format!("agent007 already registered in {}", mcp_path.display()));
+        ok(&format!(
+            "agent007 already registered in {}",
+            mcp_path.display()
+        ));
         return Ok(());
     }
 
@@ -575,7 +677,10 @@ fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
         .unwrap();
 
     if servers.contains_key("agent007") && !force {
-        ok(&format!("agent007 already registered in {}", config_path.display()));
+        ok(&format!(
+            "agent007 already registered in {}",
+            config_path.display()
+        ));
         return Ok(());
     }
 
@@ -620,10 +725,20 @@ fn install_codex_skill(force: bool) -> Result<()> {
     let agent_yaml = agents_dir.join("openai.yaml");
 
     let mut wrote = 0usize;
-    if write_file(&skill_md, CODEX_SKILL_MD, "~/.codex/skills/agent007/SKILL.md", force)? {
+    if write_file(
+        &skill_md,
+        CODEX_SKILL_MD,
+        "~/.codex/skills/agent007/SKILL.md",
+        force,
+    )? {
         wrote += 1;
     }
-    if write_file(&agent_yaml, CODEX_SKILL_AGENT_YAML, "~/.codex/skills/agent007/agents/openai.yaml", force)? {
+    if write_file(
+        &agent_yaml,
+        CODEX_SKILL_AGENT_YAML,
+        "~/.codex/skills/agent007/agents/openai.yaml",
+        force,
+    )? {
         wrote += 1;
     }
 
@@ -690,15 +805,23 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
         .unwrap();
 
     if lsp.contains_key("agent007") && !force {
-        ok(&format!("LSP already registered in {}", settings_path.display()));
+        ok(&format!(
+            "LSP already registered in {}",
+            settings_path.display()
+        ));
     } else {
-        lsp.insert("agent007".to_string(), serde_json::json!({
-            "binary": {
-                "path": binary_path,
-                "arguments": ["serve-lsp", "--stdio"]
-            }
-        }));
-        ok(&format!("Wrote lsp.agent007 → {binary_path} serve-lsp --stdio"));
+        lsp.insert(
+            "agent007".to_string(),
+            serde_json::json!({
+                "binary": {
+                    "path": binary_path,
+                    "arguments": ["serve-lsp", "--stdio"]
+                }
+            }),
+        );
+        ok(&format!(
+            "Wrote lsp.agent007 → {binary_path} serve-lsp --stdio"
+        ));
     }
 
     // ── MCP context_server ─────────────────────────────────────────────────
@@ -709,14 +832,22 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
         .unwrap();
 
     if ctx.contains_key("agent007") && !force {
-        ok(&format!("MCP context_server already registered in {}", settings_path.display()));
+        ok(&format!(
+            "MCP context_server already registered in {}",
+            settings_path.display()
+        ));
     } else {
-        ctx.insert("agent007".to_string(), serde_json::json!({
-            "command": binary_path,
-            "args": ["serve", "--no-dashboard"],
-            "env": {}
-        }));
-        ok(&format!("Wrote context_servers.agent007 → {binary_path} serve --no-dashboard"));
+        ctx.insert(
+            "agent007".to_string(),
+            serde_json::json!({
+                "command": binary_path,
+                "args": ["serve", "--no-dashboard"],
+                "env": {}
+            }),
+        );
+        ok(&format!(
+            "Wrote context_servers.agent007 → {binary_path} serve --no-dashboard"
+        ));
     }
 
     // ── Agent tool permissions ─────────────────────────────────────────────
@@ -742,9 +873,12 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
     if tools.contains_key("mcp:agent007") && !force {
         ok("agent tool permissions already set");
     } else {
-        tools.insert("mcp:agent007".to_string(), serde_json::json!({
-            "default": "allow"
-        }));
+        tools.insert(
+            "mcp:agent007".to_string(),
+            serde_json::json!({
+                "default": "allow"
+            }),
+        );
         ok("Wrote agent.tool_permissions.mcp:agent007 → allow");
     }
 
@@ -759,7 +893,10 @@ fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
     // Zed checks AGENTS.md before CLAUDE.md, so this takes precedence.
     let rules_path = project_dir.join("AGENTS.md");
     if rules_path.exists() && !force {
-        ok(&format!("AGENTS.md already exists — skipped ({})", rules_path.display()));
+        ok(&format!(
+            "AGENTS.md already exists — skipped ({})",
+            rules_path.display()
+        ));
         return Ok(());
     }
     std::fs::write(&rules_path, ZED_AGENTS_MD)?;
@@ -772,7 +909,10 @@ fn register_zed_tasks(zed_dir: &Path, force: bool) -> Result<()> {
     let tasks_path = zed_dir.join("tasks.json");
 
     if tasks_path.exists() && !force {
-        ok(&format!("tasks.json already exists — skipped ({})", tasks_path.display()));
+        ok(&format!(
+            "tasks.json already exists — skipped ({})",
+            tasks_path.display()
+        ));
         return Ok(());
     }
 
@@ -842,14 +982,46 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
             .unwrap_or(true);
     if wf_missing {
         std::fs::create_dir_all(&wf_dir)?;
-        write_if_missing(&wf_dir.join("log-analysis.yaml"), WORKFLOW_LOG_ANALYSIS, "~/.agent007/workflows/log-analysis.yaml")?;
-        write_if_missing(&wf_dir.join("code-review.yaml"),  WORKFLOW_CODE_REVIEW,  "~/.agent007/workflows/code-review.yaml")?;
-        write_if_missing(&wf_dir.join("security-audit.yaml"),WORKFLOW_SECURITY_AUDIT,"~/.agent007/workflows/security-audit.yaml")?;
-        write_if_missing(&wf_dir.join("sparc.yaml"),        WORKFLOW_SPARC,        "~/.agent007/workflows/sparc.yaml")?;
-        write_if_missing(&wf_dir.join("tdd.yaml"),          WORKFLOW_TDD,          "~/.agent007/workflows/tdd.yaml")?;
-        write_if_missing(&wf_dir.join("ideation.yaml"),     WORKFLOW_IDEATION,     "~/.agent007/workflows/ideation.yaml")?;
-        write_if_missing(&wf_dir.join("feature.yaml"),      WORKFLOW_FEATURE,      "~/.agent007/workflows/feature.yaml")?;
-        write_if_missing(&wf_dir.join("brainstorm.yaml"),   WORKFLOW_BRAINSTORM,   "~/.agent007/workflows/brainstorm.yaml")?;
+        write_if_missing(
+            &wf_dir.join("log-analysis.yaml"),
+            WORKFLOW_LOG_ANALYSIS,
+            "~/.agent007/workflows/log-analysis.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("code-review.yaml"),
+            WORKFLOW_CODE_REVIEW,
+            "~/.agent007/workflows/code-review.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("security-audit.yaml"),
+            WORKFLOW_SECURITY_AUDIT,
+            "~/.agent007/workflows/security-audit.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("sparc.yaml"),
+            WORKFLOW_SPARC,
+            "~/.agent007/workflows/sparc.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("tdd.yaml"),
+            WORKFLOW_TDD,
+            "~/.agent007/workflows/tdd.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("ideation.yaml"),
+            WORKFLOW_IDEATION,
+            "~/.agent007/workflows/ideation.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("feature.yaml"),
+            WORKFLOW_FEATURE,
+            "~/.agent007/workflows/feature.yaml",
+        )?;
+        write_if_missing(
+            &wf_dir.join("brainstorm.yaml"),
+            WORKFLOW_BRAINSTORM,
+            "~/.agent007/workflows/brainstorm.yaml",
+        )?;
         ok("8 built-in workflows seeded to ~/.agent007/workflows/");
     }
 
@@ -867,13 +1039,22 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
         };
         let mut count = 0usize;
         for spec in &personas {
-            let filename = spec.name
+            let filename = spec
+                .name
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect::<String>()
                 .to_lowercase();
             let path = personas_dir.join(format!("{filename}.toml"));
-            let tools_str = spec.allowed_tools.iter()
+            let tools_str = spec
+                .allowed_tools
+                .iter()
                 .map(|t| format!("\"{}\"", t))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -892,7 +1073,11 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
                 tools_str,
                 spec.system_prompt,
             );
-            if write_if_missing(&path, &content, &format!("~/.agent007/personas/{filename}.toml"))? {
+            if write_if_missing(
+                &path,
+                &content,
+                &format!("~/.agent007/personas/{filename}.toml"),
+            )? {
                 count += 1;
             }
         }
@@ -2227,6 +2412,27 @@ const CODEX_INSTRUCTIONS: &str = r#"# agent007 — AI Orchestration Agents
 You have access to the **agent007** MCP server. Use `mcp__agent007__*` tools for complex,
 multi-step, or analytical tasks. Always prefer agent007 tools over ad-hoc generation.
 
+## Simple Command Mode (Recommended in Codex)
+
+When the user uses command-like text (for example `$agent007 ...`, `/agent007 ...`, or `@agent007 ...`),
+prefer this single MCP tool:
+
+```
+mcp__agent007__agent007_dispatch
+```
+
+Dispatch examples:
+
+```
+$agent007 wf tdd add login rate limiting
+$agent007 workflow code-review review current diff
+$agent007 skill /brainstorm onboarding ideas
+$agent007 /dev-pr-review review this patch
+$agent007 run refactor auth module
+```
+
+`agent007_dispatch` is additive convenience only. Existing direct tools remain valid.
+
 ## Available Agents
 
 ### agent007-architect
@@ -2257,6 +2463,7 @@ mcp__agent007__agent007_task_submit  persona="Analyst"   → direct analysis
 
 | Task | MCP Tool |
 |------|----------|
+| Simple command-style routing | `mcp__agent007__agent007_dispatch` |
 | Run any task | `mcp__agent007__agent007_run` |
 | List workflows | `mcp__agent007__agent007_workflow_list` |
 | Run a workflow | `mcp__agent007__agent007_workflow_run` |
@@ -2333,6 +2540,21 @@ description: >
 
 You have access to the **agent007** MCP server. Use `mcp__agent007__*` tools.
 
+## Simple Command Mode (Recommended in Codex)
+
+When users type command-like requests (`$agent007 ...`, `/agent007 ...`, `@agent007 ...`),
+prefer `mcp__agent007__agent007_dispatch`.
+
+Examples:
+
+```
+$agent007 wf tdd add login rate limiting
+$agent007 workflow code-review review current diff
+$agent007 skill /brainstorm onboarding ideas
+$agent007 /dev-pr-review review this patch
+$agent007 run refactor auth module
+```
+
 ## Agents
 
 ### agent007-architect
@@ -2370,6 +2592,7 @@ findings in a structured report with severity rankings and actionable fixes.
 
 | Task | MCP Tool |
 |------|----------|
+| Simple command-style routing | `mcp__agent007__agent007_dispatch` |
 | Run any task | `mcp__agent007__agent007_run` |
 | List workflows | `mcp__agent007__agent007_workflow_list` |
 | Run a workflow | `mcp__agent007__agent007_workflow_run` |

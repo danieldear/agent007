@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use serde_json::{json, Value};
 use crate::error::ModelError;
 use crate::provider::ModelProvider;
 use crate::types::{CompletionRequest, CompletionResponse, Message, Role};
+use async_trait::async_trait;
+use serde_json::{json, Value};
 
 pub struct CodexProvider {
     api_key: String,
@@ -101,11 +101,10 @@ impl ModelProvider for CodexProvider {
 
         let json: Value = response.json().await?;
 
-        let content = extract_output_text(&json)
-            .ok_or_else(|| ModelError::Api {
-                provider: self.name().to_string(),
-                message: "missing or invalid content field".to_string(),
-            })?;
+        let content = extract_output_text(&json).ok_or_else(|| ModelError::Api {
+            provider: self.name().to_string(),
+            message: "missing or invalid content field".to_string(),
+        })?;
 
         Ok(CompletionResponse {
             content,
@@ -155,7 +154,10 @@ mod tests {
     #[test]
     fn codex_builds_openai_body() {
         let p = CodexProvider::new("key", "gpt-5.3-codex");
-        let msgs = vec![Message { role: Role::User, content: "hi".to_string() }];
+        let msgs = vec![Message {
+            role: Role::User,
+            content: "hi".to_string(),
+        }];
         let body = p.build_body("gpt-5.3-codex", &msgs, Some(50), None, Some("be precise"));
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["model"], "gpt-5.3-codex");
@@ -175,6 +177,9 @@ mod tests {
                 ]
             }]
         });
-        assert_eq!(extract_output_text(&response).as_deref(), Some("hello\nworld"));
+        assert_eq!(
+            extract_output_text(&response).as_deref(),
+            Some("hello\nworld")
+        );
     }
 }

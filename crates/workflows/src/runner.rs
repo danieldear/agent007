@@ -8,7 +8,7 @@ use agent007_core::events::AgentEvent;
 use agent007_core::persona::PersonaProvider;
 use agent007_core::types::PromptRef;
 use agent007_core::RunStore;
-use agent007_models::{ModelRouter, ModelProvider, CompletionRequest, Message, Role};
+use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
 
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind, ApprovalGate};
 use crate::dag::DagValidator;
@@ -41,11 +41,7 @@ impl WorkflowRunner {
         }
     }
 
-    pub fn for_run(
-        &self,
-        run_store: Arc<RunStore>,
-        run_id: impl Into<String>,
-    ) -> Self {
+    pub fn for_run(&self, run_store: Arc<RunStore>, run_id: impl Into<String>) -> Self {
         Self {
             persona_provider: self.persona_provider.clone(),
             model_router: self.model_router.clone(),
@@ -138,7 +134,7 @@ impl WorkflowRunner {
 
         let mut batch_index = 0_usize;
         'workflow_batches: while batch_index < validated_dag.batches.len() {
-                let batch = &validated_dag.batches[batch_index];
+            let batch = &validated_dag.batches[batch_index];
             self.trace_note(
                 "workflow-batch-start",
                 serde_json::json!({
@@ -211,50 +207,68 @@ impl WorkflowRunner {
 
                     if let Some(existing_content) = pending_approval_content {
                         step_futures.push(tokio::spawn(async move {
-                            Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>(
-                                (step, existing_content, String::new(), 0)
-                            )
+                            Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>((
+                                step,
+                                existing_content,
+                                String::new(),
+                                0,
+                            ))
                         }));
                         continue;
                     }
 
                     // Sub-workflow steps run inline (not in tokio::spawn) to avoid Send bounds
                     if step.r#type == StepType::SubWorkflow {
-                        let sub_result: Result<(crate::types::StepDef, String, String, usize), WorkflowError> = async {
-                            let wf_name = step.workflow.clone().ok_or_else(|| WorkflowError::StepFailed {
-                                id: step.id.clone(),
-                                reason: "sub-workflow step missing 'workflow' field".to_string(),
-                            })?;
+                        let sub_result: Result<
+                            (crate::types::StepDef, String, String, usize),
+                            WorkflowError,
+                        > = async {
+                            let wf_name =
+                                step.workflow
+                                    .clone()
+                                    .ok_or_else(|| WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: "sub-workflow step missing 'workflow' field"
+                                            .to_string(),
+                                    })?;
                             let wf_path = agent007_core::paths::agent007_home()
                                 .join("workflows")
                                 .join(format!("{wf_name}.toml"));
-                            let toml_str = std::fs::read_to_string(&wf_path).map_err(|e| WorkflowError::StepFailed {
-                                id: step.id.clone(),
-                                reason: format!("failed to read sub-workflow '{wf_name}': {e}"),
+                            let toml_str = std::fs::read_to_string(&wf_path).map_err(|e| {
+                                WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!("failed to read sub-workflow '{wf_name}': {e}"),
+                                }
                             })?;
-                            let sub_def: crate::types::WorkflowDef = toml::from_str(&toml_str).map_err(|e| WorkflowError::StepFailed {
-                                id: step.id.clone(),
-                                reason: format!("failed to parse sub-workflow '{wf_name}': {e}"),
-                            })?;
+                            let sub_def: crate::types::WorkflowDef = toml::from_str(&toml_str)
+                                .map_err(|e| WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!(
+                                        "failed to parse sub-workflow '{wf_name}': {e}"
+                                    ),
+                                })?;
                             let sub_runner = WorkflowRunner::new(
                                 persona_provider.clone(),
                                 router.clone(),
                                 sub_dispatcher.clone(),
                             );
-                            let result = Box::pin(sub_runner.run(&sub_def, &task_str)).await.map_err(|e| WorkflowError::StepFailed {
-                                id: step.id.clone(),
-                                reason: format!("sub-workflow '{wf_name}' failed: {e}"),
-                            })?;
-                            let content = result.outputs.iter()
+                            let result = Box::pin(sub_runner.run(&sub_def, &task_str))
+                                .await
+                                .map_err(|e| WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!("sub-workflow '{wf_name}' failed: {e}"),
+                                })?;
+                            let content = result
+                                .outputs
+                                .iter()
                                 .map(|(k, v)| format!("{k}: {v}"))
                                 .collect::<Vec<_>>()
                                 .join("\n\n");
                             let tokens = result.budget_used.tokens as usize;
                             Ok((step, content, format!("sub-workflow/{wf_name}"), tokens))
-                        }.await;
-                        step_futures.push(tokio::spawn(async move {
-                            sub_result
-                        }));
+                        }
+                        .await;
+                        step_futures.push(tokio::spawn(async move { sub_result }));
                         continue;
                     }
 
@@ -267,15 +281,22 @@ impl WorkflowRunner {
                             let loader = agent007_skills::SkillLoader::new(&skills_dir);
                             match loader.load_all() {
                                 Ok(skills) => {
-                                    match skills.into_iter().find(|s| s.trigger() == skill_trigger) {
+                                    match skills.into_iter().find(|s| s.trigger() == skill_trigger)
+                                    {
                                         Some(skill) => skill.template().to_string(),
-                                        None => return Err(WorkflowError::SkillNotFound(skill_trigger.clone())),
+                                        None => {
+                                            return Err(WorkflowError::SkillNotFound(
+                                                skill_trigger.clone(),
+                                            ))
+                                        }
                                     }
                                 }
-                                Err(e) => return Err(WorkflowError::StepFailed {
-                                    id: step.id.clone(),
-                                    reason: format!("failed to load skills: {e}"),
-                                }),
+                                Err(e) => {
+                                    return Err(WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: format!("failed to load skills: {e}"),
+                                    })
+                                }
                             }
                         } else {
                             return Err(WorkflowError::StepFailed {
@@ -301,25 +322,40 @@ impl WorkflowRunner {
                         // 3. Call model provider
                         let req = CompletionRequest {
                             model: model_name.clone(),
-                            messages: vec![Message { role: Role::User, content: rendered.clone() }],
+                            messages: vec![Message {
+                                role: Role::User,
+                                content: rendered.clone(),
+                            }],
                             max_tokens: None,
                             temperature: None,
                             system: None,
                         };
-                        let resp = router.complete(req).await.map_err(|e| WorkflowError::StepFailed {
-                            id: step.id.clone(),
-                            reason: e.to_string(),
-                        })?;
+                        let resp =
+                            router
+                                .complete(req)
+                                .await
+                                .map_err(|e| WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: e.to_string(),
+                                })?;
 
                         // Use actual API token counts when available; fall back to char estimate.
-                        let tokens = resp.input_tokens
+                        let tokens = resp
+                            .input_tokens
                             .and_then(|i| resp.output_tokens.map(|o| (i + o) as usize))
                             .unwrap_or_else(|| rendered.len() / 4 + resp.content.len() / 4);
-                        let actual_model = if resp.model.is_empty() { model_name } else { resp.model.clone() };
+                        let actual_model = if resp.model.is_empty() {
+                            model_name
+                        } else {
+                            resp.model.clone()
+                        };
 
-                        Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>(
-                            (step, resp.content, actual_model, tokens)
-                        )
+                        Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>((
+                            step,
+                            resp.content,
+                            actual_model,
+                            tokens,
+                        ))
                     }));
                 }
 
@@ -343,11 +379,14 @@ impl WorkflowRunner {
                         }
                     };
                     // Emit a ModelRequest event so the dashboard picks up per-step tokens/model.
-                    let _ = self.dispatcher.publish(AgentEvent::ModelRequest {
-                        provider: step_model,
-                        prompt_ref: PromptRef::new(),
-                        token_estimate: step_tokens,
-                    }).await;
+                    let _ = self
+                        .dispatcher
+                        .publish(AgentEvent::ModelRequest {
+                            provider: step_model,
+                            prompt_ref: PromptRef::new(),
+                            token_estimate: step_tokens,
+                        })
+                        .await;
 
                     // Handle approval gate (sequential after the step completes)
                     let final_content = match self
@@ -423,7 +462,8 @@ impl WorkflowRunner {
                                 );
                                 if !passed {
                                     let attempt = {
-                                        let count = retry_counts.entry(step.id.clone()).or_insert(0);
+                                        let count =
+                                            retry_counts.entry(step.id.clone()).or_insert(0);
                                         *count += 1;
                                         *count
                                     };
@@ -446,18 +486,16 @@ impl WorkflowRunner {
                                             &mut state,
                                             Some(step.id.clone()),
                                             WorkflowError::MaxRetriesExceeded {
-                                            id: step.id.clone(),
-                                            max,
+                                                id: step.id.clone(),
+                                                max,
                                             },
                                         );
                                     }
                                     rewind_target = Some(eval.on_fail.clone());
                                     rewind_to_batch = step_batches.get(&eval.on_fail).copied();
                                 } else {
-                                    for dependent in step_dependents
-                                        .get(&step.id)
-                                        .into_iter()
-                                        .flatten()
+                                    for dependent in
+                                        step_dependents.get(&step.id).into_iter().flatten()
                                     {
                                         if dependent != &eval.on_pass {
                                             skipped_steps.insert(dependent.clone());
@@ -493,8 +531,8 @@ impl WorkflowRunner {
                                             &mut state,
                                             Some(step.id.clone()),
                                             WorkflowError::NoRouteMatch {
-                                            id: step.id.clone(),
-                                            output: final_content,
+                                                id: step.id.clone(),
+                                                output: final_content,
                                             },
                                         );
                                     }
@@ -635,7 +673,9 @@ impl WorkflowRunner {
                     "output_preview": preview(content),
                 }),
             );
-            return Err(WorkflowError::ApprovalRequired { id: step.id.clone() });
+            return Err(WorkflowError::ApprovalRequired {
+                id: step.id.clone(),
+            });
         };
 
         state.record_approval_decision(&step.id, decision.clone());
@@ -650,12 +690,12 @@ impl WorkflowRunner {
         );
 
         match decision.decision {
-            ApprovalDecisionKind::Approve => Ok(decision
-                .content
-                .unwrap_or_else(|| content.to_string())),
-            ApprovalDecisionKind::Edit => Ok(decision
-                .content
-                .unwrap_or_else(|| content.to_string())),
+            ApprovalDecisionKind::Approve => {
+                Ok(decision.content.unwrap_or_else(|| content.to_string()))
+            }
+            ApprovalDecisionKind::Edit => {
+                Ok(decision.content.unwrap_or_else(|| content.to_string()))
+            }
             ApprovalDecisionKind::Deny => Err(WorkflowError::ApprovalDenied(step.id.clone())),
         }
     }
@@ -820,19 +860,25 @@ pub(crate) fn check_budget(
 ) -> Result<(), WorkflowError> {
     let mode = budget.on_exceed.as_deref().unwrap_or("stop");
 
-    let token_exceeded = budget.max_tokens_per_session
+    let token_exceeded = budget
+        .max_tokens_per_session
         .map_or(false, |max| used.tokens > max);
-    let usd_exceeded = budget.max_usd_per_task
+    let usd_exceeded = budget
+        .max_usd_per_task
         .map_or(false, |max| used.estimated_usd > max);
 
     if !token_exceeded && !usd_exceeded {
         // Check alert threshold
-        if let (Some(alert_pct), Some(max_tokens)) = (budget.alert_at_percent, budget.max_tokens_per_session) {
+        if let (Some(alert_pct), Some(max_tokens)) =
+            (budget.alert_at_percent, budget.max_tokens_per_session)
+        {
             let pct_used = (used.tokens as f64 / max_tokens as f64) * 100.0;
             if pct_used >= alert_pct as f64 {
                 tracing::warn!(
                     "Budget alert: {:.0}% of token limit used ({}/{})",
-                    pct_used, used.tokens, max_tokens
+                    pct_used,
+                    used.tokens,
+                    max_tokens
                 );
             }
         }
@@ -840,9 +886,17 @@ pub(crate) fn check_budget(
     }
 
     let reason = if token_exceeded {
-        format!("token limit {} exceeded (used {})", budget.max_tokens_per_session.unwrap(), used.tokens)
+        format!(
+            "token limit {} exceeded (used {})",
+            budget.max_tokens_per_session.unwrap(),
+            used.tokens
+        )
     } else {
-        format!("USD limit ${:.6} exceeded (used ${:.6})", budget.max_usd_per_task.unwrap(), used.estimated_usd)
+        format!(
+            "USD limit ${:.6} exceeded (used ${:.6})",
+            budget.max_usd_per_task.unwrap(),
+            used.estimated_usd
+        )
     };
 
     match mode {
@@ -941,12 +995,14 @@ pub(crate) fn match_route<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use agent007_core::RunStore;
     use crate::types::{BudgetConfig, EvaluateConfig, RouteConfig, StepDef, StepType, WorkflowDef};
-    use agent007_models::{CompletionRequest, CompletionResponse, MockProvider, ModelError, ModelProvider, ModelRouter};
     use agent007_core::dispatcher::LocalDispatcher;
     use agent007_core::persona::NoOpPersonaProvider;
+    use agent007_core::RunStore;
+    use agent007_models::{
+        CompletionRequest, CompletionResponse, MockProvider, ModelError, ModelProvider, ModelRouter,
+    };
+    use async_trait::async_trait;
     use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
@@ -983,7 +1039,10 @@ mod tests {
             "sequence"
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ModelError> {
             let content = self
                 .responses
                 .lock()
@@ -1080,7 +1139,10 @@ mod tests {
         let result = runner.run(&simple_def(), "build auth").await.unwrap();
         assert_eq!(result.steps_completed, 1);
         assert_eq!(result.steps_total, 1);
-        assert_eq!(result.outputs.get("notes").map(|s| s.as_str()), Some("mocked output"));
+        assert_eq!(
+            result.outputs.get("notes").map(|s| s.as_str()),
+            Some("mocked output")
+        );
     }
 
     #[tokio::test]
@@ -1123,9 +1185,14 @@ mod tests {
             description: None,
             steps: vec![
                 StepDef {
-                    id: "a".to_string(), agent: "A".to_string(), model: None,
-                    inputs: Some(vec!["out_b".to_string()]), depends_on: None,
-                    prompt: Some("p".to_string()), skill: None, output: Some("out_a".to_string()),
+                    id: "a".to_string(),
+                    agent: "A".to_string(),
+                    model: None,
+                    inputs: Some(vec!["out_b".to_string()]),
+                    depends_on: None,
+                    prompt: Some("p".to_string()),
+                    skill: None,
+                    output: Some("out_a".to_string()),
                     requires_approval: None,
                     r#type: StepType::Execute,
                     evaluate: None,
@@ -1133,9 +1200,14 @@ mod tests {
                     workflow: None,
                 },
                 StepDef {
-                    id: "b".to_string(), agent: "B".to_string(), model: None,
-                    inputs: Some(vec!["out_a".to_string()]), depends_on: None,
-                    prompt: Some("p".to_string()), skill: None, output: Some("out_b".to_string()),
+                    id: "b".to_string(),
+                    agent: "B".to_string(),
+                    model: None,
+                    inputs: Some(vec!["out_a".to_string()]),
+                    depends_on: None,
+                    prompt: Some("p".to_string()),
+                    skill: None,
+                    output: Some("out_b".to_string()),
                     requires_approval: None,
                     r#type: StepType::Execute,
                     evaluate: None,
@@ -1158,10 +1230,15 @@ mod tests {
             name: "t".to_string(),
             description: None,
             steps: vec![StepDef {
-                id: "s".to_string(), agent: "A".to_string(), model: None,
-                inputs: None, depends_on: None,
-                prompt: Some("task is {{task}}".to_string()), skill: None,
-                output: None, requires_approval: None,
+                id: "s".to_string(),
+                agent: "A".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("task is {{task}}".to_string()),
+                skill: None,
+                output: None,
+                requires_approval: None,
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
@@ -1186,10 +1263,15 @@ mod tests {
             name: "budget-test".to_string(),
             description: None,
             steps: vec![StepDef {
-                id: "s1".to_string(), agent: "A".to_string(), model: None,
-                inputs: None, depends_on: None,
-                prompt: Some("do {{task}}".to_string()), skill: None,
-                output: Some("out".to_string()), requires_approval: None,
+                id: "s1".to_string(),
+                agent: "A".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("do {{task}}".to_string()),
+                skill: None,
+                output: Some("out".to_string()),
+                requires_approval: None,
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
@@ -1203,7 +1285,10 @@ mod tests {
             }),
         };
         let err = runner.run(&def, "task").await.unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::BudgetExceeded(_)));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::BudgetExceeded(_)
+        ));
     }
 
     #[tokio::test]
@@ -1215,10 +1300,15 @@ mod tests {
             name: "budget-usd".to_string(),
             description: None,
             steps: vec![StepDef {
-                id: "s1".to_string(), agent: "A".to_string(), model: None,
-                inputs: None, depends_on: None,
-                prompt: Some("do {{task}}".to_string()), skill: None,
-                output: Some("out".to_string()), requires_approval: None,
+                id: "s1".to_string(),
+                agent: "A".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("do {{task}}".to_string()),
+                skill: None,
+                output: Some("out".to_string()),
+                requires_approval: None,
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
@@ -1232,7 +1322,10 @@ mod tests {
             }),
         };
         let err = runner.run(&def, "task").await.unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::BudgetExceeded(_)));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::BudgetExceeded(_)
+        ));
     }
 
     #[tokio::test]
@@ -1242,10 +1335,15 @@ mod tests {
             name: "budget-alert".to_string(),
             description: None,
             steps: vec![StepDef {
-                id: "s1".to_string(), agent: "A".to_string(), model: None,
-                inputs: None, depends_on: None,
-                prompt: Some("do {{task}}".to_string()), skill: None,
-                output: Some("out".to_string()), requires_approval: None,
+                id: "s1".to_string(),
+                agent: "A".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("do {{task}}".to_string()),
+                skill: None,
+                output: Some("out".to_string()),
+                requires_approval: None,
                 r#type: StepType::Execute,
                 evaluate: None,
                 routes: None,
@@ -1465,9 +1563,18 @@ mod tests {
         };
 
         let result = runner.run(&def, "build auth").await.unwrap();
-        assert_eq!(result.outputs.get("code").map(String::as_str), Some("draft-v2"));
-        assert_eq!(result.outputs.get("verdict").map(String::as_str), Some("pass: looks good"));
-        assert_eq!(result.outputs.get("deployment").map(String::as_str), Some("deploy ok"));
+        assert_eq!(
+            result.outputs.get("code").map(String::as_str),
+            Some("draft-v2")
+        );
+        assert_eq!(
+            result.outputs.get("verdict").map(String::as_str),
+            Some("pass: looks good")
+        );
+        assert_eq!(
+            result.outputs.get("deployment").map(String::as_str),
+            Some("deploy ok")
+        );
     }
 
     #[tokio::test]
@@ -1509,12 +1616,21 @@ mod tests {
         let state: crate::state::WorkflowRunState = store
             .read_json_artifact(&run.id, "workflow-state.json")
             .unwrap();
-        assert_eq!(state.status, crate::state::WorkflowRunStatus::WaitingApproval);
         assert_eq!(
-            state.pending_approval.as_ref().map(|pending| pending.step_id.as_str()),
+            state.status,
+            crate::state::WorkflowRunStatus::WaitingApproval
+        );
+        assert_eq!(
+            state
+                .pending_approval
+                .as_ref()
+                .map(|pending| pending.step_id.as_str()),
             Some("approve-me")
         );
-        assert_eq!(state.steps[0].status, crate::state::WorkflowStepStatus::AwaitingApproval);
+        assert_eq!(
+            state.steps[0].status,
+            crate::state::WorkflowStepStatus::AwaitingApproval
+        );
     }
 
     #[tokio::test]

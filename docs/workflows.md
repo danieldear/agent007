@@ -4,6 +4,11 @@ Workflows are multi-step agent pipelines defined as YAML files in `~/.agent007/w
 
 ## Running a workflow
 
+**Command-style dispatch (Codex-friendly):**
+```
+agent007_dispatch command="$agent007 wf tdd Add rate limiting to the API"
+```
+
 **Via MCP (from your AI editor):**
 ```
 agent007_workflow_run name="tdd" task="Add rate limiting to the API"
@@ -13,6 +18,8 @@ agent007_workflow_run name="tdd" task="Add rate limiting to the API"
 ```bash
 agent007 workflow run tdd "Add rate limiting to the API"
 ```
+
+`agent007_dispatch` is additive convenience. Direct workflow tools still work.
 
 ## Hosted-MCP mode
 

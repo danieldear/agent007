@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::error::ModelError;
 use crate::types::{CompletionRequest, CompletionResponse};
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
@@ -23,7 +23,10 @@ mod tests {
 
     #[async_trait]
     impl ModelProvider for AlwaysHelloProvider {
-        async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, ModelError> {
+        async fn complete(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<CompletionResponse, ModelError> {
             Ok(CompletionResponse {
                 content: "hello".to_string(),
                 model: "test".to_string(),
@@ -31,7 +34,9 @@ mod tests {
                 output_tokens: None,
             })
         }
-        fn name(&self) -> &str { "test" }
+        fn name(&self) -> &str {
+            "test"
+        }
     }
 
     #[tokio::test]
@@ -39,7 +44,10 @@ mod tests {
         let provider: Box<dyn ModelProvider> = Box::new(AlwaysHelloProvider);
         let req = CompletionRequest {
             model: "test".to_string(),
-            messages: vec![Message { role: Role::User, content: "hi".to_string() }],
+            messages: vec![Message {
+                role: Role::User,
+                content: "hi".to_string(),
+            }],
             max_tokens: None,
             temperature: None,
             system: None,
@@ -57,7 +65,9 @@ mod tests {
             async fn embed(&self, _text: &str) -> Result<Vec<f32>, ModelError> {
                 Ok(vec![0.0; 4])
             }
-            fn name(&self) -> &str { "zero" }
+            fn name(&self) -> &str {
+                "zero"
+            }
         }
         let ep: Box<dyn EmbeddingProvider> = Box::new(ZeroEmbedder);
         let v = ep.embed("test").await.unwrap();

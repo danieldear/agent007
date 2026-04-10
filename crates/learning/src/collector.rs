@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use futures::StreamExt as _;
 use agent007_core::dispatcher::Dispatcher;
 use agent007_core::events::AgentEvent;
 use agent007_core::types::PromptRef;
+use futures::StreamExt as _;
+use std::sync::Arc;
 
 pub struct FeedbackCollector {
     dispatcher: Arc<dyn Dispatcher>,
@@ -23,13 +23,22 @@ impl FeedbackCollector {
         scorer: crate::scorer::RewardScorer,
         learning_dispatcher: Arc<crate::dispatcher::LearningDispatcher>,
     ) -> Self {
-        Self { dispatcher, store, scorer, learning_dispatcher, insight_generator: None }
+        Self {
+            dispatcher,
+            store,
+            scorer,
+            learning_dispatcher,
+            insight_generator: None,
+        }
     }
 
     /// Attach an `InsightGenerator` to this collector.
     /// After each skill feedback entry is recorded, the collector checks whether
     /// auto-insight generation should fire based on the generator's config.
-    pub fn with_insight_generator(mut self, generator: Arc<crate::insight::InsightGenerator>) -> Self {
+    pub fn with_insight_generator(
+        mut self,
+        generator: Arc<crate::insight::InsightGenerator>,
+    ) -> Self {
         self.insight_generator = Some(generator);
         self
     }
@@ -37,18 +46,26 @@ impl FeedbackCollector {
     /// Subscribe to the core Dispatcher and process AgentEvents in a loop.
     /// Call this in a spawned tokio task. Returns when the stream ends or cancellation is signalled.
     pub async fn run(&self) -> Result<(), crate::error::LearningError> {
-        let mut stream = self.dispatcher
+        let mut stream = self
+            .dispatcher
             .subscribe()
             .await
             .map_err(|e| crate::error::LearningError::Dispatcher(e.to_string()))?;
 
         while let Some(event) = stream.next().await {
             match event {
-                AgentEvent::TaskCompleted { agent_id, result, skill_name, model } => {
+                AgentEvent::TaskCompleted {
+                    agent_id,
+                    result,
+                    skill_name,
+                    model,
+                } => {
                     let outcome = if result.success {
                         crate::types::Outcome::Success
                     } else {
-                        crate::types::Outcome::Failure { reason: result.output.clone() }
+                        crate::types::Outcome::Failure {
+                            reason: result.output.clone(),
+                        }
                     };
                     let scoring_ctx = crate::scorer::ScoringContext {
                         outcome: outcome.clone(),
@@ -73,20 +90,31 @@ impl FeedbackCollector {
                     if let Err(e) = self.store.record_feedback(&entry) {
                         tracing::warn!(error = %e, "failed to record feedback entry");
                     } else {
-                        let _ = self.learning_dispatcher.publish(crate::types::LearningEvent::FeedbackRecorded {
-                            agent_id: entry.agent_id.clone(),
-                            reward: entry.reward.unwrap_or(0.0),
-                        });
+                        let _ = self.learning_dispatcher.publish(
+                            crate::types::LearningEvent::FeedbackRecorded {
+                                agent_id: entry.agent_id.clone(),
+                                reward: entry.reward.unwrap_or(0.0),
+                            },
+                        );
                         // Maybe trigger auto-insight generation for this skill.
-                        if let (Some(generator), Some(ref skill)) = (&self.insight_generator, &entry.skill_name) {
+                        if let (Some(generator), Some(ref skill)) =
+                            (&self.insight_generator, &entry.skill_name)
+                        {
                             let check_n = generator.config.check_every_n;
                             match self.store.count_feedback(skill) {
-                                Ok(count) if count >= generator.config.min_feedback_count && count % check_n == 0 => {
-                                    if let Err(e) = generator.maybe_generate(skill, &self.store).await {
+                                Ok(count)
+                                    if count >= generator.config.min_feedback_count
+                                        && count % check_n == 0 =>
+                                {
+                                    if let Err(e) =
+                                        generator.maybe_generate(skill, &self.store).await
+                                    {
                                         tracing::warn!(error = %e, skill = skill, "auto-insight generation failed");
                                     }
                                 }
-                                Err(e) => tracing::warn!(error = %e, "failed to count feedback for insight check"),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "failed to count feedback for insight check")
+                                }
                                 _ => {}
                             }
                         }
@@ -96,7 +124,12 @@ impl FeedbackCollector {
                 // to get the actual success/failure signal.
                 AgentEvent::ToolCall { .. } => {}
 
-                AgentEvent::ToolCallResult { agent_id, tool: _, success, error } => {
+                AgentEvent::ToolCallResult {
+                    agent_id,
+                    tool: _,
+                    success,
+                    error,
+                } => {
                     let outcome = if success {
                         crate::types::Outcome::Success
                     } else {
@@ -128,10 +161,12 @@ impl FeedbackCollector {
                     if let Err(e) = self.store.record_feedback(&entry) {
                         tracing::warn!(error = %e, "failed to record feedback entry");
                     } else {
-                        let _ = self.learning_dispatcher.publish(crate::types::LearningEvent::FeedbackRecorded {
-                            agent_id: entry.agent_id.clone(),
-                            reward: entry.reward.unwrap_or(0.0),
-                        });
+                        let _ = self.learning_dispatcher.publish(
+                            crate::types::LearningEvent::FeedbackRecorded {
+                                agent_id: entry.agent_id.clone(),
+                                reward: entry.reward.unwrap_or(0.0),
+                            },
+                        );
                     }
                 }
                 // All other events (e.g., HookFired, ModelRequest, MemoryWrite, TaskAssigned) are silently ignored.
@@ -146,15 +181,15 @@ impl FeedbackCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use async_trait::async_trait;
     use agent007_core::dispatcher::{Dispatcher, EventStream};
     use agent007_core::error::CoreError;
     use agent007_core::events::{AgentEvent, ToolCall};
     use agent007_core::task::TaskResult;
     use agent007_core::types::AgentId;
     use agent007_memory::store::MemoryStore;
+    use async_trait::async_trait;
     use futures::stream;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -169,7 +204,9 @@ mod tests {
 
     impl MockDispatcher {
         fn with_events(events: Vec<AgentEvent>) -> Arc<Self> {
-            Arc::new(Self { events: Mutex::new(events) })
+            Arc::new(Self {
+                events: Mutex::new(events),
+            })
         }
     }
 
@@ -235,11 +272,19 @@ mod tests {
     async fn task_completed_success_records_feedback_with_success_outcome() {
         let agent_id = AgentId::new();
         let result = TaskResult::success(Uuid::new_v4(), "all good".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id, result, skill_name: Some("test-skill".to_string()), model: Some("claude".to_string()) }];
+        let events = vec![AgentEvent::TaskCompleted {
+            agent_id,
+            result,
+            skill_name: Some("test-skill".to_string()),
+            model: Some("claude".to_string()),
+        }];
 
         let (ms, _dir) = run_with_events(events).await;
 
-        let index = ms.scoped("learning").read("feedback/index/test-skill").unwrap();
+        let index = ms
+            .scoped("learning")
+            .read("feedback/index/test-skill")
+            .unwrap();
         assert!(index.is_some(), "expected a feedback entry in store");
 
         let ids: Vec<String> = serde_json::from_str(&index.unwrap()).unwrap();
@@ -256,7 +301,11 @@ mod tests {
             entry.outcome
         );
         assert!(entry.reward.is_some());
-        assert_eq!(entry.skill_name.as_deref(), Some("test-skill"), "skill_name should be propagated");
+        assert_eq!(
+            entry.skill_name.as_deref(),
+            Some("test-skill"),
+            "skill_name should be propagated"
+        );
         assert_eq!(entry.model, "claude", "model should be propagated");
     }
 
@@ -266,11 +315,19 @@ mod tests {
     async fn task_completed_failure_records_feedback_with_failure_outcome() {
         let agent_id = AgentId::new();
         let result = TaskResult::failure(Uuid::new_v4(), "timeout".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id, result, skill_name: None, model: None }];
+        let events = vec![AgentEvent::TaskCompleted {
+            agent_id,
+            result,
+            skill_name: None,
+            model: None,
+        }];
 
         let (ms, _dir) = run_with_events(events).await;
 
-        let index = ms.scoped("learning").read("feedback/index/__none__").unwrap();
+        let index = ms
+            .scoped("learning")
+            .read("feedback/index/__none__")
+            .unwrap();
         assert!(index.is_some());
         let ids: Vec<String> = serde_json::from_str(&index.unwrap()).unwrap();
         assert_eq!(ids.len(), 1);
@@ -280,7 +337,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let entry: crate::types::FeedbackEntry = serde_json::from_str(&entry_json).unwrap();
-        assert!(matches!(entry.outcome, crate::types::Outcome::Failure { .. }));
+        assert!(matches!(
+            entry.outcome,
+            crate::types::Outcome::Failure { .. }
+        ));
         assert!(entry.reward.is_some());
     }
 
@@ -292,11 +352,19 @@ mod tests {
             name: "bash".to_string(),
             args: serde_json::json!({ "command": "ls" }),
         };
-        let events = vec![AgentEvent::ToolCallResult { agent_id, tool, success: true, error: None }];
+        let events = vec![AgentEvent::ToolCallResult {
+            agent_id,
+            tool,
+            success: true,
+            error: None,
+        }];
 
         let (ms, _dir) = run_with_events(events).await;
 
-        let index = ms.scoped("learning").read("feedback/index/__none__").unwrap();
+        let index = ms
+            .scoped("learning")
+            .read("feedback/index/__none__")
+            .unwrap();
         assert!(index.is_some());
         let ids: Vec<String> = serde_json::from_str(&index.unwrap()).unwrap();
         let entry_json = ms
@@ -320,11 +388,19 @@ mod tests {
             name: "read_file".to_string(),
             args: serde_json::json!({ "path": "/tmp/foo.txt" }),
         };
-        let events = vec![AgentEvent::ToolCallResult { agent_id, tool, success: false, error: Some("file not found".to_string()) }];
+        let events = vec![AgentEvent::ToolCallResult {
+            agent_id,
+            tool,
+            success: false,
+            error: Some("file not found".to_string()),
+        }];
 
         let (ms, _dir) = run_with_events(events).await;
 
-        let index = ms.scoped("learning").read("feedback/index/__none__").unwrap();
+        let index = ms
+            .scoped("learning")
+            .read("feedback/index/__none__")
+            .unwrap();
         assert!(index.is_some());
         let ids: Vec<String> = serde_json::from_str(&index.unwrap()).unwrap();
         let entry_json = ms
@@ -347,7 +423,12 @@ mod tests {
 
         let agent_id = AgentId::new();
         let result = TaskResult::success(Uuid::new_v4(), "done".to_string());
-        let events = vec![AgentEvent::TaskCompleted { agent_id: agent_id.clone(), result, skill_name: None, model: Some("claude".to_string()) }];
+        let events = vec![AgentEvent::TaskCompleted {
+            agent_id: agent_id.clone(),
+            result,
+            skill_name: None,
+            model: Some("claude".to_string()),
+        }];
 
         let (store, _ms, _dir) = make_store_and_ms();
         let dispatcher: Arc<dyn Dispatcher> = MockDispatcher::with_events(events);
@@ -363,9 +444,15 @@ mod tests {
         collector.run().await.unwrap();
 
         let received = FuturesStreamExt::next(&mut learning_stream).await;
-        assert!(received.is_some(), "expected a LearningEvent to be published");
         assert!(
-            matches!(received.unwrap(), crate::types::LearningEvent::FeedbackRecorded { .. }),
+            received.is_some(),
+            "expected a LearningEvent to be published"
+        );
+        assert!(
+            matches!(
+                received.unwrap(),
+                crate::types::LearningEvent::FeedbackRecorded { .. }
+            ),
             "expected FeedbackRecorded event"
         );
     }
@@ -386,7 +473,13 @@ mod tests {
         let (ms, _dir) = run_with_events(events).await;
 
         // No feedback entries should exist.
-        let index = ms.scoped("learning").read("feedback/index/__none__").unwrap();
-        assert!(index.is_none(), "expected no feedback entries for irrelevant events");
+        let index = ms
+            .scoped("learning")
+            .read("feedback/index/__none__")
+            .unwrap();
+        assert!(
+            index.is_none(),
+            "expected no feedback entries for irrelevant events"
+        );
     }
 }

@@ -746,7 +746,7 @@ footer {
 <!-- ── Hero ── -->
 <section class="hero">
   <div class="hero-inner">
-    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · 44 tools</span></div>
+    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · 45+ tools</span></div>
 
     <h1 class="hero-title">
       Your AI editor,<br/>
@@ -780,6 +780,7 @@ footer {
       <div class="term-out success">✓ Registered MCP with Claude Code</div>
       <div class="term-out success">✓ Registered MCP with Cursor</div>
       <div class="term-out success">✓ Registered MCP with Copilot</div>
+      <div class="term-out success">✓ Registered MCP with Codex</div>
       <br/>
       <div class="term-line">
         <span class="term-prompt">$</span>
@@ -818,7 +819,7 @@ footer {
   <div class="section-inner">
     <div class="stats-row reveal">
       <div class="stat-box">
-        <div class="stat-num">44</div>
+        <div class="stat-num">45+</div>
         <div class="stat-label">MCP Tools</div>
       </div>
       <div class="stat-box">
@@ -948,6 +949,18 @@ footer {
     <div class="reveal">
       <div class="code-block">
         <div class="code-header">
+          <span class="code-lang">Codex command-style usage</span>
+        </div>
+        <pre><span class="cm"># Slash-like command routing through one MCP tool</span>
+<span class="kw">agent007_dispatch</span> command=<span class="str">"$agent007 wf tdd add rate limiting to API"</span>
+<span class="kw">agent007_dispatch</span> command=<span class="str">"$agent007 skill /brainstorm onboarding ideas"</span>
+<span class="kw">agent007_dispatch</span> command=<span class="str">"$agent007 run refactor auth module"</span></pre>
+      </div>
+    </div>
+
+    <div class="reveal">
+      <div class="code-block">
+        <div class="code-header">
           <span class="code-lang">Pick your editor</span>
         </div>
         <pre><span class="kw">agent007</span> init <span class="sym">--claude</span>   <span class="cm"># Claude Code only</span>
@@ -970,7 +983,8 @@ footer {
 
     <div class="code-block reveal" style="margin-bottom: 2.5rem;">
       <div class="code-header"><span class="code-lang">Running a workflow</span></div>
-      <pre><span class="kw">agent007</span> workflow run code-review <span class="str">"review src/auth.rs"</span>
+      <pre><span class="kw">agent007_dispatch</span> command=<span class="str">"$agent007 wf code-review review src/auth.rs"</span>
+<span class="kw">agent007</span> workflow run code-review <span class="str">"review src/auth.rs"</span>
 <span class="kw">agent007</span> workflow run tdd <span class="str">"add rate limiting to the API"</span>
 <span class="kw">agent007</span> workflow run feature <span class="str">"build export to CSV"</span></pre>
     </div>
@@ -1029,18 +1043,19 @@ footer {
   <div class="section-inner">
     <p class="section-tag reveal">How it works</p>
     <h2 class="section-title reveal">One server.<br/>Your whole stack.</h2>
-    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects automatically and gets 44 new tools — all backed by the Rust orchestration core.</p>
+    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects automatically and gets 45+ tools — all backed by the Rust orchestration core.</p>
 
     <div class="arch-diagram reveal">
-      <div class="arch-label">Your AI Editor (Claude Code / Cursor / Copilot / Zed)</div>
+      <div class="arch-label">Your AI Editor (Claude Code / Cursor / Copilot / Codex / Zed)</div>
       <div class="arch-row">
         <div class="arch-box highlight">Claude Code</div>
         <div class="arch-box highlight">Cursor</div>
         <div class="arch-box highlight">GitHub Copilot</div>
+        <div class="arch-box highlight">Codex CLI</div>
         <div class="arch-box highlight">Zed</div>
       </div>
 
-      <div class="arch-arrow">↕ MCP stdio · 44 tools</div>
+      <div class="arch-arrow">↕ MCP stdio · 45+ tools</div>
 
       <div class="arch-label">agent007 MCP Server (Rust)</div>
       <div class="arch-row">
@@ -1146,8 +1161,8 @@ function copyCode(btn, text) {
 (function() {
   const phrases = [
     'Skills · Workflows · Memory',
-    'Claude Code · Cursor · Copilot',
-    '44 MCP tools · Built in Rust',
+    'Claude Code · Cursor · Copilot · Codex',
+    '45+ MCP tools · Built in Rust',
   ];
   const badge = document.querySelector('.hero-badge');
   const badgeText = badge ? badge.querySelector('.badge-text') : null;

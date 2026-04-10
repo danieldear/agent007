@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::error::ModelError;
-use crate::provider::{ModelProvider, EmbeddingProvider};
+use crate::provider::{EmbeddingProvider, ModelProvider};
 use crate::types::{CompletionRequest, CompletionResponse};
+use async_trait::async_trait;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 pub struct MockProvider {
     response_content: String,
@@ -42,7 +42,10 @@ impl ModelProvider for MockProvider {
         &self.model_name
     }
 
-    async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ModelError> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         Ok(CompletionResponse {
             content: self.response_content.clone(),
@@ -75,7 +78,10 @@ mod tests {
         let mock = MockProvider::new("mocked response", "mock-model");
         let req = CompletionRequest {
             model: "any".to_string(),
-            messages: vec![Message { role: Role::User, content: "q".to_string() }],
+            messages: vec![Message {
+                role: Role::User,
+                content: "q".to_string(),
+            }],
             max_tokens: None,
             temperature: None,
             system: None,
@@ -91,7 +97,10 @@ mod tests {
         let mock = MockProvider::new("resp", "mock");
         let req = CompletionRequest {
             model: "any".to_string(),
-            messages: vec![Message { role: Role::User, content: "q".to_string() }],
+            messages: vec![Message {
+                role: Role::User,
+                content: "q".to_string(),
+            }],
             max_tokens: None,
             temperature: None,
             system: None,

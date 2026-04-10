@@ -4,10 +4,8 @@ use crate::error::SimulationError;
 use crate::types::SimulationTemplate;
 
 // Embedded built-in templates (compile-time)
-const BUILTIN_WIFI_RTT: &str =
-    include_str!("../templates/wifi-rtt.toml");
-const BUILTIN_WIFI_ROAMING: &str =
-    include_str!("../templates/wifi-roaming.toml");
+const BUILTIN_WIFI_RTT: &str = include_str!("../templates/wifi-rtt.toml");
+const BUILTIN_WIFI_ROAMING: &str = include_str!("../templates/wifi-roaming.toml");
 
 /// Maps built-in template names to their embedded TOML content.
 fn builtin_templates() -> Vec<(&'static str, &'static str)> {
@@ -63,10 +61,7 @@ impl TemplateLoader {
 
         // 2. Custom prefix
         let lookup_name = name.strip_prefix("custom/").unwrap_or(name);
-        let custom_dir = self
-            .custom_dir
-            .clone()
-            .unwrap_or_else(default_custom_dir);
+        let custom_dir = self.custom_dir.clone().unwrap_or_else(default_custom_dir);
 
         let candidates = [
             custom_dir.join(format!("{lookup_name}.toml")),
@@ -75,8 +70,8 @@ impl TemplateLoader {
 
         for path in &candidates {
             if path.exists() {
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| SimulationError::ParseError {
+                let content =
+                    std::fs::read_to_string(path).map_err(|e| SimulationError::ParseError {
                         path: path.clone(),
                         reason: e.to_string(),
                     })?;
@@ -87,7 +82,9 @@ impl TemplateLoader {
             }
         }
 
-        Err(SimulationError::TemplateNotFound { name: name.to_string() })
+        Err(SimulationError::TemplateNotFound {
+            name: name.to_string(),
+        })
     }
 
     /// List all available template names.
@@ -100,10 +97,7 @@ impl TemplateLoader {
             .map(|(n, _)| n.to_string())
             .collect();
 
-        let custom_dir = self
-            .custom_dir
-            .clone()
-            .unwrap_or_else(default_custom_dir);
+        let custom_dir = self.custom_dir.clone().unwrap_or_else(default_custom_dir);
 
         if let Ok(entries) = std::fs::read_dir(&custom_dir) {
             for entry in entries.flatten() {
@@ -141,9 +135,7 @@ fn agent007_home() -> PathBuf {
 }
 
 fn default_custom_dir() -> PathBuf {
-    agent007_home()
-        .join("simulations")
-        .join("custom")
+    agent007_home().join("simulations").join("custom")
 }
 
 #[cfg(test)]
@@ -206,7 +198,11 @@ name = "downtown"
     #[test]
     fn loader_lists_custom_templates() {
         let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("my-sim.toml"), "[system_under_test]\ncommand=\"echo\"\nname=\"my-sim\"\nresearch_topics=[]").unwrap();
+        std::fs::write(
+            tmp.path().join("my-sim.toml"),
+            "[system_under_test]\ncommand=\"echo\"\nname=\"my-sim\"\nresearch_topics=[]",
+        )
+        .unwrap();
 
         let loader = TemplateLoader::with_custom_dir(tmp.path().to_path_buf());
         let names = loader.list();

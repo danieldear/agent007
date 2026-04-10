@@ -12,7 +12,7 @@ use crate::error::ZonesError;
 pub struct AuditEntry {
     pub ts: String,
     pub agent: String,
-    pub action: String,   // "read" | "write" | "delete"
+    pub action: String, // "read" | "write" | "delete"
     pub path: String,
     pub zone: String,
     pub allowed: bool,
@@ -47,7 +47,9 @@ pub struct AuditLogger {
 
 impl AuditLogger {
     pub fn new(log_path: &Path) -> Self {
-        Self { path: log_path.to_path_buf() }
+        Self {
+            path: log_path.to_path_buf(),
+        }
     }
 
     /// Append one AuditEntry as a newline-delimited JSON record.
@@ -95,11 +97,11 @@ mod tests {
         let logger = make_logger(&dir);
 
         let entry = AuditEntry {
-            ts:      "2026-03-16T10:00:00Z".to_string(),
-            agent:   "WorkerAgent".to_string(),
-            action:  "read".to_string(),
-            path:    "src/auth/login.rs".to_string(),
-            zone:    "readonly".to_string(),
+            ts: "2026-03-16T10:00:00Z".to_string(),
+            agent: "WorkerAgent".to_string(),
+            action: "read".to_string(),
+            path: "src/auth/login.rs".to_string(),
+            zone: "readonly".to_string(),
             allowed: true,
             blocked: None,
         };
@@ -110,9 +112,12 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(parsed["agent"], "WorkerAgent");
         assert_eq!(parsed["action"], "read");
-        assert_eq!(parsed["zone"],   "readonly");
+        assert_eq!(parsed["zone"], "readonly");
         assert_eq!(parsed["allowed"], true);
-        assert!(parsed.get("blocked").is_none(), "blocked should be omitted when allowed=true");
+        assert!(
+            parsed.get("blocked").is_none(),
+            "blocked should be omitted when allowed=true"
+        );
     }
 
     #[test]

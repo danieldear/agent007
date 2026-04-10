@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tower_lsp::Client;
 use tower_lsp::lsp_types::{ExecuteCommandParams, MessageType};
+use tower_lsp::Client;
 
 use crate::error::IdeBridgeError;
 use crate::server::BridgeConfig;
@@ -54,8 +54,10 @@ pub(crate) async fn handle_run(
     let dispatcher = agent007_core::dispatcher::LocalDispatcher::new(64);
 
     // Minimal model router backed by MockProvider.
-    let mock = Arc::new(agent007_models::MockProvider::new("dry-run response", "mock"))
-        as Arc<dyn agent007_models::ModelProvider>;
+    let mock = Arc::new(agent007_models::MockProvider::new(
+        "dry-run response",
+        "mock",
+    )) as Arc<dyn agent007_models::ModelProvider>;
     let mut router = agent007_models::ModelRouter::new("mock");
     router.register("mock", mock);
     let model_router = Arc::new(router);
@@ -159,8 +161,10 @@ pub(crate) async fn handle_skill_run(
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(global_home));
     let global_memory = global_store.scoped("global");
 
-    let mock_model = Arc::new(agent007_models::MockProvider::new("dry-run response", "mock"))
-        as Arc<dyn agent007_models::ModelProvider>;
+    let mock_model = Arc::new(agent007_models::MockProvider::new(
+        "dry-run response",
+        "mock",
+    )) as Arc<dyn agent007_models::ModelProvider>;
 
     let executor = agent007_skills::SkillExecutor::new(mock_model, retriever, memory)
         .with_global_memory(global_memory);

@@ -4,7 +4,10 @@ pub enum PersonaError {
     #[error("IO error reading persona dir: {0}")]
     Io(#[from] std::io::Error),
     #[error("failed to parse persona file {path}: {reason}")]
-    ParseError { path: std::path::PathBuf, reason: String },
+    ParseError {
+        path: std::path::PathBuf,
+        reason: String,
+    },
 }
 
 #[cfg(test)]

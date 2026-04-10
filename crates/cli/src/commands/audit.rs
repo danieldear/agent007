@@ -1,24 +1,31 @@
 // crates/cli/src/commands/audit.rs
-use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use globset::{Glob, GlobMatcher};
 use serde_json::Value;
+use std::sync::Arc;
 
-use crate::config::Config;
 use super::run::agent007_home;
+use crate::config::Config;
 use agent007_zones::AuditLogger;
 
 /// Parse a duration string like "24h", "1h", "30m" into a chrono::Duration.
 fn parse_duration(s: &str) -> Result<Duration> {
     if let Some(h) = s.strip_suffix('h') {
-        let n: i64 = h.parse().map_err(|_| anyhow::anyhow!("invalid duration: {}", s))?;
+        let n: i64 = h
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid duration: {}", s))?;
         Ok(Duration::hours(n))
     } else if let Some(m) = s.strip_suffix('m') {
-        let n: i64 = m.parse().map_err(|_| anyhow::anyhow!("invalid duration: {}", s))?;
+        let n: i64 = m
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid duration: {}", s))?;
         Ok(Duration::minutes(n))
     } else {
-        Err(anyhow::anyhow!("unsupported duration format: '{}' (use Nh or Nm)", s))
+        Err(anyhow::anyhow!(
+            "unsupported duration format: '{}' (use Nh or Nm)",
+            s
+        ))
     }
 }
 
@@ -47,8 +54,8 @@ pub async fn execute(
     // Compile --path glob
     let path_matcher: Option<GlobMatcher> = match path_filter {
         Some(ref p) => {
-            let glob = Glob::new(p)
-                .map_err(|e| anyhow::anyhow!("invalid path glob '{}': {}", p, e))?;
+            let glob =
+                Glob::new(p).map_err(|e| anyhow::anyhow!("invalid path glob '{}': {}", p, e))?;
             Some(glob.compile_matcher())
         }
         None => None,
@@ -59,7 +66,7 @@ pub async fn execute(
     for line in &lines {
         let entry: Value = match serde_json::from_str(line) {
             Ok(v) => v,
-            Err(_) => continue,  // skip malformed lines
+            Err(_) => continue, // skip malformed lines
         };
 
         // Filter: --last
@@ -84,7 +91,10 @@ pub async fn execute(
 
         // Filter: --blocked
         if blocked_only {
-            let is_blocked = entry.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_blocked = entry
+                .get("blocked")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !is_blocked {
                 continue;
             }

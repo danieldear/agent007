@@ -9,10 +9,19 @@ use agent007_zones::{AuditEntry, AuditLogger, FileOp, ZoneChecker, ZoneConfig, Z
 
 fn make_config() -> ZoneConfig {
     ZoneConfig {
-        forbidden:    vec!["secrets/".to_string(), "keys/".to_string(), ".env".to_string(), "*.pem".to_string()],
-        readonly:     vec!["src/auth/".to_string(), "src/payment/".to_string()],
-        sensitive:    vec!["src/crypto/".to_string()],
-        unrestricted: vec!["src/".to_string(), "tests/".to_string(), "docs/".to_string()],
+        forbidden: vec![
+            "secrets/".to_string(),
+            "keys/".to_string(),
+            ".env".to_string(),
+            "*.pem".to_string(),
+        ],
+        readonly: vec!["src/auth/".to_string(), "src/payment/".to_string()],
+        sensitive: vec!["src/crypto/".to_string()],
+        unrestricted: vec![
+            "src/".to_string(),
+            "tests/".to_string(),
+            "docs/".to_string(),
+        ],
     }
 }
 
@@ -25,19 +34,24 @@ fn forbidden_path_read_is_blocked() {
     assert!(result.is_err(), "read on forbidden path must be blocked");
     let violation = result.unwrap_err();
     assert_eq!(violation.zone, ZoneLevel::Forbidden);
-    assert_eq!(violation.op,   FileOp::Read);
+    assert_eq!(violation.op, FileOp::Read);
 }
 
 #[test]
 fn forbidden_path_write_is_blocked() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert!(checker.check(Path::new("keys/private.pem"), FileOp::Write).is_err());
+    assert!(checker
+        .check(Path::new("keys/private.pem"), FileOp::Write)
+        .is_err());
 }
 
 #[test]
 fn forbidden_pem_glob_matches() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert_eq!(checker.zone_for(Path::new("cert.pem")), ZoneLevel::Forbidden);
+    assert_eq!(
+        checker.zone_for(Path::new("cert.pem")),
+        ZoneLevel::Forbidden
+    );
 }
 
 #[test]
@@ -51,7 +65,9 @@ fn forbidden_path_not_indexed() {
 #[test]
 fn readonly_path_read_is_allowed() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert!(checker.check(Path::new("src/auth/login.rs"), FileOp::Read).is_ok());
+    assert!(checker
+        .check(Path::new("src/auth/login.rs"), FileOp::Read)
+        .is_ok());
 }
 
 #[test]
@@ -65,7 +81,9 @@ fn readonly_path_write_is_blocked() {
 #[test]
 fn readonly_path_delete_is_blocked() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert!(checker.check(Path::new("src/payment/checkout.rs"), FileOp::Delete).is_err());
+    assert!(checker
+        .check(Path::new("src/payment/checkout.rs"), FileOp::Delete)
+        .is_err());
 }
 
 #[test]
@@ -80,13 +98,17 @@ fn readonly_path_is_indexed() {
 #[test]
 fn sensitive_path_read_is_allowed() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert!(checker.check(Path::new("src/crypto/hash.rs"), FileOp::Read).is_ok());
+    assert!(checker
+        .check(Path::new("src/crypto/hash.rs"), FileOp::Read)
+        .is_ok());
 }
 
 #[test]
 fn sensitive_path_write_is_blocked() {
     let checker = ZoneChecker::new(&make_config()).unwrap();
-    assert!(checker.check(Path::new("src/crypto/hash.rs"), FileOp::Write).is_err());
+    assert!(checker
+        .check(Path::new("src/crypto/hash.rs"), FileOp::Write)
+        .is_err());
 }
 
 #[test]
@@ -138,9 +160,9 @@ fn audit_log_records_blocked_forbidden_read() {
     let lines = logger.read_lines().unwrap();
     assert_eq!(lines.len(), 1);
     let v: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
-    assert_eq!(v["agent"],   "IntegrationAgent");
-    assert_eq!(v["action"],  "read");
-    assert_eq!(v["zone"],    "forbidden");
+    assert_eq!(v["agent"], "IntegrationAgent");
+    assert_eq!(v["action"], "read");
+    assert_eq!(v["zone"], "forbidden");
     assert_eq!(v["allowed"], false);
     assert_eq!(v["blocked"], true);
 }
@@ -168,7 +190,7 @@ fn audit_log_records_allowed_readonly_read() {
     let lines = logger.read_lines().unwrap();
     assert_eq!(lines.len(), 1);
     let v: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
-    assert_eq!(v["zone"],    "readonly");
+    assert_eq!(v["zone"], "readonly");
     assert_eq!(v["allowed"], true);
     assert!(v.get("blocked").is_none());
 }
@@ -188,8 +210,17 @@ unrestricted = ["src/", "tests/"]
     let config = ZoneConfig::from_toml(toml_str).unwrap();
     let checker = ZoneChecker::new(&config).unwrap();
 
-    assert_eq!(checker.zone_for(Path::new(".env")),              ZoneLevel::Forbidden);
-    assert_eq!(checker.zone_for(Path::new("src/auth/login.rs")), ZoneLevel::Readonly);
-    assert_eq!(checker.zone_for(Path::new("src/crypto/hash.rs")),ZoneLevel::Sensitive);
-    assert_eq!(checker.zone_for(Path::new("src/utils.rs")),      ZoneLevel::Unrestricted);
+    assert_eq!(checker.zone_for(Path::new(".env")), ZoneLevel::Forbidden);
+    assert_eq!(
+        checker.zone_for(Path::new("src/auth/login.rs")),
+        ZoneLevel::Readonly
+    );
+    assert_eq!(
+        checker.zone_for(Path::new("src/crypto/hash.rs")),
+        ZoneLevel::Sensitive
+    );
+    assert_eq!(
+        checker.zone_for(Path::new("src/utils.rs")),
+        ZoneLevel::Unrestricted
+    );
 }

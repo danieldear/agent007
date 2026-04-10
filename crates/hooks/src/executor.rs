@@ -37,15 +37,22 @@ impl HookExecutor {
             _ => {}
         }
 
-        let status = cmd.spawn()
+        let status = cmd
+            .spawn()
             .map_err(|e| {
                 tracing::warn!(command = %command, error = %e, "failed to spawn hook command");
-                HookError::SpawnFailed { command: command.clone(), source: e }
+                HookError::SpawnFailed {
+                    command: command.clone(),
+                    source: e,
+                }
             })?
             .wait()
             .map_err(|e| {
                 tracing::warn!(command = %command, error = %e, "failed to wait for hook command");
-                HookError::WaitFailed { command: command.clone(), source: e }
+                HookError::WaitFailed {
+                    command: command.clone(),
+                    source: e,
+                }
             })?;
 
         if !status.success() {
@@ -81,7 +88,11 @@ mod tests {
     fn fire_post_agent_run_no_command_is_noop() {
         let executor = HookExecutor::new(HookConfig::default());
         let result = executor.fire(&HookEvent::PostAgentRun);
-        assert!(result.is_ok(), "expected Ok(()) for no-op, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok(()) for no-op, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -91,7 +102,11 @@ mod tests {
             ..Default::default()
         });
         let result = executor.fire(&HookEvent::PostAgentRun);
-        assert!(result.is_ok(), "expected Ok(()) for empty command, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok(()) for empty command, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -114,7 +129,9 @@ mod tests {
             on_memory_write: Some("test \"$HOOK_KEY\" = \"testkey\"".to_string()),
             ..Default::default()
         });
-        let result = executor.fire(&HookEvent::OnMemoryWrite { key: "testkey".to_string() });
+        let result = executor.fire(&HookEvent::OnMemoryWrite {
+            key: "testkey".to_string(),
+        });
         assert!(result.is_ok(), "expected Ok(()), got: {:?}", result);
     }
 }

@@ -1,7 +1,7 @@
+use crate::loader::load_all;
+use crate::{AgentDef, AgentType, CustomAgentError};
 use std::collections::HashMap;
 use std::path::Path;
-use crate::{AgentDef, AgentType, CustomAgentError};
-use crate::loader::load_all;
 
 pub struct AgentRegistry {
     agents: HashMap<String, AgentDef>,
@@ -15,7 +15,9 @@ impl AgentRegistry {
     }
 
     pub fn empty() -> Self {
-        Self { agents: HashMap::new() }
+        Self {
+            agents: HashMap::new(),
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<&AgentDef> {
@@ -44,8 +46,8 @@ impl AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     const WORKER_TOML: &str = r#"
         name = "WorkerA"

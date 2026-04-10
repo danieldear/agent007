@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use crate::error::CoreError;
 use crate::types::AgentId;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -36,11 +36,19 @@ pub struct TaskResult {
 
 impl TaskResult {
     pub fn success(task_id: Uuid, output: String) -> Self {
-        Self { task_id, output, success: true }
+        Self {
+            task_id,
+            output,
+            success: true,
+        }
     }
 
     pub fn failure(task_id: Uuid, reason: String) -> Self {
-        Self { task_id, output: reason, success: false }
+        Self {
+            task_id,
+            output: reason,
+            success: false,
+        }
     }
 }
 
@@ -55,11 +63,16 @@ impl TaskQueue {
     }
 
     pub async fn send(&self, task: Task) -> Result<(), CoreError> {
-        self.sender.send(task).await.map_err(|_| CoreError::Disconnected)
+        self.sender
+            .send(task)
+            .await
+            .map_err(|_| CoreError::Disconnected)
     }
 
     pub fn try_send(&self, task: Task) -> Result<(), CoreError> {
-        self.sender.try_send(task).map_err(|_| CoreError::TaskQueueFull)
+        self.sender
+            .try_send(task)
+            .map_err(|_| CoreError::TaskQueueFull)
     }
 }
 

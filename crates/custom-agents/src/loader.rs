@@ -1,5 +1,5 @@
-use std::path::Path;
 use crate::{AgentDef, CustomAgentError};
+use std::path::Path;
 
 pub fn load_agent_def(path: &Path) -> Result<AgentDef, CustomAgentError> {
     let content = std::fs::read_to_string(path)?;
@@ -27,8 +27,8 @@ pub fn load_all(agents_dir: &Path) -> Result<Vec<AgentDef>, CustomAgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     fn write_agent_toml(dir: &std::path::Path, filename: &str, content: &str) {
         fs::write(dir.join(filename), content).unwrap();

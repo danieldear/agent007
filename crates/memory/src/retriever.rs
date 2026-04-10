@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use agent007_models::EmbeddingProvider;
 use crate::error::MemoryError;
 use crate::store::MemoryStore;
 use crate::vectordb::VectorDB;
+use agent007_models::EmbeddingProvider;
+use std::sync::Arc;
 
 pub struct Retriever {
     embedder: Arc<dyn EmbeddingProvider>,
@@ -13,12 +13,13 @@ pub struct Retriever {
 }
 
 impl Retriever {
-    pub fn new(
-        embedder: Arc<dyn EmbeddingProvider>,
-        db: Arc<dyn VectorDB>,
-        top_k: usize,
-    ) -> Self {
-        Self { embedder, db, top_k, memory_store: None }
+    pub fn new(embedder: Arc<dyn EmbeddingProvider>, db: Arc<dyn VectorDB>, top_k: usize) -> Self {
+        Self {
+            embedder,
+            db,
+            top_k,
+            memory_store: None,
+        }
     }
 
     /// Attach a memory store used as keyword fallback when vector search is empty.
@@ -28,7 +29,10 @@ impl Retriever {
     }
 
     pub async fn retrieve(&self, query: &str) -> Result<String, MemoryError> {
-        let embedding = self.embedder.embed(query).await
+        let embedding = self
+            .embedder
+            .embed(query)
+            .await
             .map_err(|e| MemoryError::Embedding(e.to_string()))?;
 
         // Detect mock/zero embeddings — all zeros means the embedder is a stub.
@@ -38,8 +42,14 @@ impl Retriever {
             vec![]
         } else {
             let results = self.db.search(embedding, self.top_k).await?;
-            results.iter()
-                .filter_map(|r| r.payload.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            results
+                .iter()
+                .filter_map(|r| {
+                    r.payload
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         };
 
@@ -57,7 +67,10 @@ impl Retriever {
                     for key in &keys {
                         if let Ok(Some(val)) = store.scoped(scope).read(key) {
                             let val_lower = val.to_lowercase();
-                            if keywords.iter().any(|kw| kw.len() >= 3 && val_lower.contains(kw)) {
+                            if keywords
+                                .iter()
+                                .any(|kw| kw.len() >= 3 && val_lower.contains(kw))
+                            {
                                 matched.push(format!("[{}/{}]\n{}", scope, key, val));
                             }
                         }
@@ -88,17 +101,27 @@ mod tests {
         async fn embed(&self, _text: &str) -> Result<Vec<f32>, ModelError> {
             Ok(vec![0.1; 4])
         }
-        fn name(&self) -> &str { "mock-embed" }
+        fn name(&self) -> &str {
+            "mock-embed"
+        }
     }
 
     struct MockVectorDB;
     #[async_trait]
     impl VectorDB for MockVectorDB {
-        async fn upsert(&self, _id: &str, _vector: Vec<f32>, _payload: serde_json::Value)
-            -> Result<(), MemoryError> { Ok(()) }
-        async fn search(&self, _query: Vec<f32>, _limit: usize)
-            -> Result<Vec<SearchResult>, MemoryError>
-        {
+        async fn upsert(
+            &self,
+            _id: &str,
+            _vector: Vec<f32>,
+            _payload: serde_json::Value,
+        ) -> Result<(), MemoryError> {
+            Ok(())
+        }
+        async fn search(
+            &self,
+            _query: Vec<f32>,
+            _limit: usize,
+        ) -> Result<Vec<SearchResult>, MemoryError> {
             Ok(vec![
                 SearchResult {
                     id: "a".to_string(),
@@ -125,7 +148,13 @@ mod tests {
         );
 
         let result = retriever.retrieve("some query").await.unwrap();
-        assert!(result.contains("fragment_alpha"), "result should contain fragment_alpha");
-        assert!(result.contains("fragment_beta"), "result should contain fragment_beta");
+        assert!(
+            result.contains("fragment_alpha"),
+            "result should contain fragment_alpha"
+        );
+        assert!(
+            result.contains("fragment_beta"),
+            "result should contain fragment_beta"
+        );
     }
 }

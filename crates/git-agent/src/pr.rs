@@ -138,21 +138,27 @@ mod tests {
     fn detect_github_platform_from_https_url() {
         let url = "https://github.com/myorg/myrepo.git";
         let platform = detect_platform(url);
-        assert!(matches!(platform, Platform::GitHub { owner, repo } if owner == "myorg" && repo == "myrepo"));
+        assert!(
+            matches!(platform, Platform::GitHub { owner, repo } if owner == "myorg" && repo == "myrepo")
+        );
     }
 
     #[test]
     fn detect_github_platform_from_ssh_url() {
         let url = "git@github.com:myorg/myrepo.git";
         let platform = detect_platform(url);
-        assert!(matches!(platform, Platform::GitHub { owner, repo } if owner == "myorg" && repo == "myrepo"));
+        assert!(
+            matches!(platform, Platform::GitHub { owner, repo } if owner == "myorg" && repo == "myrepo")
+        );
     }
 
     #[test]
     fn detect_gitlab_platform_from_https_url() {
         let url = "https://gitlab.com/mygroup/myrepo.git";
         let platform = detect_platform(url);
-        assert!(matches!(platform, Platform::GitLab { owner, repo } if owner == "mygroup" && repo == "myrepo"));
+        assert!(
+            matches!(platform, Platform::GitLab { owner, repo } if owner == "mygroup" && repo == "myrepo")
+        );
     }
 
     #[test]
@@ -164,8 +170,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_github_pr_sends_correct_payload() {
-        use wiremock::{MockServer, Mock, ResponseTemplate};
-        use wiremock::matchers::{method, path, header};
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
         let response_body = serde_json::json!({

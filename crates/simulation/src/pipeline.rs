@@ -133,7 +133,7 @@ impl Validator {
     pub fn run(
         &self,
         template: &SimulationTemplate,
-        scenario_outputs: &[(String, String)],  // (scenario_name, raw_output)
+        scenario_outputs: &[(String, String)], // (scenario_name, raw_output)
     ) -> Vec<ScenarioFailure> {
         let sim = Simulator::new();
         let mut failures = Vec::new();
@@ -194,16 +194,13 @@ impl Reporter {
     }
 
     fn load_previous(&self, template_name: &str) -> Option<SimulationReport> {
-        let raw = self
-            .memory
-            .read(&Self::memory_key(template_name))
-            .ok()??;
+        let raw = self.memory.read(&Self::memory_key(template_name)).ok()??;
         serde_json::from_str(&raw).ok()
     }
 
     fn store(&self, report: &SimulationReport) -> Result<(), SimulationError> {
-        let json = serde_json::to_string_pretty(report)
-            .map_err(|e| SimulationError::ParseError {
+        let json =
+            serde_json::to_string_pretty(report).map_err(|e| SimulationError::ParseError {
                 path: std::path::PathBuf::from("<memory>"),
                 reason: e.to_string(),
             })?;
@@ -262,7 +259,10 @@ impl SimulationPipeline {
             model: "claude".into(),
         };
         let scenarios = scenario_gen.run(template, &research).await?;
-        tracing::info!(count = scenarios.len(), "SimulationPipeline: scenarios ready");
+        tracing::info!(
+            count = scenarios.len(),
+            "SimulationPipeline: scenarios ready"
+        );
 
         // Stage 3: Simulate — run each scenario
         let sim = Simulator::new();
@@ -270,7 +270,10 @@ impl SimulationPipeline {
         let mut sut_failures: Vec<ScenarioFailure> = Vec::new();
 
         for scenario in &scenarios {
-            match sim.run_scenario(&template.system_under_test, scenario).await {
+            match sim
+                .run_scenario(&template.system_under_test, scenario)
+                .await
+            {
                 Ok(output) => {
                     scenario_outputs.push((scenario.name.clone(), output));
                 }
@@ -401,7 +404,9 @@ mod tests {
     fn reporter_store_and_load() {
         let tmp = TempDir::new().unwrap();
         let memory = Arc::new(MemoryStore::new(tmp.path()));
-        let reporter = Reporter { memory: Arc::clone(&memory) };
+        let reporter = Reporter {
+            memory: Arc::clone(&memory),
+        };
 
         let report = reporter.run("wifi-rtt", 3, vec![]).unwrap();
         assert_eq!(report.scenarios_run, 3);
@@ -456,7 +461,11 @@ mod tests {
         template.system_under_test.command = "true".into();
         template.system_under_test.args = vec![];
 
-        let pipeline = SimulationPipeline { provider, memory, dispatcher };
+        let pipeline = SimulationPipeline {
+            provider,
+            memory,
+            dispatcher,
+        };
         let report = pipeline.run(&template).await.unwrap();
         assert_eq!(report.template_name, "wifi-rtt");
         assert!(report.scenarios_run > 0);

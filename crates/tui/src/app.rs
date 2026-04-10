@@ -1,7 +1,7 @@
-use std::collections::VecDeque;
-use agent007_core::types::AgentId;
 use agent007_core::events::AgentEvent;
+use agent007_core::types::AgentId;
 use agent007_learning::types::LearningEvent;
+use std::collections::VecDeque;
 
 pub struct AgentStatus {
     pub agent_id: AgentId,
@@ -91,7 +91,9 @@ impl App {
                     success: false,
                 });
             }
-            AgentEvent::TaskCompleted { agent_id, result, .. } => {
+            AgentEvent::TaskCompleted {
+                agent_id, result, ..
+            } => {
                 // Mark matching task done
                 for task in self.tasks.iter_mut() {
                     if task.task_id == result.task_id {
@@ -105,7 +107,11 @@ impl App {
                     agent.state = AgentState::Idle;
                 }
             }
-            AgentEvent::ModelRequest { provider, token_estimate, .. } => {
+            AgentEvent::ModelRequest {
+                provider,
+                token_estimate,
+                ..
+            } => {
                 if let Some(usage) = self.model_usage.iter_mut().find(|u| u.provider == provider) {
                     usage.token_count += token_estimate;
                 } else {
@@ -126,12 +132,19 @@ impl App {
                 self.avg_reward = (self.avg_reward * n + reward) / (n + 1.0);
                 self.learning_entries += 1;
             }
-            LearningEvent::PromptImproved { skill_name, old_reward, new_reward } => {
-                self.recent_optimizations.insert(0, OptimizationSummary {
-                    skill_name,
-                    old_reward,
-                    new_reward,
-                });
+            LearningEvent::PromptImproved {
+                skill_name,
+                old_reward,
+                new_reward,
+            } => {
+                self.recent_optimizations.insert(
+                    0,
+                    OptimizationSummary {
+                        skill_name,
+                        old_reward,
+                        new_reward,
+                    },
+                );
                 self.recent_optimizations.truncate(10);
             }
             _ => {}
@@ -148,7 +161,9 @@ impl App {
             }
             crate::event::AppAction::ScrollDown => {
                 let max = self.logs.len().saturating_sub(1);
-                if self.log_scroll < max { self.log_scroll += 1; }
+                if self.log_scroll < max {
+                    self.log_scroll += 1;
+                }
             }
         }
     }
@@ -185,7 +200,10 @@ mod tests {
         let mut app = App::default();
         let agent_id = AgentId::new();
         let task = Task::new("test task");
-        let event = AgentEvent::TaskAssigned { agent_id: agent_id.clone(), task };
+        let event = AgentEvent::TaskAssigned {
+            agent_id: agent_id.clone(),
+            task,
+        };
         app.handle_event(event);
         assert_eq!(app.agents.len(), 1);
         assert_eq!(app.agents[0].agent_id, agent_id);
@@ -198,9 +216,17 @@ mod tests {
         let agent_id = AgentId::new();
         let task = Task::new("complete me");
         let task_id = task.id;
-        app.handle_event(AgentEvent::TaskAssigned { agent_id: agent_id.clone(), task });
+        app.handle_event(AgentEvent::TaskAssigned {
+            agent_id: agent_id.clone(),
+            task,
+        });
         let result = TaskResult::success(task_id, "done".to_string());
-        app.handle_event(AgentEvent::TaskCompleted { agent_id, result, skill_name: None, model: None });
+        app.handle_event(AgentEvent::TaskCompleted {
+            agent_id,
+            result,
+            skill_name: None,
+            model: None,
+        });
         let task_status = app.tasks.iter().find(|t| t.task_id == task_id).unwrap();
         assert!(task_status.done);
         assert!(task_status.success);
@@ -210,7 +236,10 @@ mod tests {
     fn handle_learning_event_updates_learning_panel() {
         let mut app = App::default();
         let agent_id = AgentId::new();
-        let event = LearningEvent::FeedbackRecorded { agent_id, reward: 0.8 };
+        let event = LearningEvent::FeedbackRecorded {
+            agent_id,
+            reward: 0.8,
+        };
         app.handle_learning_event(event);
         assert_eq!(app.learning_entries, 1);
         assert!((app.avg_reward - 0.8).abs() < 1e-5);

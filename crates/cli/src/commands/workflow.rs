@@ -1,8 +1,8 @@
+use super::run::{agent007_home, build_stack};
+use crate::config::Config;
 use anyhow::Result;
 use clap::Subcommand;
 use std::sync::Arc;
-use super::run::{agent007_home, build_stack};
-use crate::config::Config;
 
 #[derive(Subcommand, Debug)]
 pub enum WorkflowAction {
@@ -58,11 +58,15 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
             let names = loader.list_names()?;
             if names.is_empty() {
                 println!("No workflows found in {}", workflows_dir.display());
-                println!("Add TOML files to {} to create workflows.", workflows_dir.display());
+                println!(
+                    "Add TOML files to {} to create workflows.",
+                    workflows_dir.display()
+                );
             } else {
                 println!("Available workflows (in {}):", workflows_dir.display());
                 for name in &names {
-                    let desc = loader.load_named(name)
+                    let desc = loader
+                        .load_named(name)
                         .ok()
                         .and_then(|d| d.description)
                         .unwrap_or_default();
@@ -82,7 +86,10 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
             match runner.validate(&def) {
                 Ok(validated_dag) => {
                     println!("Workflow '{}' is valid.", name);
-                    println!("Execution plan ({} batch(es)):", validated_dag.batches.len());
+                    println!(
+                        "Execution plan ({} batch(es)):",
+                        validated_dag.batches.len()
+                    );
                     for (i, batch) in validated_dag.batches.iter().enumerate() {
                         println!("  Batch {}: [{}]", i + 1, batch.join(", "));
                     }
@@ -139,21 +146,14 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
         WorkflowAction::Run { name, task } => {
             let def = loader.load_named(&name)?;
             println!("Running workflow '{}' with task: {}", name, task);
-            execute_workflow_run(
-                config.clone(),
-                def,
-                task,
-                "workflow-cli",
-                None,
-                Some(name),
-            )
-            .await?;
+            execute_workflow_run(config.clone(), def, task, "workflow-cli", None, Some(name))
+                .await?;
         }
 
         WorkflowAction::Resume { session } => {
             let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
-            let request: agent007_workflows::WorkflowRunRequest = store
-                .read_json_artifact(&session, "workflow-request.json")?;
+            let request: agent007_workflows::WorkflowRunRequest =
+                store.read_json_artifact(&session, "workflow-request.json")?;
             let workflow_ref = store
                 .read_json_artifact_optional::<agent007_workflows::WorkflowSourceRef>(
                     &session,
@@ -161,15 +161,12 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
                 )?
                 .map(|source| source.workflow_ref)
                 .unwrap_or_else(|| request.workflow.clone());
-            let state: agent007_workflows::WorkflowRunState = store
-                .read_json_artifact(&session, "workflow-state.json")?;
+            let state: agent007_workflows::WorkflowRunState =
+                store.read_json_artifact(&session, "workflow-state.json")?;
             let def = loader.load_named(&workflow_ref)?;
             println!(
                 "Resuming workflow '{}' from session {} ({}/{} steps complete)",
-                request.workflow,
-                session,
-                state.steps_completed,
-                state.steps_total,
+                request.workflow, session, state.steps_completed, state.steps_total,
             );
             execute_workflow_run(
                 config.clone(),
@@ -189,11 +186,18 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
             content,
         } => {
             let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
-            let mut state: agent007_workflows::WorkflowRunState = store
-                .read_json_artifact(&session, "workflow-state.json")?;
+            let mut state: agent007_workflows::WorkflowRunState =
+                store.read_json_artifact(&session, "workflow-state.json")?;
             let step_id = step
-                .or_else(|| state.pending_approval.as_ref().map(|pending| pending.step_id.clone()))
-                .ok_or_else(|| anyhow::anyhow!("no pending approval found in session {}", session))?;
+                .or_else(|| {
+                    state
+                        .pending_approval
+                        .as_ref()
+                        .map(|pending| pending.step_id.clone())
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no pending approval found in session {}", session)
+                })?;
             let decision = parse_approval_decision(&decision, content)?;
             state.record_approval_decision(&step_id, decision);
             store.write_json_artifact(&session, "workflow-state.json", &state)?;
@@ -216,9 +220,12 @@ pub async fn execute_workflow_run(
     workflow_ref: Option<String>,
 ) -> Result<()> {
     let stack = build_stack(&config).await?;
-    let run = stack
-        .run_store
-        .create_run(run_kind, &format!("{}: {}", def.name, task), "standalone", None)?;
+    let run = stack.run_store.create_run(
+        run_kind,
+        &format!("{}: {}", def.name, task),
+        "standalone",
+        None,
+    )?;
     if let Some(workflow_ref) = workflow_ref {
         stack.run_store.write_json_artifact(
             &run.id,
@@ -227,9 +234,11 @@ pub async fn execute_workflow_run(
         )?;
     }
     let runner = match resume_state {
-        Some(state) => stack
-            .workflow_runner
-            .resume_from(stack.run_store.clone(), run.id.clone(), state),
+        Some(state) => {
+            stack
+                .workflow_runner
+                .resume_from(stack.run_store.clone(), run.id.clone(), state)
+        }
         None => stack
             .workflow_runner
             .for_run(stack.run_store.clone(), run.id.clone()),
@@ -260,7 +269,9 @@ pub async fn execute_workflow_run(
                     );
                 }
                 _ => {
-                    let _ = stack.run_store.finish_run(&run.id, false, error.to_string());
+                    let _ = stack
+                        .run_store
+                        .finish_run(&run.id, false, error.to_string());
                     eprintln!("Workflow '{}' failed: {}", def.name, error);
                 }
             }
@@ -280,7 +291,10 @@ fn parse_approval_decision(
         "deny" | "denied" | "no" | "n" => ApprovalDecisionKind::Deny,
         "edit" | "edited" => ApprovalDecisionKind::Edit,
         other => {
-            anyhow::bail!("unknown approval decision '{}'; use approve, deny, or edit", other);
+            anyhow::bail!(
+                "unknown approval decision '{}'; use approve, deny, or edit",
+                other
+            );
         }
     };
 
@@ -288,7 +302,10 @@ fn parse_approval_decision(
         anyhow::bail!("--content is required when decision=edit");
     }
 
-    Ok(ApprovalDecision { decision: kind, content })
+    Ok(ApprovalDecision {
+        decision: kind,
+        content,
+    })
 }
 
 fn print_workflow_result(name: &str, result: &agent007_workflows::WorkflowResult) {

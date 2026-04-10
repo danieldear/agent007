@@ -1,9 +1,9 @@
-use std::path::Path;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use serde::Serialize;
-use chrono::{DateTime, Utc};
 
 use agent007_core::{
     events::AgentEvent,
@@ -87,24 +87,37 @@ impl DashboardMetrics {
             local_execution_available,
             runtime_mode: if std::env::var("AGENT007_DRY_RUN").is_ok() {
                 "dry-run".to_string()
-            } else if std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false)
-                || std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false)
+            } else if std::env::var("OPENAI_API_KEY")
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+                || std::env::var("ANTHROPIC_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
             {
                 "standalone".to_string()
             } else {
                 "hosted-mcp".to_string()
             },
-            model_provider: if std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
-                std::env::var("OPENAI_MODEL").ok()
+            model_provider: if std::env::var("OPENAI_API_KEY")
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                std::env::var("OPENAI_MODEL")
+                    .ok()
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "codex".to_string())
-            } else if std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
-                std::env::var("ANTHROPIC_MODEL").ok()
+            } else if std::env::var("ANTHROPIC_API_KEY")
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                std::env::var("ANTHROPIC_MODEL")
+                    .ok()
                     .or_else(|| std::env::var("CLAUDE_MODEL").ok())
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "claude".to_string())
             } else {
-                std::env::var("AGENT007_HOST_MODEL").ok()
+                std::env::var("AGENT007_HOST_MODEL")
+                    .ok()
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "hosted-mcp".to_string())
             },
@@ -148,17 +161,31 @@ impl DashboardMetrics {
                 self.running_tasks = self.running_tasks.saturating_sub(1);
                 self.completed_tasks += 1;
                 let aid = format!("{}", agent_id);
-                if let Some(entry) = self.recent_tasks.iter_mut().rev().find(|e| e.id == aid && e.status == "running") {
+                if let Some(entry) = self
+                    .recent_tasks
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.id == aid && e.status == "running")
+                {
                     entry.status = "completed".to_string();
                     entry.finished_at = Some(Utc::now().format("%H:%M:%S").to_string());
                 }
             }
-            AgentEvent::ModelRequest { token_estimate, provider, .. } => {
+            AgentEvent::ModelRequest {
+                token_estimate,
+                provider,
+                ..
+            } => {
                 self.total_tokens += *token_estimate as u64;
                 self.estimated_usd = self.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
                 self.session_requests += 1;
                 // Credit tokens to the most recent running task and update its model.
-                if let Some(entry) = self.recent_tasks.iter_mut().rev().find(|e| e.status == "running") {
+                if let Some(entry) = self
+                    .recent_tasks
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.status == "running")
+                {
                     entry.tokens += *token_estimate as u64;
                     entry.model = provider.clone();
                 }
@@ -184,7 +211,13 @@ impl DashboardMetrics {
         }
     }
 
-    pub fn update_inventory(&mut self, skills: u32, workflows: u32, personas: u32, memory_keys: u32) {
+    pub fn update_inventory(
+        &mut self,
+        skills: u32,
+        workflows: u32,
+        personas: u32,
+        memory_keys: u32,
+    ) {
         self.skills_count = skills;
         self.workflows_count = workflows;
         self.personas_count = personas;
@@ -197,7 +230,10 @@ pub fn snapshot_with_shared_state(
     home: impl AsRef<Path>,
 ) -> DashboardMetrics {
     let mut snapshot = base;
-    hydrate_from_run_store(&mut snapshot, &RunStore::new(home.as_ref().join("sessions")));
+    hydrate_from_run_store(
+        &mut snapshot,
+        &RunStore::new(home.as_ref().join("sessions")),
+    );
     snapshot
 }
 
@@ -342,7 +378,7 @@ pub fn spawn_metrics_collector(
 mod tests {
     use super::*;
     use agent007_core::types::{AgentId, PromptRef};
-    use agent007_core::{Task, run_store::RunStore};
+    use agent007_core::{run_store::RunStore, Task};
 
     #[test]
     fn new_metrics_has_zero_counters() {
@@ -444,7 +480,11 @@ mod tests {
             .create_run("workflow", "approve deploy", "hosted-mcp", None)
             .unwrap();
         store
-            .update_run_status(&pending.id, RunStatus::AwaitingApproval, Some("waiting".to_string()))
+            .update_run_status(
+                &pending.id,
+                RunStatus::AwaitingApproval,
+                Some("waiting".to_string()),
+            )
             .unwrap();
 
         let snapshot = snapshot_with_shared_state(
@@ -456,7 +496,13 @@ mod tests {
         assert_eq!(snapshot.running_tasks, 1);
         assert_eq!(snapshot.session_requests, 1);
         assert_eq!(snapshot.total_tokens, 321);
-        assert!(snapshot.recent_tasks.iter().any(|task| task.task.contains("ship auth")));
-        assert!(snapshot.recent_tasks.iter().any(|task| task.status == "awaiting-approval"));
+        assert!(snapshot
+            .recent_tasks
+            .iter()
+            .any(|task| task.task.contains("ship auth")));
+        assert!(snapshot
+            .recent_tasks
+            .iter()
+            .any(|task| task.status == "awaiting-approval"));
     }
 }

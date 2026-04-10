@@ -4,7 +4,11 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum MemoryError {
     #[error("I/O error at {path}: {source}")]
-    Io { path: PathBuf, #[source] source: std::io::Error },
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("YAML parse error: {0}")]
     Yaml(#[from] serde_yaml::Error),

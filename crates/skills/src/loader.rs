@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use crate::error::SkillError;
 use crate::types::{Skill, SkillFrontmatter};
+use std::path::PathBuf;
 
 pub struct SkillLoader {
     skills_dir: PathBuf,
@@ -8,18 +8,24 @@ pub struct SkillLoader {
 
 impl SkillLoader {
     pub fn new(skills_dir: impl Into<PathBuf>) -> Self {
-        Self { skills_dir: skills_dir.into() }
+        Self {
+            skills_dir: skills_dir.into(),
+        }
     }
 
     pub fn load_all(&self) -> Result<Vec<Skill>, SkillError> {
         let mut skills = Vec::new();
 
-        let entries = std::fs::read_dir(&self.skills_dir)
-            .map_err(|e| SkillError::Io { path: self.skills_dir.clone(), source: e })?;
+        let entries = std::fs::read_dir(&self.skills_dir).map_err(|e| SkillError::Io {
+            path: self.skills_dir.clone(),
+            source: e,
+        })?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| SkillError::Io { path: self.skills_dir.clone(), source: e })?;
+            let entry = entry.map_err(|e| SkillError::Io {
+                path: self.skills_dir.clone(),
+                source: e,
+            })?;
             let path = entry.path();
 
             // Only process .md files
@@ -27,8 +33,10 @@ impl SkillLoader {
                 continue;
             }
 
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| SkillError::Io { path: path.clone(), source: e })?;
+            let content = std::fs::read_to_string(&path).map_err(|e| SkillError::Io {
+                path: path.clone(),
+                source: e,
+            })?;
 
             // Split on "---" to get frontmatter
             // skill files start with "---\n" so splitn(3, "---") yields ["", " fm\n", " body\n"]
@@ -37,11 +45,17 @@ impl SkillLoader {
                 return Err(SkillError::MissingFrontmatter { path });
             }
 
-            let frontmatter: SkillFrontmatter = serde_yaml::from_str(parts[1])
-                .map_err(|e| SkillError::FrontmatterParse { path: path.clone(), source: e })?;
+            let frontmatter: SkillFrontmatter =
+                serde_yaml::from_str(parts[1]).map_err(|e| SkillError::FrontmatterParse {
+                    path: path.clone(),
+                    source: e,
+                })?;
 
             let template = parts[2].trim().to_string();
-            skills.push(Skill { frontmatter, template });
+            skills.push(Skill {
+                frontmatter,
+                template,
+            });
         }
 
         Ok(skills)
@@ -73,7 +87,11 @@ mod tests {
     fn ignores_non_md_files() {
         let dir = TempDir::new().unwrap();
         // Write a valid .md skill file
-        fs::write(dir.path().join("skill.md"), "---\nname: s\ndescription: d\ntrigger: /s\nmodel: claude\n---\nbody\n").unwrap();
+        fs::write(
+            dir.path().join("skill.md"),
+            "---\nname: s\ndescription: d\ntrigger: /s\nmodel: claude\n---\nbody\n",
+        )
+        .unwrap();
         // Write a non-.md file
         fs::write(dir.path().join("notes.txt"), "ignore me").unwrap();
 

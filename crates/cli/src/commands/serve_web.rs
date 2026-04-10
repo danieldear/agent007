@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use agent007_web::WebServer;
 use crate::commands::run::{
-    agent007_global_home,
-    build_stack, runtime_mode_label, selected_runtime_model, selected_runtime_provider,
-    standalone_mode_available,
+    agent007_global_home, build_stack, runtime_mode_label, selected_runtime_model,
+    selected_runtime_provider, standalone_mode_available,
 };
 use crate::config::Config;
+use agent007_web::WebServer;
 
 pub const DEFAULT_PORT: u16 = 8007;
 
@@ -54,7 +53,8 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         provider_label,
     );
 
-    let result = web.run(actual_port)
+    let result = web
+        .run(actual_port)
         .await
         .map_err(|e| anyhow::anyhow!("web server error: {e}"));
 
@@ -160,8 +160,12 @@ mod tests {
     #[tokio::test]
     async fn resolve_port_returns_registered_port() {
         let dir = tempfile::tempdir().unwrap();
-        let mut registry = PortRegistry { entries: HashMap::new() };
-        registry.entries.insert(dir.path().to_string_lossy().to_string(), 9001);
+        let mut registry = PortRegistry {
+            entries: HashMap::new(),
+        };
+        registry
+            .entries
+            .insert(dir.path().to_string_lossy().to_string(), 9001);
         let port = registry.resolve_port(dir.path(), 8007).await;
         assert_eq!(port, 9001);
     }
@@ -170,8 +174,12 @@ mod tests {
     async fn resolve_port_skips_ports_used_by_other_projects() {
         let dir = tempfile::tempdir().unwrap();
         // Bind 8007 so it's occupied
-        let _listener = tokio::net::TcpListener::bind("0.0.0.0:19999").await.unwrap();
-        let mut registry = PortRegistry { entries: HashMap::new() };
+        let _listener = tokio::net::TcpListener::bind("0.0.0.0:19999")
+            .await
+            .unwrap();
+        let mut registry = PortRegistry {
+            entries: HashMap::new(),
+        };
         // Mark 19999 as used by another project
         registry.entries.insert("/other/project".to_string(), 19999);
         let port = registry.resolve_port(dir.path(), 19999).await;

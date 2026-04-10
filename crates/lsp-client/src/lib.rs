@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Diagnostic {
@@ -41,14 +41,21 @@ impl LspContext {
             for d in &self.diagnostics {
                 out.push_str(&format!(
                     "- [{}] {}:{}:{} — {}\n",
-                    d.severity.to_uppercase(), d.file, d.line, d.col, d.message
+                    d.severity.to_uppercase(),
+                    d.file,
+                    d.line,
+                    d.col,
+                    d.message
                 ));
             }
         }
         if !self.symbols.is_empty() {
             out.push_str("\n## Symbols\n");
             for s in &self.symbols {
-                out.push_str(&format!("- {} ({}) at {}:{}\n", s.name, s.kind, s.file, s.line));
+                out.push_str(&format!(
+                    "- {} ({}) at {}:{}\n",
+                    s.name, s.kind, s.file, s.line
+                ));
             }
         }
         out
@@ -61,7 +68,9 @@ pub struct LspClient {
 
 impl LspClient {
     pub fn new(server_cmd: &str) -> Self {
-        Self { server_cmd: server_cmd.to_string() }
+        Self {
+            server_cmd: server_cmd.to_string(),
+        }
     }
 
     /// Detect which LSP server to use for the given directory.
@@ -138,7 +147,9 @@ impl LspClient {
             "method": "initialized",
             "params": {}
         });
-        stdin.write_all(format_lsp_message(&initialized.to_string()).as_bytes()).await?;
+        stdin
+            .write_all(format_lsp_message(&initialized.to_string()).as_bytes())
+            .await?;
 
         // Send workspace/symbol request
         let sym_req = serde_json::json!({
@@ -147,7 +158,9 @@ impl LspClient {
             "method": "workspace/symbol",
             "params": { "query": "" }
         });
-        stdin.write_all(format_lsp_message(&sym_req.to_string()).as_bytes()).await?;
+        stdin
+            .write_all(format_lsp_message(&sym_req.to_string()).as_bytes())
+            .await?;
         stdin.flush().await?;
 
         // Read responses with a timeout
@@ -159,9 +172,16 @@ impl LspClient {
             let mut responses_read = 0;
             loop {
                 let mut header = String::new();
-                if reader.read_line(&mut header).await? == 0 { break; }
-                if !header.starts_with("Content-Length:") { continue; }
-                let len: usize = header.trim_start_matches("Content-Length:").trim().parse()?;
+                if reader.read_line(&mut header).await? == 0 {
+                    break;
+                }
+                if !header.starts_with("Content-Length:") {
+                    continue;
+                }
+                let len: usize = header
+                    .trim_start_matches("Content-Length:")
+                    .trim()
+                    .parse()?;
                 // skip blank line
                 let mut blank = String::new();
                 reader.read_line(&mut blank).await?;
@@ -172,9 +192,13 @@ impl LspClient {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_str) {
                     parse_lsp_response(&v, &mut context);
                     if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
-                        if id == 2 { responses_read += 1; }
+                        if id == 2 {
+                            responses_read += 1;
+                        }
                     }
-                    if responses_read >= 1 { break; }
+                    if responses_read >= 1 {
+                        break;
+                    }
                 }
             }
             Ok::<(), anyhow::Error>(())
@@ -198,13 +222,22 @@ fn parse_lsp_response(v: &serde_json::Value, ctx: &mut LspContext) {
             for sym in symbols.iter().take(50) {
                 let name = sym["name"].as_str().unwrap_or("").to_string();
                 let kind = symbol_kind_name(sym["kind"].as_u64().unwrap_or(0));
-                let file = sym["location"]["uri"].as_str()
+                let file = sym["location"]["uri"]
+                    .as_str()
                     .unwrap_or("")
                     .trim_start_matches("file://")
                     .to_string();
-                let line = sym["location"]["range"]["start"]["line"].as_u64().unwrap_or(0) as u32 + 1;
+                let line = sym["location"]["range"]["start"]["line"]
+                    .as_u64()
+                    .unwrap_or(0) as u32
+                    + 1;
                 if !name.is_empty() {
-                    ctx.symbols.push(Symbol { name, kind, file, line });
+                    ctx.symbols.push(Symbol {
+                        name,
+                        kind,
+                        file,
+                        line,
+                    });
                 }
             }
         }
@@ -213,7 +246,8 @@ fn parse_lsp_response(v: &serde_json::Value, ctx: &mut LspContext) {
     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
         if method == "textDocument/publishDiagnostics" {
             if let Some(params) = v.get("params") {
-                let file = params["uri"].as_str()
+                let file = params["uri"]
+                    .as_str()
                     .unwrap_or("")
                     .trim_start_matches("file://")
                     .to_string();
@@ -241,15 +275,35 @@ fn parse_lsp_response(v: &serde_json::Value, ctx: &mut LspContext) {
 
 fn symbol_kind_name(kind: u64) -> String {
     match kind {
-        1 => "file", 2 => "module", 3 => "namespace", 4 => "package",
-        5 => "class", 6 => "method", 7 => "property", 8 => "field",
-        9 => "constructor", 10 => "enum", 11 => "interface", 12 => "function",
-        13 => "variable", 14 => "constant", 15 => "string", 16 => "number",
-        17 => "boolean", 18 => "array", 19 => "object", 20 => "key",
-        21 => "null", 22 => "enum_member", 23 => "struct", 24 => "event",
-        25 => "operator", 26 => "type_parameter",
+        1 => "file",
+        2 => "module",
+        3 => "namespace",
+        4 => "package",
+        5 => "class",
+        6 => "method",
+        7 => "property",
+        8 => "field",
+        9 => "constructor",
+        10 => "enum",
+        11 => "interface",
+        12 => "function",
+        13 => "variable",
+        14 => "constant",
+        15 => "string",
+        16 => "number",
+        17 => "boolean",
+        18 => "array",
+        19 => "object",
+        20 => "key",
+        21 => "null",
+        22 => "enum_member",
+        23 => "struct",
+        24 => "event",
+        25 => "operator",
+        26 => "type_parameter",
         _ => "unknown",
-    }.to_string()
+    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -293,7 +347,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         let result = LspClient::detect_language(dir.path());
-        assert_eq!(result, Some(("typescript", "typescript-language-server --stdio")));
+        assert_eq!(
+            result,
+            Some(("typescript", "typescript-language-server --stdio"))
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 /// A single skill or workflow packed into a bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,7 +15,11 @@ impl BundleAsset {
     pub fn new(filename: impl Into<String>, content: impl Into<String>) -> Self {
         let content = content.into();
         let sha256 = hex::encode(Sha256::digest(content.as_bytes()));
-        Self { filename: filename.into(), content, sha256 }
+        Self {
+            filename: filename.into(),
+            content,
+            sha256,
+        }
     }
 
     pub fn verify(&self) -> bool {
@@ -59,34 +63,45 @@ pub struct BundleBuilder {
 
 impl BundleBuilder {
     pub fn new(skills_dir: impl Into<PathBuf>, workflows_dir: impl Into<PathBuf>) -> Self {
-        Self { skills_dir: skills_dir.into(), workflows_dir: workflows_dir.into() }
+        Self {
+            skills_dir: skills_dir.into(),
+            workflows_dir: workflows_dir.into(),
+        }
     }
 
     /// Build a bundle containing the specified skills (by trigger) and workflows (by name).
     /// Pass empty slices to include all.
-    pub fn build(
-        &self,
-        skill_triggers: &[&str],
-        workflow_names: &[&str],
-    ) -> Result<Bundle> {
+    pub fn build(&self, skill_triggers: &[&str], workflow_names: &[&str]) -> Result<Bundle> {
         let skills = self.collect_assets(&self.skills_dir, &["md"], skill_triggers)?;
-        let workflows = self.collect_assets(&self.workflows_dir, &["yaml", "yml"], workflow_names)?;
+        let workflows =
+            self.collect_assets(&self.workflows_dir, &["yaml", "yml"], workflow_names)?;
         Ok(Bundle::new(skills, workflows))
     }
 
-    fn collect_assets(&self, dir: &Path, exts: &[&str], filter: &[&str]) -> Result<Vec<BundleAsset>> {
-        if !dir.exists() { return Ok(vec![]); }
+    fn collect_assets(
+        &self,
+        dir: &Path,
+        exts: &[&str],
+        filter: &[&str],
+    ) -> Result<Vec<BundleAsset>> {
+        if !dir.exists() {
+            return Ok(vec![]);
+        }
         let mut assets = Vec::new();
         for entry in std::fs::read_dir(dir)?.flatten() {
             let path = entry.path();
             let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !exts.contains(&file_ext) { continue; }
+            if !exts.contains(&file_ext) {
+                continue;
+            }
             let Some(filename) = path.file_name().map(|f| f.to_string_lossy().to_string()) else {
                 continue;
             };
             if !filter.is_empty() {
                 let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-                if !filter.iter().any(|f| stem.trim_start_matches('/') == f.trim_start_matches('/') || *f == stem.as_ref()) {
+                if !filter.iter().any(|f| {
+                    stem.trim_start_matches('/') == f.trim_start_matches('/') || *f == stem.as_ref()
+                }) {
                     continue;
                 }
             }
@@ -120,14 +135,20 @@ pub struct BundleImporter {
 
 impl BundleImporter {
     pub fn new(skills_dir: impl Into<PathBuf>, workflows_dir: impl Into<PathBuf>) -> Self {
-        Self { skills_dir: skills_dir.into(), workflows_dir: workflows_dir.into() }
+        Self {
+            skills_dir: skills_dir.into(),
+            workflows_dir: workflows_dir.into(),
+        }
     }
 
     pub fn import(&self, bundle: &Bundle, overwrite: bool) -> Result<Vec<ImportResult>> {
         // verify all hashes first
         for asset in bundle.skills.iter().chain(bundle.workflows.iter()) {
             if !asset.verify() {
-                bail!("hash mismatch for {}: bundle may be corrupted", asset.filename);
+                bail!(
+                    "hash mismatch for {}: bundle may be corrupted",
+                    asset.filename
+                );
             }
         }
 
@@ -137,12 +158,25 @@ impl BundleImporter {
         Ok(results)
     }
 
-    fn write_assets(&self, assets: &[BundleAsset], dir: &Path, overwrite: bool) -> Result<Vec<ImportResult>> {
+    fn write_assets(
+        &self,
+        assets: &[BundleAsset],
+        dir: &Path,
+        overwrite: bool,
+    ) -> Result<Vec<ImportResult>> {
         let _ = std::fs::create_dir_all(dir);
         let mut results = Vec::new();
         for asset in assets {
-            let safe_name: String = asset.filename.chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+            let safe_name: String = asset
+                .filename
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect();
             let dest = dir.join(&safe_name);
             let action = if dest.exists() && !overwrite {
@@ -154,7 +188,10 @@ impl BundleImporter {
                 std::fs::write(&dest, &asset.content)?;
                 ImportAction::Imported
             };
-            results.push(ImportResult { filename: safe_name, action });
+            results.push(ImportResult {
+                filename: safe_name,
+                action,
+            });
         }
         Ok(results)
     }
@@ -180,7 +217,10 @@ mod tests {
     #[test]
     fn bundle_json_roundtrip() {
         let bundle = Bundle::new(
-            vec![BundleAsset::new("skill.md", "---\ntrigger: /test\n---\nhello")],
+            vec![BundleAsset::new(
+                "skill.md",
+                "---\ntrigger: /test\n---\nhello",
+            )],
             vec![],
         );
         let json = bundle.to_json().unwrap();

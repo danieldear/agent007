@@ -22,15 +22,40 @@ pub enum HookEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentEvent {
-    TaskAssigned { agent_id: AgentId, task: Task },
-    TaskCompleted { agent_id: AgentId, result: TaskResult, skill_name: Option<String>, model: Option<String> },
-    ToolCall { agent_id: AgentId, tool: ToolCall },
+    TaskAssigned {
+        agent_id: AgentId,
+        task: Task,
+    },
+    TaskCompleted {
+        agent_id: AgentId,
+        result: TaskResult,
+        skill_name: Option<String>,
+        model: Option<String>,
+    },
+    ToolCall {
+        agent_id: AgentId,
+        tool: ToolCall,
+    },
     /// Emitted after a tool call completes. `success` is false when the tool
     /// returned an error or non-zero exit code. `error` carries the message.
-    ToolCallResult { agent_id: AgentId, tool: ToolCall, success: bool, error: Option<String> },
-    MemoryWrite { key: String, value_ref: MemoryRef },
-    HookFired { event: HookEvent },
-    ModelRequest { provider: String, prompt_ref: PromptRef, token_estimate: usize },
+    ToolCallResult {
+        agent_id: AgentId,
+        tool: ToolCall,
+        success: bool,
+        error: Option<String>,
+    },
+    MemoryWrite {
+        key: String,
+        value_ref: MemoryRef,
+    },
+    HookFired {
+        event: HookEvent,
+    },
+    ModelRequest {
+        provider: String,
+        prompt_ref: PromptRef,
+        token_estimate: usize,
+    },
 }
 
 #[cfg(test)]
@@ -46,12 +71,21 @@ mod tests {
             token_estimate: 100,
         };
         let c = e.clone();
-        assert!(matches!(c, AgentEvent::ModelRequest { token_estimate: 100, .. }));
+        assert!(matches!(
+            c,
+            AgentEvent::ModelRequest {
+                token_estimate: 100,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn memory_write_uses_opaque_ref() {
-        let e = AgentEvent::MemoryWrite { key: "user.md".to_string(), value_ref: crate::types::MemoryRef::new() };
+        let e = AgentEvent::MemoryWrite {
+            key: "user.md".to_string(),
+            value_ref: crate::types::MemoryRef::new(),
+        };
         if let AgentEvent::MemoryWrite { key, .. } = e {
             assert_eq!(key, "user.md");
         }

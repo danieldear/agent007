@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use rmcp::{
-    ServiceExt,
     model::{CallToolRequestParams, ClientInfo},
     transport::TokioChildProcess,
+    ServiceExt,
 };
 use serde_json::Value;
 
@@ -52,10 +52,11 @@ impl McpClient {
 
             let cmd = build_command(config);
 
-            let transport = TokioChildProcess::new(cmd).map_err(|e| McpError::ServerStartFailed {
-                name: config.name.clone(),
-                source: e,
-            })?;
+            let transport =
+                TokioChildProcess::new(cmd).map_err(|e| McpError::ServerStartFailed {
+                    name: config.name.clone(),
+                    source: e,
+                })?;
 
             let client_info = ClientInfo::default();
             let running = client_info
@@ -121,19 +122,11 @@ impl McpClient {
     /// Call a named tool with JSON args. Returns the tool's JSON response.
     ///
     /// Returns `McpError::ToolNotFound` if no connected server advertises the tool.
-    pub async fn call_tool(
-        &self,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, McpError> {
-        let handle_idx = self
-            .tool_index
-            .get(name)
-            .copied()
-            .ok_or_else(|| {
-                tracing::error!(tool = %name, "tool not found");
-                McpError::ToolNotFound(name.to_string())
-            })?;
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value, McpError> {
+        let handle_idx = self.tool_index.get(name).copied().ok_or_else(|| {
+            tracing::error!(tool = %name, "tool not found");
+            McpError::ToolNotFound(name.to_string())
+        })?;
 
         let handle = &self.handles[handle_idx];
 
@@ -157,17 +150,13 @@ impl McpClient {
             CallToolRequestParams::new(name.to_string())
         };
 
-        let result = handle
-            .peer
-            .call_tool(params)
-            .await
-            .map_err(|e| {
-                tracing::error!(tool = %name, error = %e, "tool call failed");
-                McpError::ToolCallFailed {
-                    tool: name.to_string(),
-                    reason: e.to_string(),
-                }
-            })?;
+        let result = handle.peer.call_tool(params).await.map_err(|e| {
+            tracing::error!(tool = %name, error = %e, "tool call failed");
+            McpError::ToolCallFailed {
+                tool: name.to_string(),
+                reason: e.to_string(),
+            }
+        })?;
 
         // Prefer structured_content if present; otherwise serialise the content vec.
         let json = if let Some(structured) = result.structured_content {
@@ -199,7 +188,10 @@ impl McpClient {
                 let transport = match TokioChildProcess::new(cmd) {
                     Ok(t) => t,
                     Err(e) => {
-                        last_err = Some(McpError::ServerStartFailed { name: config.name.clone(), source: e });
+                        last_err = Some(McpError::ServerStartFailed {
+                            name: config.name.clone(),
+                            source: e,
+                        });
                         continue;
                     }
                 };
@@ -214,7 +206,10 @@ impl McpClient {
 
                 let peer = running.peer().clone();
                 let handle_idx = self.handles.len();
-                self.handles.push(ServerHandle { peer: peer.clone(), _service: running });
+                self.handles.push(ServerHandle {
+                    peer: peer.clone(),
+                    _service: running,
+                });
 
                 match peer.list_all_tools().await {
                     Ok(tools) => {
@@ -298,7 +293,10 @@ mod tests {
     #[tokio::test]
     async fn list_tools_no_servers_returns_empty() {
         let client = McpClient::new(vec![]);
-        let tools = client.list_tools().await.expect("list_tools should succeed");
+        let tools = client
+            .list_tools()
+            .await
+            .expect("list_tools should succeed");
         assert!(tools.is_empty());
     }
 

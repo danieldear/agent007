@@ -1,11 +1,11 @@
+use crate::error::CoreError;
+use crate::events::AgentEvent;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
-use crate::error::CoreError;
-use crate::events::AgentEvent;
 
 pub type EventStream = Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
 
@@ -22,7 +22,9 @@ pub struct LocalDispatcher {
 impl LocalDispatcher {
     pub fn new(capacity: usize) -> Arc<Self> {
         let (tx, _) = broadcast::channel(capacity);
-        Arc::new(Self { sender: Arc::new(tx) })
+        Arc::new(Self {
+            sender: Arc::new(tx),
+        })
     }
 }
 
@@ -56,10 +58,18 @@ mod tests {
             provider: "claude".to_string(),
             prompt_ref: PromptRef::new(),
             token_estimate: 42,
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let received = FuturesStreamExt::next(&mut stream).await.unwrap();
-        assert!(matches!(received, AgentEvent::ModelRequest { token_estimate: 42, .. }));
+        assert!(matches!(
+            received,
+            AgentEvent::ModelRequest {
+                token_estimate: 42,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -72,11 +82,25 @@ mod tests {
             provider: "ollama".into(),
             prompt_ref: PromptRef::new(),
             token_estimate: 7,
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let e1 = FuturesStreamExt::next(&mut s1).await.unwrap();
         let e2 = FuturesStreamExt::next(&mut s2).await.unwrap();
-        assert!(matches!(e1, AgentEvent::ModelRequest { token_estimate: 7, .. }));
-        assert!(matches!(e2, AgentEvent::ModelRequest { token_estimate: 7, .. }));
+        assert!(matches!(
+            e1,
+            AgentEvent::ModelRequest {
+                token_estimate: 7,
+                ..
+            }
+        ));
+        assert!(matches!(
+            e2,
+            AgentEvent::ModelRequest {
+                token_estimate: 7,
+                ..
+            }
+        ));
     }
 }

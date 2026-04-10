@@ -44,7 +44,9 @@ mod tests {
     #[test]
     fn agent_type_deserializes_worker() {
         #[derive(serde::Deserialize)]
-        struct W { t: AgentType }
+        struct W {
+            t: AgentType,
+        }
         let v: W = toml::from_str("t = \"worker\"").unwrap();
         assert_eq!(v.t, AgentType::Worker);
     }
@@ -52,7 +54,9 @@ mod tests {
     #[test]
     fn agent_type_deserializes_sub_orchestrator() {
         #[derive(serde::Deserialize)]
-        struct W { t: AgentType }
+        struct W {
+            t: AgentType,
+        }
         let v: W = toml::from_str("t = \"sub-orchestrator\"").unwrap();
         assert_eq!(v.t, AgentType::SubOrchestrator);
     }
@@ -77,10 +81,7 @@ mod tests {
         assert_eq!(def.r#type, AgentType::SubOrchestrator);
         assert_eq!(def.memory_namespace.as_deref(), Some("libp2p"));
         let zones = def.zones.unwrap();
-        assert_eq!(
-            zones.readonly.unwrap(),
-            vec!["src/networking/libp2p/core/"]
-        );
+        assert_eq!(zones.readonly.unwrap(), vec!["src/networking/libp2p/core/"]);
     }
 
     #[test]

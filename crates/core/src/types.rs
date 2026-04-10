@@ -1,17 +1,21 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(pub Uuid);
 
 impl AgentId {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 impl Default for AgentId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl std::fmt::Display for AgentId {
@@ -25,7 +29,9 @@ impl std::fmt::Display for AgentId {
 pub struct PromptRef(pub Uuid);
 
 impl PromptRef {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 /// Opaque ref to a memory value. Never put raw memory content on the event bus.
@@ -33,7 +39,9 @@ impl PromptRef {
 pub struct MemoryRef(pub Uuid);
 
 impl MemoryRef {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 /// Shared, thread-safe store mapping PromptRef → raw prompt text.
@@ -76,4 +84,3 @@ mod tests {
         assert_eq!(store2.lock().unwrap().get(&r), Some("shared prompt"));
     }
 }
-

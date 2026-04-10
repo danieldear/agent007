@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use tracing::instrument;
-use agent007_models::ModelRouter;
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
 use crate::task::{Task, TaskResult};
 use crate::types::SharedPromptStore;
 use crate::worker::WorkerAgent;
+use agent007_models::ModelRouter;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 
 pub struct OrchestratorAgent {
     dispatcher: Arc<dyn Dispatcher>,
@@ -24,7 +24,13 @@ impl OrchestratorAgent {
         cancellation: CancellationToken,
         max_workers: usize,
     ) -> Self {
-        Self { dispatcher, router, prompt_store, cancellation, _max_workers: max_workers }
+        Self {
+            dispatcher,
+            router,
+            prompt_store,
+            cancellation,
+            _max_workers: max_workers,
+        }
     }
 
     #[instrument(skip(self), fields(task_id = %task.id, task_type = %task.task_type))]
@@ -54,7 +60,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio_util::sync::CancellationToken;
 
-    fn make_orchestrator(response: &str, token: CancellationToken) -> (OrchestratorAgent, Arc<LocalDispatcher>) {
+    fn make_orchestrator(
+        response: &str,
+        token: CancellationToken,
+    ) -> (OrchestratorAgent, Arc<LocalDispatcher>) {
         let d = LocalDispatcher::new(64);
         let mock = Arc::new(MockProvider::new(response, "mock"));
         let mut router = ModelRouter::new("mock");

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
-    routing::{get, post},
     response::{Html, IntoResponse},
+    routing::{get, post},
+    Router,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -65,7 +65,8 @@ impl WebServer {
 
         // Derive project name + path from the write home (project-local .agent007/ parent).
         let write_home = agent007_core::paths::agent007_write_home();
-        let project_root = write_home.parent()
+        let project_root = write_home
+            .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| write_home.clone());
         let project_name = project_root
@@ -130,8 +131,14 @@ impl WebServer {
             .route("/api/health", get(health_handler))
             .route("/ws", get(ws::ws_handler))
             .route("/api/run", post(api::run_handler))
-            .route("/api/skills", get(api::skills_handler).post(api::skill_save_handler))
-            .route("/api/skills/{trigger}", axum::routing::delete(api::skill_delete_handler))
+            .route(
+                "/api/skills",
+                get(api::skills_handler).post(api::skill_save_handler),
+            )
+            .route(
+                "/api/skills/{trigger}",
+                axum::routing::delete(api::skill_delete_handler),
+            )
             .route("/api/skills/run", post(api::skills_run_handler))
             .route("/api/skills/import", post(api::skill_import_handler))
             .route("/api/skills/generate", post(api::skill_generate_handler))
@@ -143,22 +150,49 @@ impl WebServer {
             .route("/api/runs/{id}", get(api::run_detail_handler))
             .route("/api/runs/{id}/approval", post(api::run_approval_handler))
             .route("/api/runs/{id}/resume", post(api::run_resume_handler))
-            .route("/api/personas", get(api::personas_list_handler).post(api::persona_save_handler))
-            .route("/api/personas/{name}", axum::routing::delete(api::persona_delete_handler))
-            .route("/api/workflows", get(api::workflows_list_handler).post(api::workflow_save_handler))
-            .route("/api/workflows/validate", post(api::workflow_validate_handler))
-            .route("/api/workflows/{name}", get(api::workflow_get_handler).delete(api::workflow_delete_handler))
-            .route("/api/workflow-templates", get(api::workflow_templates_list_handler))
-            .route("/api/workflow-templates/{name}", get(api::workflow_template_get_handler))
+            .route(
+                "/api/personas",
+                get(api::personas_list_handler).post(api::persona_save_handler),
+            )
+            .route(
+                "/api/personas/{name}",
+                axum::routing::delete(api::persona_delete_handler),
+            )
+            .route(
+                "/api/workflows",
+                get(api::workflows_list_handler).post(api::workflow_save_handler),
+            )
+            .route(
+                "/api/workflows/validate",
+                post(api::workflow_validate_handler),
+            )
+            .route(
+                "/api/workflows/{name}",
+                get(api::workflow_get_handler).delete(api::workflow_delete_handler),
+            )
+            .route(
+                "/api/workflow-templates",
+                get(api::workflow_templates_list_handler),
+            )
+            .route(
+                "/api/workflow-templates/{name}",
+                get(api::workflow_template_get_handler),
+            )
             .route("/api/memory/{scope}", get(api::memory_list_handler))
             .route("/api/memory/{scope}/{key}", get(api::memory_get_handler))
-            .route("/api/skills/{trigger}/promote", post(api::skill_promote_handler))
-            .route("/api/workflows/{name}/promote", post(api::workflow_promote_handler))
+            .route(
+                "/api/skills/{trigger}/promote",
+                post(api::skill_promote_handler),
+            )
+            .route(
+                "/api/workflows/{name}/promote",
+                post(api::workflow_promote_handler),
+            )
             .route("/api/bundle/export", get(api::bundle_export_handler))
             .route("/api/bundle/import", post(api::bundle_import_handler))
             .nest_service("/assets", {
-                let dist_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("static/dist/assets");
+                let dist_dir =
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static/dist/assets");
                 tower_http::services::ServeDir::new(dist_dir)
             })
             .with_state(self.state)
@@ -169,7 +203,10 @@ impl WebServer {
         let addr = format!("0.0.0.0:{port}");
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
-            .map_err(|e| WebError::Bind { addr: addr.clone(), source: e })?;
+            .map_err(|e| WebError::Bind {
+                addr: addr.clone(),
+                source: e,
+            })?;
 
         tracing::info!("agent007 web server listening on http://{addr}");
 
@@ -186,7 +223,10 @@ impl WebServer {
 
     /// Start serving using a pre-bound `TcpListener`.
     /// Use this to avoid the TOCTOU race when the caller already holds the binding.
-    pub async fn run_with_listener(self, listener: tokio::net::TcpListener) -> Result<(), WebError> {
+    pub async fn run_with_listener(
+        self,
+        listener: tokio::net::TcpListener,
+    ) -> Result<(), WebError> {
         let cancel = self.state.cancel.clone();
         let router = self.into_router();
         axum::serve(listener, router)
@@ -227,8 +267,8 @@ impl WebServer {
 }
 
 async fn dashboard_handler() -> impl IntoResponse {
-    let dist_index = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("static/dist/index.html");
+    let dist_index =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static/dist/index.html");
     let html = if dist_index.exists() {
         std::fs::read_to_string(&dist_index).unwrap_or_else(|_| DASHBOARD_HTML.to_string())
     } else {

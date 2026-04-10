@@ -1,7 +1,7 @@
+use agent007_core::types::{AgentId, PromptRef};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use agent007_core::types::{AgentId, PromptRef};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackEntry {
@@ -25,9 +25,18 @@ pub enum Outcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LearningEvent {
-    PromptImproved { skill_name: String, old_reward: f32, new_reward: f32 },
-    FeedbackRecorded { agent_id: AgentId, reward: f32 },
-    OptimizerTriggered { skill_name: String },
+    PromptImproved {
+        skill_name: String,
+        old_reward: f32,
+        new_reward: f32,
+    },
+    FeedbackRecorded {
+        agent_id: AgentId,
+        reward: f32,
+    },
+    OptimizerTriggered {
+        skill_name: String,
+    },
 }
 
 impl LearningEvent {
@@ -66,7 +75,9 @@ mod tests {
 
     #[test]
     fn outcome_failure_serializes_with_reason() {
-        let o = Outcome::Failure { reason: "timeout".to_string() };
+        let o = Outcome::Failure {
+            reason: "timeout".to_string(),
+        };
         let json = serde_json::to_string(&o).unwrap();
         let back: Outcome = serde_json::from_str(&json).unwrap();
         if let Outcome::Failure { reason } = back {
@@ -83,7 +94,12 @@ mod tests {
             old_reward: 0.2,
             new_reward: 0.7,
         };
-        if let LearningEvent::PromptImproved { old_reward, new_reward, .. } = e {
+        if let LearningEvent::PromptImproved {
+            old_reward,
+            new_reward,
+            ..
+        } = e
+        {
             assert!((old_reward - 0.2).abs() < 0.001);
             assert!((new_reward - 0.7).abs() < 0.001);
         }
