@@ -189,6 +189,7 @@ function showContextMenu(event, type, targetId) {
 
 function hideContextMenu() {
   contextMenu.value = { show: false, x: 0, y: 0, type: null, targetId: null }
+  showTemplateMenu.value = false
 }
 
 function deleteFromContextMenu() {
@@ -515,16 +516,22 @@ async function loadTemplate(tplName) {
           <!-- New: directly clears canvas -->
           <button class="btn btn-sm btn-ghost font-mono text-xs" @click="newWorkflow">New</button>
           <!-- Templates: separate dropdown -->
-          <div class="dropdown dropdown-end">
-            <label tabindex="0" class="btn btn-sm btn-ghost font-mono text-xs" @click.stop="showTemplateMenu = !showTemplateMenu">Templates ▾</label>
-            <ul v-if="showTemplateMenu" tabindex="0" class="dropdown-content z-50 menu p-2 shadow bg-base-300 rounded-box w-56">
+          <div class="relative">
+            <button class="btn btn-sm btn-ghost font-mono text-xs" @click.stop="showTemplateMenu = !showTemplateMenu">Templates ▾</button>
+            <ul
+              v-if="showTemplateMenu"
+              class="absolute top-full right-0 mt-1 z-50 min-w-[14rem] bg-base-300 border border-base-content/10 rounded-lg shadow-xl p-1.5 space-y-0.5"
+            >
               <li v-for="tpl in templates" :key="tpl.name">
-                <a @click="loadTemplate(tpl.name)">
-                  <span class="font-mono text-xs">{{ tpl.name }}</span>
-                  <span class="text-base-content/40 text-[10px]">{{ tpl.description?.slice(0, 30) }}</span>
-                </a>
+                <button
+                  class="w-full text-left px-3 py-1.5 rounded hover:bg-base-content/10 transition-colors"
+                  @click="loadTemplate(tpl.name)"
+                >
+                  <div class="font-mono text-xs text-base-content">{{ tpl.name }}</div>
+                  <div class="text-[10px] text-base-content/40 mt-0.5">{{ tpl.description?.slice(0, 40) }}</div>
+                </button>
               </li>
-              <li v-if="!templates.length"><a class="text-base-content/30 text-xs pointer-events-none">No templates</a></li>
+              <li v-if="!templates.length" class="px-3 py-2 text-[11px] text-base-content/30 font-mono">No templates</li>
             </ul>
           </div>
           <!-- Guide button -->

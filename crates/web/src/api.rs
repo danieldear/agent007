@@ -216,31 +216,34 @@ pub async fn skills_handler(
 pub async fn skill_delete_handler(
     Path(trigger): Path<String>,
 ) -> impl IntoResponse {
-    // Normalise the trigger — strip leading slash, sanitize to a safe filename
-    let slug = trigger.trim_start_matches('/');
-    let filename = slug
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect::<String>()
-        .to_lowercase();
+    let target_trigger = format!("/{}", trigger.trim_start_matches('/'));
 
-    // Search project-local dir first, then global
-    let candidates: Vec<std::path::PathBuf> = {
-        let mut v = Vec::new();
-        if let Some(p) = agent007_project_home() {
-            v.push(p.join("skills").join(format!("{filename}.md")));
-        }
-        v.push(agent007_global_home().join("skills").join(format!("{filename}.md")));
-        v
-    };
+    // Search dirs: project-local first, then global.
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(p) = agent007_project_home() {
+        dirs.push(p.join("skills"));
+    }
+    dirs.push(agent007_global_home().join("skills"));
 
-    for path in &candidates {
-        if path.exists() {
-            return match std::fs::remove_file(path) {
-                Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
-            };
+    // Scan frontmatter to find the file with matching trigger.
+    // This handles the case where the filename doesn't match the trigger slug
+    // (e.g. senior-ml-engineer.md with trigger: /skill).
+    for dir in &dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Some(fm) = parse_frontmatter(&content) {
+                    if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
+                        return match std::fs::remove_file(&path) {
+                            Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+                        };
+                    }
+                }
+            }
         }
     }
 
