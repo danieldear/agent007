@@ -56,3 +56,10 @@
 3. Regression suite shows no unacceptable degradation.
 4. Documentation and rollout controls published.
 5. End-to-end demo includes adaptive run, recovery, analytics, and local p2p sharing.
+
+## M3 Planning Docs
+1. `docs/v2/m3-prd.md`
+2. `docs/v2/m3-architecture.md`
+3. `docs/v2/m3-design.md`
+4. `docs/v2/m3-milestones.md`
+5. `docs/v2/m3-collaboration-evals.md`

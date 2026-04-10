@@ -220,8 +220,11 @@ dependencies = [
 name = "agent007-p2p"
 version = "0.1.0"
 dependencies = [
+ "agent007-sharing",
  "chrono",
+ "hex",
  "serde",
+ "sha2",
  "thiserror 1.0.69",
 ]
 
