@@ -160,6 +160,7 @@ pub async fn execute(
     write_file(&wf_dir.join("tdd.yaml"),           WORKFLOW_TDD,           "workflows/tdd.yaml",          force)?;
     write_file(&wf_dir.join("ideation.yaml"),      WORKFLOW_IDEATION,      "workflows/ideation.yaml",     force)?;
     write_file(&wf_dir.join("feature.yaml"),       WORKFLOW_FEATURE,       "workflows/feature.yaml",      force)?;
+    write_file(&wf_dir.join("brainstorm.yaml"),    WORKFLOW_BRAINSTORM,    "workflows/brainstorm.yaml",   force)?;
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
@@ -848,7 +849,8 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
         write_if_missing(&wf_dir.join("tdd.yaml"),          WORKFLOW_TDD,          "~/.agent007/workflows/tdd.yaml")?;
         write_if_missing(&wf_dir.join("ideation.yaml"),     WORKFLOW_IDEATION,     "~/.agent007/workflows/ideation.yaml")?;
         write_if_missing(&wf_dir.join("feature.yaml"),      WORKFLOW_FEATURE,      "~/.agent007/workflows/feature.yaml")?;
-        ok("7 built-in workflows seeded to ~/.agent007/workflows/");
+        write_if_missing(&wf_dir.join("brainstorm.yaml"),   WORKFLOW_BRAINSTORM,   "~/.agent007/workflows/brainstorm.yaml")?;
+        ok("8 built-in workflows seeded to ~/.agent007/workflows/");
     }
 
     let personas_dir = global_home.join("personas");
@@ -1962,6 +1964,170 @@ steps:
     depends_on: [document-feature]
 "#;
 
+const WORKFLOW_BRAINSTORM: &str = r#"name: brainstorm
+description: >
+  Lightweight brainstorm-to-docs pipeline. Free-form ideation → human direction approval →
+  PRD + ideation document written to docs/. Stops before architecture and milestones.
+  Use this to capture ideas and produce a PRD before committing to the full ideation workflow.
+  The generated docs serve as direct input to /agent007-workflow-ideation or /dev-architect.
+
+steps:
+  - id: brainstorm
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      You are a brainstorming specialist using the Double Diamond design-thinking methodology.
+      Explore the problem space for:
+
+      {{task}}
+
+      Phase 1 — Discover: What is the pain? Who has it? What is the current workaround or status quo?
+      Phase 2 — Define: Frame the problem precisely. What constraints cannot be compromised?
+      Phase 3 — Develop: Generate 3–5 meaningfully different approaches. Make each a real alternative,
+        not just a variation. Include at least one unconventional option.
+      Phase 4 — Converge: Recommend one direction with clear rationale.
+
+      For each approach provide:
+      - Name and one-sentence summary
+      - How it works (2-3 sentences)
+      - Strengths
+      - Weaknesses / risks
+      - Effort estimate (Low / Medium / High)
+
+      End with:
+      - Recommended approach and rationale
+      - Key risks to mitigate
+      - Open questions that need human input
+      - Assumptions to validate before building
+
+      ---
+      Project context (understand existing architecture before suggesting approaches):
+      {{memory.repo_brain}}
+
+      Project decisions and notes:
+      {{memory.project}}
+    output: brainstorm_output
+    depends_on: []
+
+  - id: review-direction
+    agent: Researcher
+    model: claude-sonnet-4-6
+    requires_approval: true
+    prompt: |
+      Brainstorm complete. Human: please review the approaches and select a direction.
+
+      BRAINSTORM OUTPUT:
+      {{brainstorm_output}}
+
+      Present a concise summary of each option and the key trade-offs. Flag the open questions
+      that need human input. The human can approve one option, request a different direction,
+      or ask for more exploration on a specific approach.
+    output: direction_approved
+    depends_on: [brainstorm]
+
+  - id: write-prd
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      You are a product manager. Write a Product Requirements Document (PRD) for:
+
+      {{task}}
+
+      Based on:
+      BRAINSTORM: {{brainstorm_output}}
+      APPROVED DIRECTION: {{direction_approved}}
+
+      Include:
+      - Executive summary and goals
+      - User stories with acceptance criteria (As a... I want... So that...)
+      - Functional requirements
+      - Non-functional requirements (performance, security, reliability)
+      - Out-of-scope items
+      - Success metrics
+      - Open questions and assumptions
+    output: prd_doc
+    depends_on: [review-direction]
+
+  - id: write-ideation-doc
+    agent: DocumentationWriter
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Capture the brainstorm and approved direction as a structured Ideation Document.
+
+      TASK: {{task}}
+      BRAINSTORM: {{brainstorm_output}}
+      APPROVED DIRECTION: {{direction_approved}}
+
+      Write a document covering:
+      - Problem statement and context
+      - Goals and non-goals
+      - Constraints
+      - Options explored (summary of each approach from the brainstorm)
+      - Selected direction and rationale
+      - Open questions
+      - Next steps
+    output: ideation_doc
+    depends_on: [review-direction]
+
+  - id: write-docs
+    agent: DocumentationWriter
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Write the brainstorm outputs as project documentation files.
+
+      Use the file_write tool to create the following files
+      (create the docs/ directory if it does not exist):
+
+      1. docs/ideation.md
+         Content: {{ideation_doc}}
+
+      2. docs/prd.md
+         Content: {{prd_doc}}
+
+      After writing both files, produce a brief summary listing the files
+      created and their purpose. These files should be committed to version
+      control and serve as input to the architecture phase.
+    output: docs_written
+    depends_on: [write-prd, write-ideation-doc]
+
+  - id: present-summary
+    agent: Planner
+    model: claude-sonnet-4-6
+    requires_approval: true
+    prompt: |
+      The brainstorm phase is complete. Present the results for final review.
+
+      ## Brainstorm Summary
+
+      ### Topic
+      {{task}}
+
+      ### Approved Direction
+      {{direction_approved}}
+
+      ### Documents Written
+      - `docs/ideation.md` — full ideation document with all explored options
+      - `docs/prd.md` — product requirements document
+
+      Status: {{docs_written}}
+
+      ### Next Steps
+      To continue to full architecture and project planning:
+        /agent007-workflow-ideation {{task}}
+
+      To go directly to architecture:
+        /dev-architect (use docs/prd.md as input)
+
+      To start building a specific feature:
+        /agent007-workflow-feature <feature name>
+
+      ---
+      Human: please review the brainstorm summary above.
+      Approve to proceed to architecture, or edit to refine the direction.
+    output: final_approval
+    depends_on: [write-docs]
+"#;
+
 // ── Claude Code sub-agent definitions ──────────────────────────────────────
 
 const CLAUDE_AGENT_ARCHITECT: &str = r#"---
@@ -1985,6 +2151,7 @@ You are the agent007 Architect — a meta-orchestrator that coordinates speciali
 
 1. **Understand the request** — identify what kind of analysis/work is needed
 2. **Pick a workflow** — call `agent007_workflow_list` to see available workflows, then choose the best match:
+   - `brainstorm` → explore ideas, generate approaches, write PRD (lightweight)
    - `log-analysis` → analyzing logs, finding errors, security issues
    - `code-review` → reviewing code for security, performance, quality
    - `sparc` → building a new feature end-to-end
@@ -2108,6 +2275,7 @@ mcp__agent007__agent007_task_submit  persona="Analyst"   → direct analysis
 | `log-analysis` | Analyzing logs for errors, patterns, security issues |
 | `feature` | Full-cycle feature delivery with approval gates |
 | `ideation` | Research → PRD → architecture → project plan |
+| `brainstorm` | Free-form ideation → PRD + ideation doc (lightweight) |
 "#;
 
 const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules for Zed
