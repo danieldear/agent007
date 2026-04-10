@@ -1264,6 +1264,7 @@ pub struct SkillSaveRequest {
     pub trigger: String,
     pub description: String,
     pub model: Option<String>,
+    pub category: Option<String>,
     pub template: String,
 }
 
@@ -1280,6 +1281,8 @@ struct SkillFrontmatter<'a> {
     trigger: &'a str,
     description: &'a str,
     model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a str>,
 }
 
 /// Generate a skill prompt template from the name + description.
@@ -1360,15 +1363,26 @@ pub async fn skill_save_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
     }
 
-    let filename = sanitize_file_stem(&payload.name, "skill");
+    // Use trigger-derived filename so the file is discoverable by trigger lookup.
+    let trigger_slug: String = payload.trigger.trim_start_matches('/')
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let filename = if trigger_slug.is_empty() {
+        sanitize_file_stem(&payload.name, "skill")
+    } else {
+        trigger_slug
+    };
     let path = skills_dir.join(format!("{filename}.md"));
     let model = payload.model.as_deref().unwrap_or("codex");
+    let category = payload.category.as_deref().filter(|s| !s.is_empty());
 
     let mut frontmatter_yaml = match serde_yaml::to_string(&SkillFrontmatter {
         name: &payload.name,
         trigger: &payload.trigger,
         description: &payload.description,
         model,
+        category,
     }) {
         Ok(yaml) => yaml,
         Err(e) => {
@@ -1477,26 +1491,32 @@ pub async fn skill_get_handler(
     State(_state): State<AppState>,
     Path(trigger): Path<String>,
 ) -> impl IntoResponse {
-    let skills_dir = agent007_home().join("skills");
-    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skills dir not found" }))).into_response();
-    };
-
     let target_trigger = format!("/{trigger}");
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Some(fm) = parse_frontmatter(&content) {
-                if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
-                    let mut result = fm;
-                    if let Some(obj) = result.as_object_mut() {
-                        let parts: Vec<&str> = content.splitn(3, "---").collect();
-                        if parts.len() >= 3 {
-                            obj.insert("template".to_string(), serde_json::Value::String(parts[2].trim().to_string()));
+
+    // Search project-local first, then global — same order as the list endpoint.
+    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(p) = agent007_project_home() {
+        search_dirs.push(p.join("skills"));
+    }
+    search_dirs.push(agent007_global_home().join("skills"));
+
+    for skills_dir in &search_dirs {
+        let Ok(entries) = std::fs::read_dir(skills_dir) else { continue; };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Some(fm) = parse_frontmatter(&content) {
+                    if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
+                        let mut result = fm;
+                        if let Some(obj) = result.as_object_mut() {
+                            let parts: Vec<&str> = content.splitn(3, "---").collect();
+                            if parts.len() >= 3 {
+                                obj.insert("template".to_string(), serde_json::Value::String(parts[2].trim().to_string()));
+                            }
                         }
+                        return Json(result).into_response();
                     }
-                    return Json(result).into_response();
                 }
             }
         }
@@ -1537,9 +1557,20 @@ pub async fn skill_import_handler(
 
     // Derive URL-based fallbacks (used when frontmatter fields are absent).
     let slug = {
-        let segment = payload.url.split('/').filter(|s| !s.is_empty()).last().unwrap_or("imported-skill");
-        let segment = segment.trim_end_matches(".md");
-        let s: String = segment.chars()
+        let url_parts: Vec<&str> = payload.url.split('/').filter(|s| !s.is_empty()).collect();
+        let last = url_parts.last().copied().unwrap_or("imported-skill");
+        let last_no_ext = last.trim_end_matches(".md").trim_end_matches(".MD");
+        // When filename is generic (SKILL, skills, README, index), prefer the parent directory name.
+        let effective = if matches!(last_no_ext.to_lowercase().as_str(), "skill" | "skills" | "readme" | "index") {
+            if url_parts.len() >= 2 {
+                url_parts[url_parts.len() - 2]
+            } else {
+                last_no_ext
+            }
+        } else {
+            last_no_ext
+        };
+        let s: String = effective.chars()
             .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
             .collect();
         let s = s.trim_matches('-').to_string();

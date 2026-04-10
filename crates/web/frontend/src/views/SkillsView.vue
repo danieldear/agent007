@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useApi } from '../composables/useApi.js'
 
 const { api, loading } = useApi()
@@ -82,6 +82,7 @@ const form = ref({
   trigger: '/',
   description: '',
   model: 'codex',
+  category: 'custom',
   template: '',
 })
 
@@ -153,11 +154,40 @@ const filteredRegistry = computed(() => {
 
 const installedTriggers = computed(() => new Set(skills.value.map(s => s.trigger)))
 
+const categoryPrefixes = {
+  dev: 'dev',
+  code: 'code',
+  project: 'project',
+  meta: 'meta',
+  custom: '',
+}
+
+function nameToSlug(name) {
+  return name.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function autoTrigger(name, category) {
+  const slug = nameToSlug(name)
+  if (!slug) return '/'
+  const prefix = categoryPrefixes[category] || ''
+  return prefix ? `/${prefix}-${slug}` : `/${slug}`
+}
+
 function openCreate() {
   editingTrigger.value = null
-  form.value = { name: '', trigger: '/', description: '', model: 'codex', template: DEFAULT_TEMPLATE }
+  form.value = { name: '', trigger: '/', description: '', model: 'codex', category: 'custom', template: DEFAULT_TEMPLATE }
   showForm.value = true
 }
+
+// Auto-generate trigger from name + category when creating (not editing).
+watch([() => form.value.name, () => form.value.category], ([name, category]) => {
+  if (!editingTrigger.value) {
+    form.value.trigger = autoTrigger(name, category)
+  }
+})
 
 async function openEdit(skill) {
   editingTrigger.value = skill.trigger
@@ -171,6 +201,7 @@ async function openEdit(skill) {
         trigger: detail.trigger || skill.trigger || '/',
         description: detail.description || skill.description || '',
         model: detail.model || 'codex',
+        category: detail.category || skill.category || 'custom',
         template: detail.template || '',
       }
     } else {
@@ -179,6 +210,7 @@ async function openEdit(skill) {
         trigger: skill.trigger || '/',
         description: skill.description || '',
         model: 'codex',
+        category: skill.category || 'custom',
         template: '',
       }
     }
@@ -188,6 +220,7 @@ async function openEdit(skill) {
       trigger: skill.trigger || '/',
       description: skill.description || '',
       model: 'codex',
+      category: skill.category || 'custom',
       template: '',
     }
   }
@@ -477,6 +510,26 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
           <div>
             <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">description</div>
             <input v-model="form.description" class="skill-input w-full" placeholder="What this skill does" />
+          </div>
+
+          <!-- Category (only shown when creating, auto-drives trigger prefix) -->
+          <div v-if="!editingTrigger">
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">category</div>
+            <div class="flex gap-1.5 flex-wrap">
+              <button
+                v-for="cat in ['dev', 'code', 'project', 'meta', 'custom']"
+                :key="cat"
+                type="button"
+                class="px-3 py-1 text-[11px] font-mono rounded border transition-colors"
+                :class="form.category === cat
+                  ? 'bg-primary/15 border-primary/50 text-primary'
+                  : 'bg-base-200 border-base-300 text-base-content/50 hover:border-base-content/30'"
+                @click="form.category = cat"
+              >{{ cat }}</button>
+            </div>
+            <div class="mt-1 text-[10px] font-mono text-base-content/25">
+              Auto-generates trigger prefix: <code class="bg-base-200 px-1 rounded">{{ form.trigger }}</code>
+            </div>
           </div>
 
           <!-- Model -->
