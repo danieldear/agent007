@@ -746,7 +746,7 @@ footer {
 <!-- ── Hero ── -->
 <section class="hero">
   <div class="hero-inner">
-    <div class="hero-badge">MCP Server · CLI · 44 tools</div>
+    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · 44 tools</span></div>
 
     <h1 class="hero-title">
       Your AI editor,<br/>
@@ -1150,13 +1150,13 @@ function copyCode(btn, text) {
     '44 MCP tools · Built in Rust',
   ];
   const badge = document.querySelector('.hero-badge');
-  if (!badge) return;
+  const badgeText = badge ? badge.querySelector('.badge-text') : null;
+  if (!badge || !badgeText) return;
   let i = 0;
   function cycle() {
     badge.style.opacity = 0;
     setTimeout(() => {
-      badge.firstChild && (badge.firstChild.textContent = '');
-      badge.childNodes[1] && (badge.childNodes[1].textContent = phrases[i % phrases.length]);
+      badgeText.textContent = phrases[i % phrases.length];
       badge.style.opacity = 1;
       i++;
     }, 400);
