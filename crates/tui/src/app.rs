@@ -44,6 +44,9 @@ pub struct App {
     pub recent_optimizations: Vec<OptimizationSummary>,
     pub paused: bool,
     pub should_quit: bool,
+    pub show_help: bool,
+    pub log_scroll: usize,
+    pub task_scroll: usize,
     log_capacity: usize,
 }
 
@@ -59,6 +62,9 @@ impl App {
             recent_optimizations: Vec::new(),
             paused: false,
             should_quit: false,
+            show_help: false,
+            log_scroll: 0,
+            task_scroll: 0,
             log_capacity: 200,
         }
     }
@@ -136,7 +142,14 @@ impl App {
         match action {
             crate::event::AppAction::Quit => self.quit(),
             crate::event::AppAction::TogglePause => self.toggle_pause(),
-            _ => {}
+            crate::event::AppAction::Help => self.show_help = !self.show_help,
+            crate::event::AppAction::ScrollUp => {
+                self.log_scroll = self.log_scroll.saturating_sub(1);
+            }
+            crate::event::AppAction::ScrollDown => {
+                let max = self.logs.len().saturating_sub(1);
+                if self.log_scroll < max { self.log_scroll += 1; }
+            }
         }
     }
 

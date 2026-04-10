@@ -1,6 +1,6 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 use ratatui::style::{Color, Modifier, Style};
 use crate::app::{App, AgentState};
 
@@ -51,11 +51,16 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_logs(frame, row2[1], app);
     render_learning(frame, row3[0], app);
     render_optimizations(frame, row3[1], app);
+
+    if app.show_help {
+        render_help_overlay(frame, size);
+    }
 }
 
-fn render_header(frame: &mut Frame, area: Rect, _app: &App) {
+fn render_header(frame: &mut Frame, area: Rect, app: &App) {
+    let pause_hint = if app.paused { " [PAUSED]" } else { "" };
     let block = Block::default().borders(Borders::ALL).title("agent007 v0.1.0");
-    let paragraph = Paragraph::new("[q]uit [p]ause [?]help").block(block);
+    let paragraph = Paragraph::new(format!("[q]uit [p]ause [?]help ↑↓ scroll logs{pause_hint}")).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -121,14 +126,11 @@ fn render_model(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title("Logs");
-    let text: String = app
-        .logs
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let paragraph = Paragraph::new(text).block(block);
+    let block = Block::default().borders(Borders::ALL).title("Logs (↑↓ scroll)");
+    let logs: Vec<&str> = app.logs.iter().map(|s| s.as_str()).collect();
+    let skip = app.log_scroll.min(logs.len().saturating_sub(1));
+    let text = logs[skip..].join("\n");
+    let paragraph = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
@@ -175,7 +177,35 @@ fn render_optimizations(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(list, area);
 }
 
-#[cfg(test)]
+fn render_help_overlay(frame: &mut Frame, area: Rect) {
+    // Center a 50×14 popup
+    let popup_w = 52u16.min(area.width);
+    let popup_h = 14u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup = Rect { x, y, width: popup_w, height: popup_h };
+
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title("Help");
+    let text = "\
+  q          Quit\n\
+  p          Pause / resume event processing\n\
+  ? / Esc    Toggle this help overlay\n\
+  ↑ / ↓      Scroll log panel\n\
+\n\
+  All agent007 events are streamed live.\n\
+  Logs auto-scroll; use ↑↓ to review history.";
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, popup);
+}
+
+
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;

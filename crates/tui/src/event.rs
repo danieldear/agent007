@@ -14,12 +14,12 @@ pub enum AppAction {
 }
 
 /// Maps a crossterm KeyCode to an AppAction (or None for unbound keys).
-/// q → Quit, p → TogglePause, ? → Help
+/// q → Quit, p → TogglePause, ? / Esc → Help, ↑↓ → Scroll
 pub fn map_key_event(key: KeyCode) -> Option<AppAction> {
     match key {
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char('p') => Some(AppAction::TogglePause),
-        KeyCode::Char('?') => Some(AppAction::Help),
+        KeyCode::Char('?') | KeyCode::Esc => Some(AppAction::Help),
         KeyCode::Up => Some(AppAction::ScrollUp),
         KeyCode::Down => Some(AppAction::ScrollDown),
         _ => None,

@@ -1500,33 +1500,71 @@ pub async fn skill_import_handler(
         return (StatusCode::PAYLOAD_TOO_LARGE, Json(serde_json::json!({ "error": "skill file exceeds 100KB limit" }))).into_response();
     }
 
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "invalid skill: missing frontmatter" }))).into_response();
+    // Derive URL-based fallbacks (used when frontmatter fields are absent).
+    let slug = {
+        let segment = payload.url.split('/').filter(|s| !s.is_empty()).last().unwrap_or("imported-skill");
+        let segment = segment.trim_end_matches(".md");
+        let s: String = segment.chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
+            .collect();
+        let s = s.trim_matches('-').to_string();
+        if s.is_empty() { "imported-skill".to_string() } else { s }
+    };
+    let url_trigger = format!("/{slug}");
+    let url_name: String = slug.split('-')
+        .map(|w| { let mut c = w.chars(); match c.next() { None => String::new(), Some(f) => f.to_uppercase().collect::<String>() + c.as_str() } })
+        .collect::<Vec<_>>().join(" ");
+    let url_description = format!("Imported from {}", payload.url);
+
+    // Lenient frontmatter parse: optional trigger/name/description, tolerate missing or bad YAML.
+    #[derive(serde::Deserialize, Default)]
+    struct MinFm {
+        trigger: Option<String>,
+        name: Option<String>,
+        description: Option<String>,
     }
 
-    #[derive(serde::Deserialize)]
-    struct MinFm { trigger: String }
-    let fm: MinFm = match serde_yaml::from_str(parts[1]) {
-        Ok(f) => f,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("invalid frontmatter: {e}") }))).into_response(),
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    let (fm, body, has_original_trigger) = if parts.len() >= 3 {
+        match serde_yaml::from_str::<MinFm>(parts[1]) {
+            Ok(f) => {
+                let has_trigger = f.trigger.is_some();
+                (f, parts[2].to_string(), has_trigger)
+            }
+            Err(_) => (MinFm::default(), content.clone(), false),
+        }
+    } else {
+        (MinFm::default(), content.clone(), false)
     };
 
-    let filename = fm.trigger.trim_start_matches('/')
+    let trigger = fm.trigger.unwrap_or_else(|| url_trigger.clone());
+    let name = fm.name.unwrap_or(url_name);
+    let description = fm.description.unwrap_or(url_description);
+
+    let filename: String = trigger.trim_start_matches('/')
         .chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect::<String>();
+        .collect();
+    let filename = if filename.is_empty() { slug.clone() } else { filename };
+
+    // Preserve original content only when it already had a valid trigger; otherwise synthesize.
+    let output = if has_original_trigger {
+        content
+    } else {
+        format!("---\nname: {name}\ntrigger: {trigger}\ndescription: {description}\n---\n{body}")
+    };
+
     let skills_dir = agent007_write_home().join("skills");
     let _ = std::fs::create_dir_all(&skills_dir);
     let path = skills_dir.join(format!("{filename}.md"));
 
-    match std::fs::write(&path, &content) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "trigger": fm.trigger, "path": path.display().to_string() })).into_response(),
+    match std::fs::write(&path, &output) {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "trigger": trigger, "path": path.display().to_string() })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }
 }
 
 pub async fn skill_registry_handler() -> impl IntoResponse {
-    let registry_url = "https://raw.githubusercontent.com/agent007-community/skills/main/registry.json";
+    let registry_url = "https://raw.githubusercontent.com/danieldear/agent007/main/docs/registry.json";
     let client = reqwest::Client::new();
     match client.get(registry_url).send().await {
         Ok(resp) if resp.status().is_success() => {
