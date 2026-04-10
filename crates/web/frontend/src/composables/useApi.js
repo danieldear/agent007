@@ -49,12 +49,14 @@ export function useApi() {
     saveSkill: (data) => fetchJson('/api/skills', { method: 'POST', body: JSON.stringify(data) }),
     getSkill: (trigger) => fetchJson(`/api/skills/detail/${encodeURIComponent(trigger)}`),
     importSkill: (url) => fetchJson('/api/skills/import', { method: 'POST', body: JSON.stringify({ url }) }),
+    deleteSkill: (trigger) => fetchJson(`/api/skills/${encodeURIComponent(trigger.replace(/^\//, ''))}`, { method: 'DELETE' }),
     getRegistry: () => fetchJson('/api/skill-registry'),
 
     // Workflows
     listWorkflows: () => fetchJson('/api/workflows'),
     getWorkflow: (name) => fetchJson(`/api/workflows/${encodeURIComponent(name)}`),
     saveWorkflow: (data) => fetchJson('/api/workflows', { method: 'POST', body: JSON.stringify(data) }),
+    deleteWorkflow: (name) => fetchJson(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
     // Workflow validation
     validateWorkflow: (data) => fetchJson('/api/workflows/validate', { method: 'POST', body: JSON.stringify(data) }),

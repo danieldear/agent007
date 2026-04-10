@@ -24,6 +24,7 @@ const workflowName = ref('')
 const workflowDescription = ref('')
 const wfToast = ref(null)
 const promotingWorkflow = ref(null)
+const deletingWorkflow = ref(null)
 
 let wfToastTimer = null
 function showWfToast(message, type = 'success') {
@@ -49,6 +50,25 @@ async function promoteWorkflow(name) {
     showWfToast(e.message || 'Promote failed', 'error')
   } finally {
     promotingWorkflow.value = null
+  }
+}
+
+async function deleteWorkflow(name) {
+  if (!confirm(`Delete workflow "${name}"?\nThis will remove the file from disk.`)) return
+  deletingWorkflow.value = name
+  try {
+    const { ok, body } = await api.deleteWorkflow(name)
+    if (ok) {
+      showWfToast(`Deleted "${name}"`, 'success')
+      workflows.value = workflows.value.filter(w => w.name !== name)
+      if (selectedWorkflow.value === name) selectedWorkflow.value = null
+    } else {
+      showWfToast(body?.error || 'Delete failed', 'error')
+    }
+  } catch (e) {
+    showWfToast(e.message || 'Delete failed', 'error')
+  } finally {
+    deletingWorkflow.value = null
   }
 }
 
@@ -624,6 +644,13 @@ async function loadTemplate(tplName) {
                 title="Copy to global ~/.agent007/workflows/"
                 @click.stop="promoteWorkflow(w.name)"
               >↑</button>
+              <button
+                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-100 hover:!opacity-100 transition-opacity shrink-0 font-mono text-error/60 hover:text-error"
+                :class="{ 'loading loading-spinner': deletingWorkflow === w.name }"
+                :disabled="deletingWorkflow === w.name"
+                title="Delete this workflow"
+                @click.stop="deleteWorkflow(w.name)"
+              >✕</button>
             </div>
           </div>
           <div v-if="!workflows.length" class="text-[11px] font-mono text-base-content/30">no workflows</div>

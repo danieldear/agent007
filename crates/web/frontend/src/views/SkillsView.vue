@@ -13,6 +13,7 @@ const importStatus = ref(null)
 const searchQuery = ref('')
 const toast = ref(null)
 const promotingTrigger = ref(null)
+const deletingTrigger = ref(null)
 
 let toastTimer = null
 function showToast(message, type = 'success') {
@@ -37,6 +38,25 @@ async function promoteSkill(skill) {
     showToast(e.message || 'Promote failed', 'error')
   } finally {
     promotingTrigger.value = null
+  }
+}
+
+async function deleteSkill(skill) {
+  if (!confirm(`Delete skill "${skill.name}"?\nThis will remove the file from disk.`)) return
+  const trigger = skill.trigger.replace(/^\//, '')
+  deletingTrigger.value = trigger
+  try {
+    const { ok, body } = await api.deleteSkill(skill.trigger)
+    if (ok) {
+      showToast(`Deleted "${skill.name}"`, 'success')
+      skills.value = skills.value.filter(s => s.trigger !== skill.trigger)
+    } else {
+      showToast(body?.error || 'Delete failed', 'error')
+    }
+  } catch (e) {
+    showToast(e.message || 'Delete failed', 'error')
+  } finally {
+    deletingTrigger.value = null
   }
 }
 
@@ -303,6 +323,13 @@ async function importFromUrl() {
                       title="Promote to global ~/.agent007/skills/"
                       @click.stop="promoteSkill(s)"
                     >↑ promote</button>
+                    <button
+                      class="btn btn-xs btn-ghost font-mono text-[10px] px-1.5 h-6 min-h-0 leading-none text-error/60 hover:text-error"
+                      :class="{ 'loading loading-spinner': deletingTrigger === s.trigger.replace(/^\//, '') }"
+                      :disabled="deletingTrigger === s.trigger.replace(/^\//, '')"
+                      title="Delete this skill"
+                      @click.stop="deleteSkill(s)"
+                    >✕ del</button>
                     <span class="text-base-content/30 font-mono text-[10px]">◦ edit</span>
                   </div>
                 </div>

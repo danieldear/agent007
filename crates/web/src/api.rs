@@ -212,6 +212,41 @@ pub async fn skills_handler(
     Json(Value::Array(skills)).into_response()
 }
 
+/// `DELETE /api/skills/:trigger` — delete a skill file by its trigger slug.
+pub async fn skill_delete_handler(
+    Path(trigger): Path<String>,
+) -> impl IntoResponse {
+    // Normalise the trigger — strip leading slash, sanitize to a safe filename
+    let slug = trigger.trim_start_matches('/');
+    let filename = slug
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect::<String>()
+        .to_lowercase();
+
+    // Search project-local dir first, then global
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if let Some(p) = agent007_project_home() {
+            v.push(p.join("skills").join(format!("{filename}.md")));
+        }
+        v.push(agent007_global_home().join("skills").join(format!("{filename}.md")));
+        v
+    };
+
+    for path in &candidates {
+        if path.exists() {
+            return match std::fs::remove_file(path) {
+                Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            };
+        }
+    }
+
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "skill not found" }))).into_response()
+}
+
 /// `POST /api/skills/run` — run a skill by trigger.
 pub async fn skills_run_handler(
     State(state): State<AppState>,
@@ -1809,6 +1844,43 @@ pub async fn workflow_promote_handler(
 }
 
 // ── Bundle export / import ─────────────────────────────────────────────────────
+
+/// `DELETE /api/workflows/:name` — delete a workflow file by name.
+pub async fn workflow_delete_handler(
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let requested = name.trim();
+    let safe_name = sanitize_file_stem(requested, "");
+    if safe_name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "invalid workflow name" }))).into_response();
+    }
+
+    // Search project-local first, then global
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = Vec::new();
+        if let Some(p) = agent007_project_home() {
+            let dir = p.join("workflows");
+            v.push(dir.join(format!("{safe_name}.yaml")));
+            v.push(dir.join(format!("{safe_name}.yml")));
+        }
+        let global = agent007_global_home().join("workflows");
+        v.push(global.join(format!("{safe_name}.yaml")));
+        v.push(global.join(format!("{safe_name}.yml")));
+        v
+    };
+
+    for path in &candidates {
+        if path.exists() {
+            return match std::fs::remove_file(path) {
+                Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+            };
+        }
+    }
+
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "workflow not found" }))).into_response()
+}
 
 #[derive(Deserialize)]
 pub struct BundleExportQuery {
