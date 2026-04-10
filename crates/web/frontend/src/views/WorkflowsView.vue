@@ -25,6 +25,7 @@ const workflowDescription = ref('')
 const wfToast = ref(null)
 const promotingWorkflow = ref(null)
 const deletingWorkflow = ref(null)
+const showNodeGuide = ref(false)
 
 let wfToastTimer = null
 function showWfToast(message, type = 'success') {
@@ -511,29 +512,37 @@ async function loadTemplate(tplName) {
       <div class="px-5 py-3.5 flex items-center justify-between">
         <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Workflow Designer</span>
         <div class="flex gap-2 items-center">
+          <!-- New: directly clears canvas -->
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="newWorkflow">New</button>
+          <!-- Templates: separate dropdown -->
           <div class="dropdown dropdown-end">
-            <label tabindex="0" class="btn btn-sm btn-ghost font-mono text-xs" @click.stop="showTemplateMenu = !showTemplateMenu">new ▾</label>
+            <label tabindex="0" class="btn btn-sm btn-ghost font-mono text-xs" @click.stop="showTemplateMenu = !showTemplateMenu">Templates ▾</label>
             <ul v-if="showTemplateMenu" tabindex="0" class="dropdown-content z-50 menu p-2 shadow bg-base-300 rounded-box w-56">
-              <li><a @click="newWorkflow">Empty Canvas</a></li>
-              <li class="menu-title"><span>Templates</span></li>
               <li v-for="tpl in templates" :key="tpl.name">
                 <a @click="loadTemplate(tpl.name)">
                   <span class="font-mono text-xs">{{ tpl.name }}</span>
                   <span class="text-base-content/40 text-[10px]">{{ tpl.description?.slice(0, 30) }}</span>
                 </a>
               </li>
+              <li v-if="!templates.length"><a class="text-base-content/30 text-xs pointer-events-none">No templates</a></li>
             </ul>
           </div>
+          <!-- Guide button -->
+          <button
+            class="btn btn-sm btn-ghost border border-base-content/15 font-mono text-xs px-2"
+            title="Node type guide"
+            @click="showNodeGuide = true"
+          >? Guide</button>
           <button
             class="btn btn-sm btn-ghost border border-base-content/20 gap-1 font-mono text-xs"
             :class="{ 'loading loading-spinner': validating }"
             :disabled="!nodes.length || validating"
             @click="validateWorkflow"
           >
-            <span v-if="!validating">⊙ validate</span>
-            <span v-else>validating…</span>
+            <span v-if="!validating">⊙ Validate</span>
+            <span v-else>Validating…</span>
           </button>
-          <button class="btn btn-sm btn-primary font-mono text-xs" @click="openSaveDialog" :disabled="!nodes.length">save</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs" @click="openSaveDialog" :disabled="!nodes.length">Save</button>
         </div>
       </div>
 
@@ -678,32 +687,7 @@ async function loadTemplate(tplName) {
           </div>
         </div>
 
-        <!-- Node Legend / Documentation -->
-        <div class="p-3 border-b border-base-300">
-          <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Node Guide</div>
-          <div class="space-y-2 text-[10px] font-mono text-base-content/50">
-            <div>
-              <span class="text-primary font-bold">◉ Agent</span>
-              <p class="mt-0.5">Runs a single persona step. Connects via <code class="text-base-content/70">depends_on</code> edges. Output stored in the named variable.</p>
-            </div>
-            <div>
-              <span class="text-orange-400 font-bold">↺ Evaluator</span>
-              <p class="mt-0.5">Runs a step and checks its JSON verdict. On <span class="text-green-400">pass</span> continues; on <span class="text-orange-400">fail</span> retries up to <code class="text-base-content/70">max_retries</code> times.</p>
-            </div>
-            <div>
-              <span class="text-purple-400 font-bold">⑂ Router</span>
-              <p class="mt-0.5">Classifies input and branches to a different step based on named <code class="text-base-content/70">routes</code>. Each route has a <code class="text-base-content/70">when</code> condition and <code class="text-base-content/70">goto</code> target.</p>
-            </div>
-            <div>
-              <span class="text-amber-400 font-bold">⏸ Approval Gate</span>
-              <p class="mt-0.5">Pauses the workflow and waits for a human to approve or deny before continuing.</p>
-            </div>
-            <div>
-              <span class="text-teal-400 font-bold">⬡ Orchestrator</span>
-              <p class="mt-0.5">Fan-out coordinator: dispatches subtasks to named <code class="text-base-content/70">workers</code> in parallel and aggregates their results.</p>
-            </div>
-          </div>
-        </div>
+        <!-- Node Legend removed — accessible via "? Guide" button in toolbar -->
 
         <div class="p-3">
           <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Agent Palette</div>
@@ -770,134 +754,129 @@ async function loadTemplate(tplName) {
       </button>
     </div>
 
-    <!-- Node Editor Modal -->
+    <!-- Node Editor Modal — matches Agents/Skills popup style -->
     <dialog :open="showNodeEditor" class="modal" :class="{ 'modal-open': showNodeEditor }">
-      <div class="modal-box max-w-2xl bg-base-200 border border-base-300">
-        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 flex items-center gap-2 mb-4">
-          edit node ·
-          <span v-if="editingNodeType === 'evaluator'" class="text-orange-400">evaluator</span>
-          <span v-else-if="editingNodeType === 'router'" class="text-purple-400">router</span>
-          <span v-else-if="editingNodeType === 'approval'" class="text-amber-400">approval gate</span>
-          <span v-else-if="editingNodeType === 'orchestrator'" class="text-teal-400">orchestrator</span>
-          <span v-else class="text-primary">agent</span>
+      <div class="modal-box max-w-2xl bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden">
+        <!-- Header bar -->
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50 flex items-center gap-2">
+            Edit Node ·
+            <span v-if="editingNodeType === 'evaluator'" class="text-orange-400">Evaluator</span>
+            <span v-else-if="editingNodeType === 'router'" class="text-purple-400">Router</span>
+            <span v-else-if="editingNodeType === 'approval'" class="text-amber-400">Approval Gate</span>
+            <span v-else-if="editingNodeType === 'orchestrator'" class="text-teal-400">Orchestrator</span>
+            <span v-else class="text-primary">Agent</span>
+          </span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showNodeEditor = false">✕</button>
         </div>
 
-        <div class="mt-4 space-y-3">
-          <!-- Agent -->
-          <div class="grid grid-cols-2 gap-3">
-            <div class="form-control">
-              <label class="label"><span class="label-text text-xs">Agent / Persona</span></label>
-              <select v-model="nodeEditorForm.agent" class="select select-sm select-bordered">
+        <!-- Body -->
+        <div class="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          <!-- Agent + Output Key row -->
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Agent / Persona</div>
+              <select v-model="nodeEditorForm.agent" class="wf-input w-full">
                 <option v-for="p in personas" :key="p.name" :value="p.name">{{ p.name }}</option>
                 <option :value="nodeEditorForm.agent" v-if="nodeEditorForm.agent && !personas.find(p => p.name === nodeEditorForm.agent)">
                   {{ nodeEditorForm.agent }} (custom)
                 </option>
               </select>
             </div>
-            <div class="form-control">
-              <label class="label"><span class="label-text text-xs">Output Key</span></label>
-              <input v-model="nodeEditorForm.output" class="input input-sm input-bordered font-mono" placeholder="step_output" />
+            <div>
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Output Key</div>
+              <input v-model="nodeEditorForm.output" class="wf-input w-full" placeholder="step_output" />
             </div>
           </div>
 
           <!-- Prompt -->
-          <div class="form-control">
-            <label class="label">
-              <span class="label-text text-xs">Prompt</span>
-              <span class="label-text-alt flex items-center gap-2">
-                <span class="text-xs text-base-content/40">Use <code class="font-mono bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> and output keys from previous steps</span>
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest">Prompt</div>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-base-content/30">Use <code class="bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> and output keys from previous steps</span>
                 <button
                   type="button"
-                  class="btn btn-xs btn-ghost text-primary border border-primary/30 hover:border-primary gap-1"
-                  title="Autogenerate prompt based on selected agent"
+                  class="px-2 py-0.5 text-[10px] font-mono rounded border border-primary/30 text-primary/70 hover:border-primary hover:text-primary transition-colors flex items-center gap-1"
                   @click="autogeneratePrompt"
                 >⚡ Autogenerate</button>
-              </span>
-            </label>
+              </div>
+            </div>
             <textarea
               v-model="nodeEditorForm.prompt"
-              class="textarea textarea-bordered text-sm font-mono h-36 resize-y"
+              class="w-full bg-base-200 border border-base-content/15 rounded text-[13px] font-mono text-base-content/80 p-3 h-36 resize-y focus:outline-none focus:border-primary/50 transition-colors leading-relaxed"
               placeholder="Describe what this agent should do. Use {{task}} for the workflow input."
             />
           </div>
 
           <!-- Evaluator-specific config -->
-          <div v-if="editingNodeType === 'evaluator'" class="space-y-3 border border-orange-500/30 rounded-lg p-3 bg-orange-500/5">
-            <h4 class="text-xs font-bold text-orange-400 uppercase tracking-wider">Evaluator Config</h4>
-            <p class="text-xs text-base-content/40">The prompt must return JSON with a decision field. If the verdict is "pass", the workflow moves forward; otherwise it retries.</p>
+          <div v-if="editingNodeType === 'evaluator'" class="space-y-3 border border-orange-500/30 rounded-lg p-4 bg-orange-500/5">
+            <div class="text-[10px] font-mono font-bold text-orange-400 uppercase tracking-wider">Evaluator Config</div>
+            <p class="text-[11px] font-mono text-base-content/40">The prompt must return JSON with a decision field. On <span class="text-green-400">pass</span> continues; otherwise retries.</p>
             <div class="grid grid-cols-3 gap-3">
-              <div class="form-control">
-                <label class="label"><span class="label-text text-xs">Decision Field</span></label>
-                <input v-model="nodeEditorForm.evaluate.decision_field" class="input input-xs input-bordered font-mono" placeholder="verdict" />
+              <div>
+                <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Decision Field</div>
+                <input v-model="nodeEditorForm.evaluate.decision_field" class="wf-input w-full" placeholder="verdict" />
               </div>
-              <div class="form-control">
-                <label class="label"><span class="label-text text-xs">On Pass → step</span></label>
-                <input v-model="nodeEditorForm.evaluate.on_pass" class="input input-xs input-bordered font-mono" placeholder="deploy" />
+              <div>
+                <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">On Pass → step</div>
+                <input v-model="nodeEditorForm.evaluate.on_pass" class="wf-input w-full" placeholder="deploy" />
               </div>
-              <div class="form-control">
-                <label class="label"><span class="label-text text-xs">On Fail → step</span></label>
-                <input v-model="nodeEditorForm.evaluate.on_fail" class="input input-xs input-bordered font-mono" placeholder="implement" />
+              <div>
+                <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">On Fail → step</div>
+                <input v-model="nodeEditorForm.evaluate.on_fail" class="wf-input w-full" placeholder="implement" />
               </div>
             </div>
-            <div class="form-control w-32">
-              <label class="label"><span class="label-text text-xs">Max Retries</span></label>
-              <input v-model.number="nodeEditorForm.evaluate.max_retries" type="number" min="1" max="10" class="input input-xs input-bordered" />
+            <div class="w-32">
+              <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Max Retries</div>
+              <input v-model.number="nodeEditorForm.evaluate.max_retries" type="number" min="1" max="10" class="wf-input w-full" />
             </div>
           </div>
 
           <!-- Router-specific config -->
-          <div v-if="editingNodeType === 'router'" class="space-y-3 border border-purple-500/30 rounded-lg p-3 bg-purple-500/5">
+          <div v-if="editingNodeType === 'router'" class="space-y-3 border border-purple-500/30 rounded-lg p-4 bg-purple-500/5">
             <div class="flex items-center justify-between">
-              <h4 class="text-xs font-bold text-purple-400 uppercase tracking-wider">Routes</h4>
-              <button class="btn btn-xs btn-ghost text-purple-400" @click="addRouteRow">+ Add Route</button>
+              <div class="text-[10px] font-mono font-bold text-purple-400 uppercase tracking-wider">Routes</div>
+              <button class="px-2 py-0.5 text-[10px] font-mono rounded border border-purple-400/30 text-purple-400/70 hover:border-purple-400 hover:text-purple-400 transition-colors" @click="addRouteRow">+ Add Route</button>
             </div>
-            <p class="text-xs text-base-content/40">The prompt must output a classification string. Each route matches on that string and jumps to the target step.</p>
+            <p class="text-[11px] font-mono text-base-content/40">The prompt must output a classification string. Each route matches on that string and jumps to the target step.</p>
             <div class="space-y-2">
               <div v-for="(route, i) in nodeEditorForm.routes" :key="i" class="flex gap-2 items-center">
-                <input
-                  v-if="!route.default"
-                  v-model="route.when"
-                  class="input input-xs input-bordered font-mono flex-1"
-                  placeholder="frontend"
-                />
-                <span v-else class="text-xs text-base-content/40 italic flex-1">default</span>
+                <input v-if="!route.default" v-model="route.when" class="wf-input flex-1" placeholder="frontend" />
+                <span v-else class="text-[11px] font-mono text-base-content/40 italic flex-1">default</span>
                 <span class="text-base-content/40 text-xs">→</span>
-                <input v-model="route.goto" class="input input-xs input-bordered font-mono flex-1" placeholder="step-id" />
-                <button class="btn btn-xs btn-ghost text-error" @click="removeRouteRow(i)" :disabled="nodeEditorForm.routes.length <= 1">✕</button>
+                <input v-model="route.goto" class="wf-input flex-1" placeholder="step-id" />
+                <button class="btn btn-xs btn-ghost text-error px-1" @click="removeRouteRow(i)" :disabled="nodeEditorForm.routes.length <= 1">✕</button>
               </div>
             </div>
           </div>
 
           <!-- Approval note -->
-          <div v-if="editingNodeType === 'approval'" class="border border-amber-500/30 rounded-lg p-3 bg-amber-500/5">
-            <h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1">Approval Gate</h4>
-            <p class="text-xs text-base-content/40">This node will pause the workflow and wait for a human decision via <code class="font-mono bg-base-300 px-1 rounded">POST /api/runs/&#123;id&#125;/approval</code> before continuing.</p>
+          <div v-if="editingNodeType === 'approval'" class="border border-amber-500/30 rounded-lg p-4 bg-amber-500/5">
+            <div class="text-[10px] font-mono font-bold text-amber-400 uppercase tracking-wider mb-2">Approval Gate</div>
+            <p class="text-[11px] font-mono text-base-content/40">This node pauses the workflow and waits for a human decision via <code class="bg-base-300 px-1 rounded">POST /api/runs/&#123;id&#125;/approval</code> before continuing.</p>
           </div>
 
           <!-- Orchestrator config -->
-          <div v-if="editingNodeType === 'orchestrator'" class="space-y-3 border border-teal-500/30 rounded-lg p-3 bg-teal-500/5">
+          <div v-if="editingNodeType === 'orchestrator'" class="space-y-3 border border-teal-500/30 rounded-lg p-4 bg-teal-500/5">
             <div class="flex items-center justify-between">
-              <h4 class="text-xs font-bold text-teal-400 uppercase tracking-wider">Worker Steps</h4>
-              <button class="btn btn-xs btn-ghost text-teal-400" @click="nodeEditorForm.workers = [...(nodeEditorForm.workers || []), '']">+ Add Worker</button>
+              <div class="text-[10px] font-mono font-bold text-teal-400 uppercase tracking-wider">Worker Steps</div>
+              <button class="px-2 py-0.5 text-[10px] font-mono rounded border border-teal-400/30 text-teal-400/70 hover:border-teal-400 hover:text-teal-400 transition-colors" @click="nodeEditorForm.workers = [...(nodeEditorForm.workers || []), '']">+ Add Worker</button>
             </div>
-            <p class="text-xs text-base-content/40">List the step IDs that this orchestrator will fan-out to in parallel. Results are aggregated and passed to the next step.</p>
+            <p class="text-[11px] font-mono text-base-content/40">Step IDs to fan-out to in parallel. Results are aggregated and passed to the next step.</p>
             <div class="space-y-2">
               <div v-for="(w, i) in (nodeEditorForm.workers || [])" :key="i" class="flex gap-2 items-center">
-                <input
-                  :value="w"
-                  @input="nodeEditorForm.workers[i] = $event.target.value"
-                  class="input input-xs input-bordered font-mono flex-1"
-                  placeholder="worker-step-id"
-                />
-                <button class="btn btn-xs btn-ghost text-error" @click="nodeEditorForm.workers.splice(i, 1)">✕</button>
+                <input :value="w" @input="nodeEditorForm.workers[i] = $event.target.value" class="wf-input flex-1" placeholder="worker-step-id" />
+                <button class="btn btn-xs btn-ghost text-error px-1" @click="nodeEditorForm.workers.splice(i, 1)">✕</button>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="modal-action">
-          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showNodeEditor = false">cancel</button>
-          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveNodeEdit">apply</button>
+        <!-- Footer -->
+        <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-ghost font-mono text-xs px-4" @click="showNodeEditor = false">Cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="saveNodeEdit">Apply</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showNodeEditor = false">close</button></form>
@@ -905,24 +884,79 @@ async function loadTemplate(tplName) {
 
     <!-- Save dialog -->
     <dialog :open="showSaveDialog" class="modal" :class="{ 'modal-open': showSaveDialog }">
-      <div class="modal-box bg-base-200 border border-base-300">
-        <div class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-4">save workflow</div>
-        <div class="space-y-3">
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">name</span></label>
-            <input v-model="workflowName" class="input input-sm input-bordered font-mono" placeholder="my-workflow" />
+      <div class="modal-box bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden max-w-sm">
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">Save Workflow</span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showSaveDialog = false">✕</button>
+        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Name</div>
+            <input v-model="workflowName" class="wf-input w-full" placeholder="my-workflow" />
           </div>
-          <div class="form-control">
-            <label class="label py-1"><span class="label-text text-[11px] font-mono text-base-content/50">description</span></label>
-            <input v-model="workflowDescription" class="input input-sm input-bordered font-mono" />
+          <div>
+            <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Description</div>
+            <input v-model="workflowDescription" class="wf-input w-full" placeholder="What this workflow does" />
           </div>
         </div>
-        <div class="modal-action">
-          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="showSaveDialog = false">cancel</button>
-          <button class="btn btn-sm btn-primary font-mono text-xs" @click="saveWorkflow">save</button>
+        <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-ghost font-mono text-xs px-4" @click="showSaveDialog = false">Cancel</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs px-4" :disabled="!workflowName" @click="saveWorkflow">Save</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showSaveDialog = false">close</button></form>
+    </dialog>
+
+    <!-- Node Guide popup -->
+    <dialog :open="showNodeGuide" class="modal" :class="{ 'modal-open': showNodeGuide }">
+      <div class="modal-box max-w-lg bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">Node Guide</span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showNodeGuide = false">✕</button>
+        </div>
+        <div class="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          <div class="space-y-4 text-[12px] font-mono text-base-content/60">
+            <div class="border border-primary/20 rounded-lg p-3 bg-primary/3">
+              <div class="font-bold text-primary mb-1.5">◉ Agent</div>
+              <p class="leading-relaxed">Runs a single persona step. Connects to other nodes via <code class="bg-base-300 px-1 rounded text-base-content/80">depends_on</code> edges. Output is stored in the named output key variable and available to downstream steps.</p>
+              <p class="mt-2 text-[11px] text-base-content/40">Example: <code class="bg-base-300 px-1 rounded">agent: Researcher, output: research_output</code></p>
+            </div>
+            <div class="border border-orange-500/20 rounded-lg p-3 bg-orange-500/3">
+              <div class="font-bold text-orange-400 mb-1.5">↺ Evaluator</div>
+              <p class="leading-relaxed">Runs a step and checks its JSON verdict. On <span class="text-green-400 font-bold">pass</span>, the workflow continues forward. On <span class="text-orange-400 font-bold">fail</span>, retries the target step up to <code class="bg-base-300 px-1 rounded text-base-content/80">max_retries</code> times.</p>
+              <p class="mt-2 text-[11px] text-base-content/40">Prompt must return: <code class="bg-base-300 px-1 rounded">&#123;"verdict": "pass" | "retry", "reason": "..."&#125;</code></p>
+            </div>
+            <div class="border border-purple-500/20 rounded-lg p-3 bg-purple-500/3">
+              <div class="font-bold text-purple-400 mb-1.5">⑂ Router</div>
+              <p class="leading-relaxed">Classifies input and branches to a different step based on named <code class="bg-base-300 px-1 rounded text-base-content/80">routes</code>. Each route has a <code class="bg-base-300 px-1 rounded text-base-content/80">when</code> condition (matched against prompt output) and a <code class="bg-base-300 px-1 rounded text-base-content/80">goto</code> target step ID.</p>
+              <p class="mt-2 text-[11px] text-base-content/40">Prompt must output exactly one of the route <code class="bg-base-300 px-1 rounded">when</code> labels.</p>
+            </div>
+            <div class="border border-amber-500/20 rounded-lg p-3 bg-amber-500/3">
+              <div class="font-bold text-amber-400 mb-1.5">⏸ Approval Gate</div>
+              <p class="leading-relaxed">Pauses the workflow and waits for a human to approve or deny before continuing. The run enters <code class="bg-base-300 px-1 rounded text-base-content/80">waiting_approval</code> state.</p>
+              <p class="mt-2 text-[11px] text-base-content/40">Resume via: <code class="bg-base-300 px-1 rounded">POST /api/runs/&#123;id&#125;/approval &#123;"decision": "approve"&#125;</code></p>
+            </div>
+            <div class="border border-teal-500/20 rounded-lg p-3 bg-teal-500/3">
+              <div class="font-bold text-teal-400 mb-1.5">⬡ Orchestrator</div>
+              <p class="leading-relaxed">Fan-out coordinator that dispatches the same task to multiple named <code class="bg-base-300 px-1 rounded text-base-content/80">workers</code> in parallel and aggregates their results into a single output.</p>
+              <p class="mt-2 text-[11px] text-base-content/40">Workers are step IDs in the same workflow that run concurrently.</p>
+            </div>
+          </div>
+          <div class="pt-2 border-t border-base-300">
+            <div class="text-[10px] font-mono text-base-content/30 uppercase tracking-wider mb-2">Tips</div>
+            <ul class="text-[11px] font-mono text-base-content/50 space-y-1.5 list-none">
+              <li>◦ Double-click any node to edit its prompt and config</li>
+              <li>◦ Right-click a node or edge for context menu options</li>
+              <li>◦ Delete / Backspace removes selected nodes or edges</li>
+              <li>◦ Use <code class="bg-base-300 px-1 rounded">&#123;&#123;task&#125;&#125;</code> for the workflow input, <code class="bg-base-300 px-1 rounded">&#123;&#123;step_output&#125;&#125;</code> for prior step results</li>
+            </ul>
+          </div>
+        </div>
+        <div class="flex items-center justify-end px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="showNodeGuide = false">Got it</button>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button @click="showNodeGuide = false">close</button></form>
     </dialog>
   </div>
 </template>
@@ -942,5 +976,24 @@ async function loadTemplate(tplName) {
 .vue-flow__edge-text {
   font-size: 10px;
   fill: oklch(0.7 0 0);
+}
+
+.wf-input {
+  background: var(--color-base-300, var(--b3));
+  border: 1px solid color-mix(in oklch, var(--color-base-content, var(--bc)) 20%, transparent);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8125rem;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  color: var(--color-base-content, var(--bc));
+  outline: none;
+  transition: border-color 0.15s;
+}
+.wf-input:focus {
+  border-color: color-mix(in oklch, var(--color-primary, var(--p)) 50%, transparent);
+}
+.wf-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>
