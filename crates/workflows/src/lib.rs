@@ -1,6 +1,7 @@
 pub mod approval;
 pub mod dag;
 pub mod error;
+pub mod eval_gates;
 pub mod hosted;
 pub mod loader;
 pub mod reliability;
@@ -9,6 +10,7 @@ pub mod state;
 pub mod types;
 
 pub use error::WorkflowError;
+pub use eval_gates::{EvalGatePolicy, WorkflowEvalGateDecision, WorkflowEvalGateDecisionKind};
 pub use hosted::{
     HostedWorkflowEngine, HostedWorkflowProgress, HostedWorkflowProgressStatus, HostedWorkflowStep,
 };
@@ -19,4 +21,7 @@ pub use state::{
     WorkflowRunRequest, WorkflowRunState, WorkflowRunStatus, WorkflowSourceRef, WorkflowStepState,
     WorkflowStepStatus,
 };
-pub use types::{BudgetConfig, BudgetUsed, StepDef, WorkflowDef, WorkflowResult};
+pub use types::{
+    BudgetConfig, BudgetUsed, EvalGateConfig, EvalGateMode, EvalGateThresholdConfig, StepDef,
+    WorkflowDef, WorkflowResult,
+};

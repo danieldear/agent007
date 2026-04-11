@@ -287,6 +287,20 @@ pub fn evaluate_budget_decision(
         };
     }
 
+    match budget.on_exceed.as_deref().unwrap_or("stop") {
+        "alert-only" => {
+            return BudgetDecision::Continue {
+                reason_code: "budget-exceeded-alert-only".to_string(),
+            };
+        }
+        "pause" => {
+            return BudgetDecision::Continue {
+                reason_code: "budget-exceeded-pause".to_string(),
+            };
+        }
+        _ => {}
+    }
+
     if policy.budget_governor_enabled && degradation_count < policy.max_degradations_per_run {
         return BudgetDecision::Degrade {
             reason_code: "budget-exceeded-degrade".to_string(),
@@ -451,6 +465,27 @@ mod tests {
             &policy(),
         );
         assert!(matches!(decision, BudgetDecision::Degrade { .. }));
+    }
+
+    #[test]
+    fn budget_decision_respects_alert_only_mode() {
+        let decision = evaluate_budget_decision(
+            &BudgetConfig {
+                max_tokens_per_session: Some(5),
+                max_usd_per_task: None,
+                alert_at_percent: None,
+                on_exceed: Some("alert-only".to_string()),
+            },
+            &BudgetUsed {
+                tokens: 4,
+                estimated_usd: 0.0,
+            },
+            4,
+            0.0,
+            0,
+            &policy(),
+        );
+        assert!(matches!(decision, BudgetDecision::Continue { .. }));
     }
 
     #[test]

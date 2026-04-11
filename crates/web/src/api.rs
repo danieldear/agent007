@@ -21,6 +21,9 @@ use agent007_workflows::{
 
 use crate::server::AppState;
 
+const RESUME_TARGET_ARTIFACT: &str = "resume-target.json";
+const RESUME_SOURCE_ARTIFACT: &str = "resume-source.json";
+
 // ── request/response shapes ───────────────────────────────────────────────────
 
 #[derive(Deserialize, Serialize, TS)]
@@ -63,6 +66,16 @@ pub struct SkillRunResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResumeTargetRef {
+    session: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResumeSourceRef {
+    source_session: String,
 }
 
 #[derive(Serialize, TS)]
@@ -731,6 +744,27 @@ pub async fn run_resume_handler(
                 .into_response();
         }
     };
+    if let Ok(Some(existing)) =
+        store.read_json_artifact_optional::<ResumeTargetRef>(&id, RESUME_TARGET_ARTIFACT)
+    {
+        let status = store
+            .load_run(&existing.session)
+            .map(|run| run.metadata.status)
+            .unwrap_or(agent007_core::run_store::RunStatus::Running);
+        return Json(serde_json::json!({
+            "ok": true,
+            "status": match status {
+                agent007_core::run_store::RunStatus::Running => "running",
+                agent007_core::run_store::RunStatus::AwaitingApproval => "awaiting-approval",
+                agent007_core::run_store::RunStatus::Succeeded => "succeeded",
+                agent007_core::run_store::RunStatus::Failed => "failed",
+            },
+            "session": existing.session,
+            "workflow": request.workflow,
+            "already_resumed": true,
+        }))
+        .into_response();
+    }
     let workflow_ref =
         match store.read_json_artifact_optional::<WorkflowSourceRef>(&id, "workflow-source.json") {
             Ok(Some(source)) => source.workflow_ref,
@@ -766,8 +800,7 @@ pub async fn run_resume_handler(
             .into_response();
     }
 
-    let loader = WorkflowLoader::new(agent007_home().join("workflows"));
-    let def = match loader.load_named(&workflow_ref) {
+    let def = match load_workflow_from_dashboard_dirs(&workflow_ref) {
         Ok(def) => def,
         Err(e) => {
             return (
@@ -797,6 +830,32 @@ pub async fn run_resume_handler(
         &resumed.id,
         "workflow-source.json",
         &WorkflowSourceRef { workflow_ref },
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    if let Err(e) = store.write_json_artifact(
+        &resumed.id,
+        RESUME_SOURCE_ARTIFACT,
+        &ResumeSourceRef {
+            source_session: id.clone(),
+        },
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    if let Err(e) = store.write_json_artifact(
+        &id,
+        RESUME_TARGET_ARTIFACT,
+        &ResumeTargetRef {
+            session: resumed.id.clone(),
+        },
     ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1027,10 +1086,15 @@ pub async fn persona_delete_handler(
 // ── Workflow CRUD ──────────────────────────────────────────────────────────────
 
 /// Returns all directories to search for workflow YAML files, in priority order:
-/// project-local `.agent007/workflows/` first, then global `~/.agent007/workflows/`.
+/// `AGENT007_HOME/workflows/` if explicitly set, otherwise project-local
+/// `.agent007/workflows/` first, then global `~/.agent007/workflows/`.
 /// Mirrors `configured_workflow_dirs()` in the MCP server so the dashboard always
 /// shows the same set of workflows that the MCP tool `agent007_workflow_list` returns.
 fn workflow_dirs() -> Vec<std::path::PathBuf> {
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![std::path::PathBuf::from(home).join("workflows")];
+    }
+
     let mut dirs = Vec::new();
     if let Some(project) = agent007_project_home() {
         dirs.push(project.join("workflows"));
@@ -1040,6 +1104,37 @@ fn workflow_dirs() -> Vec<std::path::PathBuf> {
         dirs.push(global);
     }
     dirs
+}
+
+fn load_workflow_from_dashboard_dirs(
+    name: &str,
+) -> Result<agent007_workflows::WorkflowDef, String> {
+    for workflows_dir in workflow_dirs() {
+        let loader = WorkflowLoader::new(workflows_dir.clone());
+        match loader.load_named(name) {
+            Ok(def) => return Ok(def),
+            Err(agent007_workflows::WorkflowError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Workflow '{}' not found or invalid in {}: {}",
+                    name,
+                    workflows_dir.display(),
+                    error
+                ));
+            }
+        }
+    }
+
+    let searched = workflow_dirs()
+        .into_iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "Workflow '{}' not found in configured workflow dirs: {}",
+        name, searched
+    ))
 }
 
 fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
@@ -3022,6 +3117,21 @@ requires_approval = true
             .and_then(|value| value.as_str())
             .expect("resume response must include a new session id");
         assert_ne!(resumed_id, "session-1");
+        assert_eq!(body.get("already_resumed").and_then(|value| value.as_bool()), None);
+
+        let resumed_again = ts.post("/api/runs/session-1/resume").await;
+        resumed_again.assert_status_ok();
+        let resumed_again_body: serde_json::Value = resumed_again.json();
+        assert_eq!(
+            resumed_again_body.get("session").and_then(|value| value.as_str()),
+            Some(resumed_id)
+        );
+        assert_eq!(
+            resumed_again_body
+                .get("already_resumed")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
 
         let resumed_state: agent007_workflows::WorkflowRunState = serde_json::from_str(
             &std::fs::read_to_string(
@@ -3044,4 +3154,5 @@ requires_approval = true
 
         std::env::remove_var("AGENT007_HOME");
     }
+
 }

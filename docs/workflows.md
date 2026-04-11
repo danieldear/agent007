@@ -39,6 +39,23 @@ agent007_workflow_approve session="<id>"
 # Approve a human-gate step
 ```
 
+### Known issue: approval ownership vs dashboard resume
+
+There is a known bug in the current approval UX:
+
+```text
+workflow starts from Codex / Claude / Cursor / Copilot / Zed
+-> workflow pauses for approval
+-> web dashboard may offer Resume Workflow
+-> dashboard continuation can create a separate resumed run
+```
+
+The intended model is:
+- approvals should surface back to the client that initiated the workflow
+- the dashboard should primarily be a monitoring surface for hosted workflows
+
+For current limitations and guidance, see [Known Issues](./known-issues.md).
+
 ## Available workflows
 
 ### `tdd` — Test-driven development

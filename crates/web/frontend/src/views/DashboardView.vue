@@ -76,12 +76,26 @@ function fmtMs(ms) {
 
 const recentEvents = computed(() => [...(props.events || [])].reverse().slice(0, 50))
 const selectedWorkflowState = computed(() => selectedRun.value?.workflow_state || null)
+const selectedEvalGateDecision = computed(() => selectedWorkflowState.value?.eval_gate_decision || null)
 const pendingApproval = computed(() => selectedWorkflowState.value?.pending_approval || null)
+const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
+const selectedRunAlreadyResumed = computed(() => selectedRunArtifacts.value.includes('resume-target.json'))
+const selectedRunHasApprovalDecision = computed(() => {
+  const decisions = selectedWorkflowState.value?.approval_decisions || {}
+  return Object.keys(decisions).length > 0
+})
 const canResumeSelectedRun = computed(() => {
   const run = selectedRun.value?.run?.metadata
   if (!run || !selectedWorkflowState.value || pendingApproval.value) return false
+  if (selectedRunAlreadyResumed.value) return false
+  if (!selectedRunHasApprovalDecision.value) return false
   return run.status === 'awaiting-approval' || selectedWorkflowState.value.status === 'running'
 })
+
+function fmtReasonCodes(codes) {
+  if (!Array.isArray(codes) || !codes.length) return '—'
+  return codes.join(', ')
+}
 
 async function refreshRuns() {
   runs.value = await api.listRuns() || []
@@ -132,7 +146,9 @@ async function resumeSelectedRun() {
     } else {
       await selectRun(selectedRunId.value)
     }
-    if (response?.status === 'awaiting-approval') {
+    if (response?.already_resumed) {
+      resumeStatus.value = `This workflow was already resumed as ${response.session}.`
+    } else if (response?.status === 'awaiting-approval') {
       resumeStatus.value = `Workflow resumed and paused again for approval on step ${response.step}.`
     } else {
       resumeStatus.value = 'Workflow resumed successfully.'
@@ -431,6 +447,51 @@ async function submitTask() {
                     <div class="text-[11px] text-base-content/50 uppercase">Artifacts</div>
                     <div class="font-mono text-xs mt-1">{{ selectedRun.run.artifacts?.join(', ') || '—' }}</div>
                   </div>
+                </div>
+                <div
+                  v-if="selectedEvalGateDecision"
+                  class="rounded p-4 mb-3 border"
+                  :class="{
+                    'border-success/40 bg-success/10': selectedEvalGateDecision.decision === 'pass',
+                    'border-warning/40 bg-warning/10': selectedEvalGateDecision.decision === 'warn',
+                    'border-error/40 bg-error/10': selectedEvalGateDecision.decision === 'block',
+                  }"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider"
+                        :class="{
+                          'text-success': selectedEvalGateDecision.decision === 'pass',
+                          'text-warning': selectedEvalGateDecision.decision === 'warn',
+                          'text-error': selectedEvalGateDecision.decision === 'block',
+                        }"
+                      >Eval Gate</div>
+                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.workflow }} · {{ selectedEvalGateDecision.mode }}</div>
+                    </div>
+                    <span
+                      class="badge badge-sm"
+                      :class="{
+                        'badge-success': selectedEvalGateDecision.decision === 'pass',
+                        'badge-warning': selectedEvalGateDecision.decision === 'warn',
+                        'badge-error': selectedEvalGateDecision.decision === 'block',
+                      }"
+                    >{{ selectedEvalGateDecision.decision }}</span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-3 mt-3 text-sm">
+                    <div class="bg-base-300/30 rounded p-3">
+                      <div class="text-[11px] text-base-content/50 uppercase">Baseline</div>
+                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_sample_size }}/{{ selectedEvalGateDecision.min_baseline_runs }}</div>
+                    </div>
+                    <div class="bg-base-300/30 rounded p-3">
+                      <div class="text-[11px] text-base-content/50 uppercase">Window</div>
+                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_window }} runs</div>
+                    </div>
+                    <div class="bg-base-300/30 rounded p-3">
+                      <div class="text-[11px] text-base-content/50 uppercase">Reason Codes</div>
+                      <div class="font-mono text-xs mt-1">{{ fmtReasonCodes(selectedEvalGateDecision.reason_codes) }}</div>
+                    </div>
+                  </div>
+                  <div class="font-mono text-xs whitespace-pre-wrap mt-3">{{ selectedEvalGateDecision.message }}</div>
                 </div>
                 <div v-if="pendingApproval" class="rounded border border-warning/40 bg-warning/10 p-4 mb-3">
                   <div class="flex items-center justify-between gap-3">

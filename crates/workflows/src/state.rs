@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::approval::ApprovalDecision;
+use crate::eval_gates::WorkflowEvalGateDecision;
 use crate::reliability::ReliabilityTransition;
 use crate::types::{BudgetUsed, StepDef, WorkflowDef};
 
@@ -88,6 +89,8 @@ pub struct WorkflowRunState {
     pub reliability_transitions: Vec<ReliabilityTransition>,
     #[serde(default)]
     pub reliability_events: Vec<WorkflowReliabilityEvent>,
+    #[serde(default)]
+    pub eval_gate_decision: Option<WorkflowEvalGateDecision>,
     pub steps: Vec<WorkflowStepState>,
     pub pending_approval: Option<PendingApproval>,
     pub approval_decisions: HashMap<String, ApprovalDecision>,
@@ -111,6 +114,7 @@ impl WorkflowRunState {
             degradation_count: 0,
             reliability_transitions: Vec::new(),
             reliability_events: Vec::new(),
+            eval_gate_decision: None,
             steps: def.steps.iter().map(WorkflowStepState::from).collect(),
             pending_approval: None,
             approval_decisions: HashMap::new(),
@@ -286,6 +290,10 @@ impl WorkflowRunState {
         });
     }
 
+    pub fn set_eval_gate_decision(&mut self, decision: WorkflowEvalGateDecision) {
+        self.eval_gate_decision = Some(decision);
+    }
+
     pub fn mark_failed(&mut self, step_id: Option<&str>, error: impl Into<String>) {
         let error = error.into();
         self.status = WorkflowRunStatus::Failed;
@@ -364,6 +372,7 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         }
     }
 

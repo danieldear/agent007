@@ -42,6 +42,27 @@ impl ModelRouter {
         self.aliases.get(key).map(String::as_str).unwrap_or(key)
     }
 
+    fn normalize_request_model(&self, selected_provider: &str, requested_model: &str) -> String {
+        let requested_model = requested_model.trim();
+        if requested_model.is_empty() {
+            return String::new();
+        }
+
+        if let Some(stripped) = requested_model.strip_prefix(&format!("{selected_provider}/")) {
+            if !stripped.is_empty() {
+                return stripped.to_string();
+            }
+        }
+
+        let resolved_requested = self.resolve_provider_name(requested_model);
+        if self.providers.contains_key(resolved_requested) && resolved_requested == selected_provider
+        {
+            return requested_model.to_string();
+        }
+
+        selected_provider.to_string()
+    }
+
     /// Route a task type to the appropriate provider.
     ///
     /// The default provider **must** be registered via `register()` before calling this method.
@@ -90,18 +111,21 @@ impl ModelProvider for ModelRouter {
 
     #[instrument(skip(self, request), fields(model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, ModelError> {
-        let requested = self.resolve_provider_name(&request.model);
-        let key = if self.providers.contains_key(requested) {
+        let requested_model = request.model.clone();
+        let requested = self.resolve_provider_name(&requested_model).to_string();
+        let key = if self.providers.contains_key(&requested) {
             requested
         } else if let Some(rule) = self.rules.get(&request.model) {
-            self.resolve_provider_name(rule)
+            self.resolve_provider_name(rule).to_string()
         } else {
-            self.default.as_str()
+            self.default.clone()
         };
-        let provider = self.providers.get(key).ok_or_else(|| {
+        let provider = self.providers.get(&key).ok_or_else(|| {
             ModelError::NotConfigured(format!("no provider registered for '{key}'"))
         })?;
-        provider.complete(request).await
+        let mut routed_request = request;
+        routed_request.model = self.normalize_request_model(&key, &requested_model);
+        provider.complete(routed_request).await
     }
 }
 
@@ -109,7 +133,32 @@ impl ModelProvider for ModelRouter {
 mod tests {
     use super::*;
     use crate::mock::MockProvider;
+    use crate::types::{CompletionRequest, CompletionResponse, Message, Role};
+    use async_trait::async_trait;
     use std::sync::Arc;
+
+    struct EchoModelProvider {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl ModelProvider for EchoModelProvider {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, ModelError> {
+            Ok(CompletionResponse {
+                content: request.model.clone(),
+                model: request.model,
+                input_tokens: None,
+                output_tokens: None,
+            })
+        }
+    }
 
     fn make_router() -> ModelRouter {
         let mut r = ModelRouter::new("claude");
@@ -163,7 +212,6 @@ mod tests {
 
     #[tokio::test]
     async fn router_resolves_model_aliases() {
-        use crate::types::{CompletionRequest, Message, Role};
         let mut r = make_router();
         r.alias("claude-sonnet-4-6", "claude");
         r.alias("gpt-5.3-codex", "codex");
@@ -183,5 +231,61 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.content, "codex-resp");
+    }
+
+    #[tokio::test]
+    async fn router_rewrites_unavailable_model_to_selected_provider_default() {
+        let mut r = ModelRouter::new("ollama");
+        r.register(
+            "ollama",
+            Arc::new(EchoModelProvider {
+                name: "ollama/qwen2.5-coder:7b",
+            }),
+        );
+        r.alias("claude-sonnet-4-6", "claude");
+
+        let resp = r
+            .complete(CompletionRequest {
+                model: "claude-sonnet-4-6".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: "write code".into(),
+                }],
+                max_tokens: None,
+                temperature: None,
+                system: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.content, "ollama");
+    }
+
+    #[tokio::test]
+    async fn router_strips_provider_prefix_from_explicit_model_hint() {
+        let mut r = ModelRouter::new("ollama");
+        r.register(
+            "ollama",
+            Arc::new(EchoModelProvider {
+                name: "ollama/qwen2.5-coder:7b",
+            }),
+        );
+        r.alias("ollama/qwen2.5-coder:7b", "ollama");
+
+        let resp = r
+            .complete(CompletionRequest {
+                model: "ollama/qwen2.5-coder:7b".into(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: "write code".into(),
+                }],
+                max_tokens: None,
+                temperature: None,
+                system: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.content, "qwen2.5-coder:7b");
     }
 }

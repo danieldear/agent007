@@ -48,6 +48,12 @@ agent007 run "Refactor the auth module to use JWT"
 
 ---
 
+## Known issues
+
+- Workflow approval ownership vs dashboard resume: see [docs/known-issues.md](docs/known-issues.md)
+
+---
+
 ## CLI reference
 
 ### `agent007 init`

@@ -8,6 +8,7 @@ pub struct WorkflowDef {
     pub steps: Vec<StepDef>,
     pub budget: Option<BudgetConfig>,
     pub reliability: Option<ReliabilityConfig>,
+    pub eval_gate: Option<EvalGateConfig>,
 }
 
 impl WorkflowDef {
@@ -170,6 +171,32 @@ pub struct ReliabilityConfidenceConfig {
     pub enabled: Option<bool>,
     pub low_terms: Option<Vec<String>>,
     pub missing_requires_approval: Option<bool>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct EvalGateConfig {
+    pub enabled: Option<bool>,
+    pub release_class: Option<bool>,
+    pub mode: Option<EvalGateMode>,
+    pub baseline_window: Option<usize>,
+    pub min_baseline_runs: Option<usize>,
+    pub thresholds: Option<EvalGateThresholdConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvalGateMode {
+    #[default]
+    FailOpen,
+    FailClosed,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct EvalGateThresholdConfig {
+    pub max_quality_score_drop: Option<f64>,
+    pub max_cost_usd_increase: Option<f64>,
+    pub max_latency_ms_increase: Option<f64>,
+    pub max_retry_increase: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]

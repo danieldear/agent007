@@ -3,10 +3,15 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use agent007_core::RunStore;
 use agent007_core::persona::PersonaProvider;
 
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind};
 use crate::error::WorkflowError;
+use crate::eval_gates::{
+    evaluate_workflow_eval_gate, persist_eval_gate_artifacts, EvalGatePolicy,
+    WorkflowEvalGateDecisionKind,
+};
 use crate::reliability::{
     apply_degradation, evaluate_budget_decision, evaluate_confidence, evaluate_guardrail,
     BudgetDecision, EscalationDecision, GuardrailDecision, ReliabilityPolicy,
@@ -60,11 +65,25 @@ pub struct HostedWorkflowProgress {
 
 pub struct HostedWorkflowEngine {
     persona_provider: Arc<dyn PersonaProvider>,
+    run_store: Option<Arc<RunStore>>,
+    run_id: Option<String>,
 }
 
 impl HostedWorkflowEngine {
     pub fn new(persona_provider: Arc<dyn PersonaProvider>) -> Self {
-        Self { persona_provider }
+        Self {
+            persona_provider,
+            run_store: None,
+            run_id: None,
+        }
+    }
+
+    pub fn for_run(&self, run_store: Arc<RunStore>, run_id: impl Into<String>) -> Self {
+        Self {
+            persona_provider: self.persona_provider.clone(),
+            run_store: Some(run_store),
+            run_id: Some(run_id.into()),
+        }
     }
 
     pub fn status(
@@ -310,6 +329,16 @@ impl HostedWorkflowEngine {
                 )
             })
         {
+            self.apply_eval_gate(def, state)?;
+            if state.status == WorkflowRunStatus::Failed {
+                return Ok(self.failed_progress(
+                    state,
+                    state
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "eval gate blocked workflow".to_string()),
+                ));
+            }
             state.mark_succeeded();
             return Ok(self.succeeded_progress(state, "workflow completed"));
         }
@@ -829,6 +858,40 @@ impl HostedWorkflowEngine {
             message: Some(message.into()),
         }
     }
+
+    fn apply_eval_gate(
+        &self,
+        def: &WorkflowDef,
+        state: &mut WorkflowRunState,
+    ) -> Result<(), WorkflowError> {
+        if state.eval_gate_decision.is_some() {
+            return Ok(());
+        }
+        let Some(store) = &self.run_store else {
+            return Ok(());
+        };
+        let Some(run_id) = &self.run_id else {
+            return Ok(());
+        };
+
+        let policy = EvalGatePolicy::from_workflow(def);
+        let Some(decision) =
+            evaluate_workflow_eval_gate(store, run_id, &def.name, &state.budget_used, &policy)?
+        else {
+            return Ok(());
+        };
+
+        state.set_eval_gate_decision(decision.clone());
+        let _ = persist_eval_gate_artifacts(store, run_id, &decision);
+
+        if matches!(decision.decision, WorkflowEvalGateDecisionKind::Block) {
+            state.mark_failed(
+                None,
+                format!("eval gate blocked workflow '{}': {}", def.name, decision.message),
+            );
+        }
+        Ok(())
+    }
 }
 
 enum SubmissionResolution {
@@ -871,8 +934,13 @@ fn sorted_keys(outputs: &HashMap<String, String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EvaluateConfig, StepDef, WorkflowDef};
+    use crate::types::{
+        BudgetConfig, EvalGateConfig, EvalGateMode, EvalGateThresholdConfig, EvaluateConfig, StepDef,
+        WorkflowDef,
+    };
     use agent007_core::persona::NoOpPersonaProvider;
+    use agent007_core::{RunScorecard, RunStatus, RunStore};
+    use chrono::Utc;
 
     fn hosted_engine() -> HostedWorkflowEngine {
         HostedWorkflowEngine::new(Arc::new(NoOpPersonaProvider))
@@ -899,7 +967,74 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         }
+    }
+
+    fn release_gated_def(mode: EvalGateMode) -> WorkflowDef {
+        let mut def = single_step_def();
+        def.budget = Some(BudgetConfig {
+            max_tokens_per_session: Some(10_000),
+            max_usd_per_task: Some(1.0),
+            alert_at_percent: None,
+            on_exceed: Some("alert-only".to_string()),
+        });
+        def.eval_gate = Some(EvalGateConfig {
+            enabled: Some(true),
+            release_class: Some(true),
+            mode: Some(mode),
+            baseline_window: Some(5),
+            min_baseline_runs: Some(3),
+            thresholds: Some(EvalGateThresholdConfig {
+                max_quality_score_drop: Some(100.0),
+                max_cost_usd_increase: Some(0.0),
+                max_latency_ms_increase: Some(60_000.0),
+                max_retry_increase: Some(10.0),
+            }),
+        });
+        def
+    }
+
+    fn seed_baseline_scorecard(store: &RunStore, workflow: &str, cost_usd: f64) {
+        let run = store
+            .create_run("workflow-test", "baseline", "standalone", Some("mock"))
+            .unwrap();
+        store
+            .write_json_artifact(
+                &run.id,
+                "workflow-request.json",
+                &serde_json::json!({
+                    "workflow": workflow,
+                    "task": "baseline"
+                }),
+            )
+            .unwrap();
+        let finished = store.finish_run(&run.id, true, "baseline ok").unwrap();
+        let scorecard = RunScorecard {
+            schema_version: 1,
+            run_id: run.id.clone(),
+            kind: "workflow-test".to_string(),
+            workflow: Some(workflow.to_string()),
+            mode: finished.mode.clone(),
+            provider: finished.provider.clone(),
+            status: RunStatus::Succeeded,
+            completed: true,
+            success: true,
+            started_at: finished.started_at,
+            finished_at: finished.finished_at,
+            duration_ms: Some(500),
+            tokens: 0,
+            requests: 1,
+            estimated_usd: cost_usd,
+            retry_count: 0,
+            tool_calls: 1,
+            tool_errors: 0,
+            quality_score: 99.0,
+            updated_at: Utc::now(),
+        };
+        store
+            .write_json_artifact(&run.id, "run-scorecard.json", &scorecard)
+            .unwrap();
     }
 
     #[test]
@@ -1016,6 +1151,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         let engine = hosted_engine();
         let mut state = WorkflowRunState::new(&def, "ship feature");
@@ -1063,6 +1199,41 @@ mod tests {
         std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
         std::env::remove_var("AGENT007_RELIABILITY_CONFIDENCE_ESCALATION");
         std::env::remove_var("AGENT007_AUTO_APPROVE");
+    }
+
+    #[test]
+    fn hosted_eval_gate_fail_closed_blocks_regressed_release_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(RunStore::new(dir.path()));
+        for _ in 0..3 {
+            seed_baseline_scorecard(&store, "single", 0.0);
+        }
+        let run = store
+            .create_run("workflow-test", "ship feature", "standalone", Some("mock"))
+            .unwrap();
+        let engine = hosted_engine().for_run(store.clone(), run.id.clone());
+        let def = release_gated_def(EvalGateMode::FailClosed);
+        let mut state = WorkflowRunState::new(&def, "ship feature");
+
+        let ready = engine.dispatch(&def, &mut state).unwrap();
+        assert_eq!(ready.status, HostedWorkflowProgressStatus::Ready);
+
+        let blocked = engine
+            .submit_step_output(&def, &mut state, "research", "current release output")
+            .unwrap();
+        assert_eq!(blocked.status, HostedWorkflowProgressStatus::Failed);
+        assert_eq!(state.status, WorkflowRunStatus::Failed);
+        assert_eq!(
+            state
+                .eval_gate_decision
+                .as_ref()
+                .map(|decision| decision.decision.clone()),
+            Some(crate::eval_gates::WorkflowEvalGateDecisionKind::Block)
+        );
+        assert!(store
+            .read_json_artifact_optional::<serde_json::Value>(&run.id, "eval-gate-decision.json")
+            .unwrap()
+            .is_some());
     }
 
     #[test]

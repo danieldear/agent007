@@ -13,6 +13,10 @@ use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Ro
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind, ApprovalGate};
 use crate::dag::DagValidator;
 use crate::error::WorkflowError;
+use crate::eval_gates::{
+    evaluate_workflow_eval_gate, persist_eval_gate_artifacts, EvalGatePolicy,
+    WorkflowEvalGateDecisionKind,
+};
 use crate::reliability::{
     apply_degradation, evaluate_budget_decision, evaluate_confidence, evaluate_guardrail,
     BudgetDecision, EscalationDecision, GuardrailDecision, ReliabilityPolicy,
@@ -978,6 +982,19 @@ impl WorkflowRunner {
         state.sync_outputs(final_outputs.clone());
         state.sync_budget(final_budget.clone());
         state.sync_degradation_count(degradation_count);
+        if let Err(error) = self.apply_eval_gate(def, &mut state, &final_budget) {
+            return fail_workflow(self, &mut state, Some("eval-gate".to_string()), error);
+        }
+        if state.status == crate::state::WorkflowRunStatus::Failed {
+            self.persist_workflow_artifacts(&state);
+            return Err(WorkflowError::EvalGateBlocked {
+                workflow: def.name.clone(),
+                reason: state
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "eval gate blocked workflow".to_string()),
+            });
+        }
         self.persist_workflow_artifacts(&state);
         self.trace_note(
             "workflow-complete",
@@ -1002,7 +1019,63 @@ impl WorkflowRunner {
         if let (Some(store), Some(run_id)) = (&self.run_store, &self.run_id) {
             let _ = store.write_json_artifact(run_id, "workflow-request.json", &state.request());
             let _ = store.write_json_artifact(run_id, "workflow-state.json", state);
+            if let Some(decision) = &state.eval_gate_decision {
+                let _ = persist_eval_gate_artifacts(store, run_id, decision);
+            }
         }
+    }
+
+    fn apply_eval_gate(
+        &self,
+        def: &WorkflowDef,
+        state: &mut WorkflowRunState,
+        final_budget: &BudgetUsed,
+    ) -> Result<(), WorkflowError> {
+        let Some(store) = &self.run_store else {
+            return Ok(());
+        };
+        let Some(run_id) = &self.run_id else {
+            return Ok(());
+        };
+
+        let policy = EvalGatePolicy::from_workflow(def);
+        let Some(decision) =
+            evaluate_workflow_eval_gate(store, run_id, &def.name, final_budget, &policy)?
+        else {
+            return Ok(());
+        };
+
+        state.set_eval_gate_decision(decision.clone());
+        match decision.decision {
+            WorkflowEvalGateDecisionKind::Pass => {
+                self.trace_note(
+                    "workflow-eval-baseline",
+                    serde_json::json!({
+                        "workflow": def.name,
+                        "baseline_sample_size": decision.baseline_sample_size,
+                        "decision": "pass",
+                    }),
+                );
+            }
+            WorkflowEvalGateDecisionKind::Warn => {
+                self.trace_note(
+                    "workflow-eval-baseline",
+                    serde_json::json!({
+                        "workflow": def.name,
+                        "baseline_sample_size": decision.baseline_sample_size,
+                        "decision": "warn",
+                        "reason_codes": decision.reason_codes,
+                    }),
+                );
+            }
+            WorkflowEvalGateDecisionKind::Block => {
+                state.mark_failed(
+                    None,
+                    format!("eval gate blocked workflow '{}': {}", def.name, decision.message),
+                );
+            }
+        }
+        Ok(())
     }
 
     async fn resolve_approval_decision(
@@ -1202,8 +1275,55 @@ pub(crate) fn render_prompt(
     let mut ctx = tera::Context::new();
     ctx.insert("task", task);
     ctx.insert("args", task);
+    // Workflows and skills commonly reference memory/rag placeholders. When a
+    // caller has not pre-injected them yet, render them as empty strings
+    // instead of aborting the entire step on a missing Tera variable.
+    let mut memory = HashMap::new();
+    memory.insert(
+        "project",
+        outputs
+            .get("memory.project")
+            .map(String::as_str)
+            .unwrap_or(""),
+    );
+    memory.insert(
+        "user",
+        outputs.get("memory.user").map(String::as_str).unwrap_or(""),
+    );
+    memory.insert(
+        "global",
+        outputs
+            .get("memory.global")
+            .map(String::as_str)
+            .unwrap_or(""),
+    );
+    memory.insert(
+        "repo_brain",
+        outputs
+            .get("memory.repo_brain")
+            .map(String::as_str)
+            .unwrap_or(""),
+    );
+    ctx.insert("memory", &memory);
+    ctx.insert(
+        "rag_context",
+        outputs.get("rag_context").map(String::as_str).unwrap_or(""),
+    );
+
     for (k, v) in outputs {
-        ctx.insert(k, v);
+        match k.as_str() {
+            "task"
+            | "args"
+            | "memory"
+            | "memory.project"
+            | "memory.user"
+            | "memory.global"
+            | "memory.repo_brain"
+            | "rag_context" => {}
+            _ => {
+                ctx.insert(k, v);
+            }
+        }
     }
     tera.render("prompt", &ctx)
 }
@@ -1364,10 +1484,14 @@ pub(crate) fn match_route<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BudgetConfig, EvaluateConfig, RouteConfig, StepDef, StepType, WorkflowDef};
+    use crate::types::{
+        BudgetConfig, EvalGateConfig, EvalGateMode, EvalGateThresholdConfig, EvaluateConfig,
+        RouteConfig, StepDef, StepType, WorkflowDef,
+    };
+    use chrono::Utc;
     use agent007_core::dispatcher::LocalDispatcher;
     use agent007_core::persona::NoOpPersonaProvider;
-    use agent007_core::RunStore;
+    use agent007_core::{RunScorecard, RunStatus, RunStore};
     use agent007_models::{
         CompletionRequest, CompletionResponse, MockProvider, ModelError, ModelProvider, ModelRouter,
     };
@@ -1460,7 +1584,44 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         }
+    }
+
+    #[test]
+    fn render_prompt_defaults_missing_memory_and_rag_context() {
+        let outputs = HashMap::new();
+        let rendered = render_prompt(
+            "Task={{task}}\nProject={{memory.project}}\nBrain={{memory.repo_brain}}\nRag={{rag_context}}",
+            "review current diff",
+            &outputs,
+        )
+        .expect("template should render");
+
+        assert_eq!(
+            rendered,
+            "Task=review current diff\nProject=\nBrain=\nRag="
+        );
+    }
+
+    #[test]
+    fn render_prompt_uses_reserved_memory_and_rag_values_when_provided() {
+        let outputs = HashMap::from([
+            ("memory.project".to_string(), "project notes".to_string()),
+            ("memory.repo_brain".to_string(), "repo brain".to_string()),
+            ("rag_context".to_string(), "prior findings".to_string()),
+        ]);
+        let rendered = render_prompt(
+            "Project={{memory.project}}\nBrain={{memory.repo_brain}}\nRag={{rag_context}}",
+            "review current diff",
+            &outputs,
+        )
+        .expect("template should render");
+
+        assert_eq!(
+            rendered,
+            "Project=project notes\nBrain=repo brain\nRag=prior findings"
+        );
     }
 
     fn two_step_def() -> WorkflowDef {
@@ -1501,7 +1662,92 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         }
+    }
+
+    fn release_gated_def(mode: EvalGateMode) -> WorkflowDef {
+        WorkflowDef {
+            name: "release-gated".to_string(),
+            description: None,
+            steps: vec![StepDef {
+                id: "ship".to_string(),
+                agent: "Researcher".to_string(),
+                model: None,
+                inputs: None,
+                depends_on: None,
+                prompt: Some("ship {{task}}".to_string()),
+                skill: None,
+                output: Some("notes".to_string()),
+                requires_approval: None,
+                r#type: StepType::Execute,
+                evaluate: None,
+                routes: None,
+                workflow: None,
+            }],
+            budget: Some(BudgetConfig {
+                max_tokens_per_session: Some(10_000),
+                max_usd_per_task: Some(1.0),
+                alert_at_percent: None,
+                on_exceed: Some("alert-only".to_string()),
+            }),
+            reliability: None,
+            eval_gate: Some(EvalGateConfig {
+                enabled: Some(true),
+                release_class: Some(true),
+                mode: Some(mode),
+                baseline_window: Some(5),
+                min_baseline_runs: Some(3),
+                thresholds: Some(EvalGateThresholdConfig {
+                    max_quality_score_drop: Some(100.0),
+                    max_cost_usd_increase: Some(0.0),
+                    max_latency_ms_increase: Some(60_000.0),
+                    max_retry_increase: Some(10.0),
+                }),
+            }),
+        }
+    }
+
+    fn seed_baseline_scorecard(store: &RunStore, workflow: &str, cost_usd: f64) {
+        let run = store
+            .create_run("workflow-test", "baseline", "standalone", Some("mock"))
+            .unwrap();
+        store
+            .write_json_artifact(
+                &run.id,
+                "workflow-request.json",
+                &serde_json::json!({
+                    "workflow": workflow,
+                    "task": "baseline"
+                }),
+            )
+            .unwrap();
+        let finished = store.finish_run(&run.id, true, "baseline ok").unwrap();
+        let scorecard = RunScorecard {
+            schema_version: 1,
+            run_id: run.id.clone(),
+            kind: "workflow-test".to_string(),
+            workflow: Some(workflow.to_string()),
+            mode: finished.mode.clone(),
+            provider: finished.provider.clone(),
+            status: RunStatus::Succeeded,
+            completed: true,
+            success: true,
+            started_at: finished.started_at,
+            finished_at: finished.finished_at,
+            duration_ms: Some(500),
+            tokens: 0,
+            requests: 1,
+            estimated_usd: cost_usd,
+            retry_count: 0,
+            tool_calls: 1,
+            tool_errors: 0,
+            quality_score: 99.0,
+            updated_at: Utc::now(),
+        };
+        store
+            .write_json_artifact(&run.id, "run-scorecard.json", &scorecard)
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1588,6 +1834,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         let runner = mock_runner("x");
         let err = runner.validate(&def).unwrap_err();
@@ -1618,6 +1865,7 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         runner.run(&def, "my task").await.unwrap();
     }
@@ -1657,6 +1905,7 @@ mod tests {
                 on_exceed: Some("stop".to_string()),
             }),
             reliability: None,
+            eval_gate: None,
         };
         let err = runner.run(&def, "task").await.unwrap_err();
         assert!(matches!(
@@ -1695,6 +1944,7 @@ mod tests {
                 on_exceed: Some("stop".to_string()),
             }),
             reliability: None,
+            eval_gate: None,
         };
         let err = runner.run(&def, "task").await.unwrap_err();
         assert!(matches!(
@@ -1731,6 +1981,7 @@ mod tests {
                 on_exceed: Some("alert-only".to_string()),
             }),
             reliability: None,
+            eval_gate: None,
         };
         // Should succeed despite exceeding the token limit
         let result = runner.run(&def, "task").await.unwrap();
@@ -1798,6 +2049,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         let result = runner.run(&def, "build auth").await.unwrap();
         assert!(result.outputs.contains_key("deployment"));
@@ -1864,6 +2116,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         let err = runner.run(&def, "build auth").await.unwrap_err();
         assert!(matches!(
@@ -1939,6 +2192,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
 
         let result = runner.run(&def, "build auth").await.unwrap();
@@ -1985,6 +2239,7 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
 
         let err = runner.run(&def, "ship auth").await.unwrap_err();
@@ -2080,6 +2335,7 @@ mod tests {
             ],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
         let result = runner.run(&def, "build api").await.unwrap();
         assert!(
@@ -2126,6 +2382,7 @@ mod tests {
                 on_exceed: Some("stop".to_string()),
             }),
             reliability: None,
+            eval_gate: None,
         };
         let result = runner.run(&def, "task").await.unwrap();
         let out = result.outputs.get("out").cloned().unwrap_or_default();
@@ -2171,6 +2428,7 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
 
         let err = runner.run(&def, "ship auth").await.unwrap_err();
@@ -2223,6 +2481,7 @@ mod tests {
             }],
             budget: None,
             reliability: None,
+            eval_gate: None,
         };
 
         let err = runner.run(&def, "ship auth").await.unwrap_err();
@@ -2233,5 +2492,73 @@ mod tests {
 
         std::env::remove_var("AGENT007_RELIABILITY_ENABLED");
         std::env::remove_var("AGENT007_RELIABILITY_GUARDRAILS");
+    }
+
+    #[tokio::test]
+    async fn eval_gate_fail_closed_blocks_regressed_release_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(RunStore::new(dir.path()));
+        for _ in 0..3 {
+            seed_baseline_scorecard(&store, "release-gated", 0.0);
+        }
+        let run = store
+            .create_run("workflow-test", "ship auth", "standalone", Some("mock"))
+            .unwrap();
+        let runner = mock_runner("current release output").for_run(store.clone(), run.id.clone());
+
+        let err = runner
+            .run(&release_gated_def(EvalGateMode::FailClosed), "ship auth")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::error::WorkflowError::EvalGateBlocked { .. }));
+
+        let state: crate::state::WorkflowRunState = store
+            .read_json_artifact(&run.id, "workflow-state.json")
+            .unwrap();
+        assert_eq!(state.status, crate::state::WorkflowRunStatus::Failed);
+        let decision = state.eval_gate_decision.expect("eval gate decision missing");
+        assert_eq!(
+            decision.decision,
+            crate::eval_gates::WorkflowEvalGateDecisionKind::Block
+        );
+        assert!(decision.reason_codes.contains(&"cost-increase".to_string()));
+        assert!(store
+            .read_json_artifact_optional::<serde_json::Value>(&run.id, "eval-gate-decision.json")
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn eval_gate_fail_open_warns_but_allows_release_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(RunStore::new(dir.path()));
+        for _ in 0..3 {
+            seed_baseline_scorecard(&store, "release-gated", 0.0);
+        }
+        let run = store
+            .create_run("workflow-test", "ship auth", "standalone", Some("mock"))
+            .unwrap();
+        let runner = mock_runner("current release output").for_run(store.clone(), run.id.clone());
+
+        let result = runner
+            .run(&release_gated_def(EvalGateMode::FailOpen), "ship auth")
+            .await
+            .unwrap();
+        assert_eq!(result.steps_completed, 1);
+        assert_eq!(
+            result.outputs.get("notes").map(String::as_str),
+            Some("current release output")
+        );
+
+        let state: crate::state::WorkflowRunState = store
+            .read_json_artifact(&run.id, "workflow-state.json")
+            .unwrap();
+        assert_eq!(state.status, crate::state::WorkflowRunStatus::Succeeded);
+        let decision = state.eval_gate_decision.expect("eval gate decision missing");
+        assert_eq!(
+            decision.decision,
+            crate::eval_gates::WorkflowEvalGateDecisionKind::Warn
+        );
+        assert!(decision.reason_codes.contains(&"cost-increase".to_string()));
     }
 }

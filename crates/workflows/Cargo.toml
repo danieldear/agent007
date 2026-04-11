@@ -7,6 +7,7 @@ edition = "2021"
 agent007-core     = { path = "../core" }
 agent007-models   = { path = "../models" }
 agent007-skills   = { path = "../skills" }
+agent007-testing  = { path = "../testing" }
 thiserror         = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
@@ -19,6 +20,7 @@ tera              = { workspace = true }
 tracing           = { workspace = true }
 async-trait       = { workspace = true }
 tempfile          = { workspace = true }
+chrono            = { workspace = true }
 
 [dev-dependencies]
 tokio     = { workspace = true }

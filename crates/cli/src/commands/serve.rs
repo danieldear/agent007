@@ -3325,7 +3325,7 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
         task: task.to_string(),
     };
     let mut state = agent007_workflows::WorkflowRunState::new(&def, task);
-    let engine = hosted_workflow_engine();
+    let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), run.id.clone());
 
     match engine.dispatch(&def, &mut state) {
         Ok(progress) => {
@@ -3361,7 +3361,8 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
 fn workflow_hosted_next(session: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine = hosted_workflow_engine();
+        let engine =
+            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.dispatch(&def, &mut state) {
             Ok(progress) => {
@@ -3389,7 +3390,8 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
 fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine = hosted_workflow_engine();
+        let engine =
+            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.submit_step_output(&def, &mut state, step, output) {
             Ok(progress) => {
@@ -3428,7 +3430,8 @@ fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Resul
 fn workflow_hosted_status(session: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine = hosted_workflow_engine();
+        let engine =
+            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.status(&def, &mut state) {
             Ok(progress) => {
@@ -3461,6 +3464,7 @@ async fn execute_workflow_session(
     resume_state: Option<agent007_workflows::WorkflowRunState>,
     workflow_ref: Option<String>,
 ) -> Result<String> {
+    let def = inject_memory_into_def(def, &task);
     let (stack, run_id) =
         create_traced_stack(config, kind, &format!("{}: {}", def.name, task)).await?;
     let runner = match resume_state {
@@ -5143,6 +5147,42 @@ output = "review_report"
             "final report"
         );
 
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_injects_memory_placeholders_in_standalone_mode() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        std::env::set_var("AGENT007_DRY_RUN", "1");
+        write_workflow_fixture(
+            tmp.path(),
+            "code-review",
+            r#"
+name = "Code Review"
+
+[[steps]]
+id = "quality-review"
+agent = "CodeReviewer"
+prompt = """
+Review {{task}}
+Project notes:
+{{memory.project}}
+Prior findings:
+{{rag_context}}
+"""
+output = "quality_findings"
+"#,
+        );
+
+        let report = workflow_run(&Config::default(), "code-review", "review current diff")
+            .await
+            .unwrap();
+        assert!(report.contains("Workflow: Code Review"));
+        assert!(report.contains("quality_findings"));
+
+        std::env::remove_var("AGENT007_DRY_RUN");
         std::env::remove_var("AGENT007_HOME");
     }
 

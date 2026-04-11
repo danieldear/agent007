@@ -49,4 +49,7 @@ pub enum WorkflowError {
 
     #[error("skill '{0}' not found in .agent007/skills/")]
     SkillNotFound(String),
+
+    #[error("eval gate blocked workflow '{workflow}': {reason}")]
+    EvalGateBlocked { workflow: String, reason: String },
 }

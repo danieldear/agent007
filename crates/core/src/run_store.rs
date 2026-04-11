@@ -68,6 +68,7 @@ pub struct RunScorecard {
     pub schema_version: u32,
     pub run_id: String,
     pub kind: String,
+    pub workflow: Option<String>,
     pub mode: String,
     pub provider: Option<String>,
     pub status: RunStatus,
@@ -84,6 +85,11 @@ pub struct RunScorecard {
     pub tool_errors: u32,
     pub quality_score: f64,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StoredWorkflowRequest {
+    workflow: String,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +398,38 @@ impl RunStore {
         self.read_run_scorecard(run_id)
     }
 
+    pub fn recent_scorecards_for_workflow(
+        &self,
+        workflow: &str,
+        exclude_run_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RunScorecard>, CoreError> {
+        let mut scorecards = Vec::new();
+        let scan_limit = limit.max(25).saturating_mul(10);
+        for run in self.list_runs(scan_limit)? {
+            if exclude_run_id
+                .map(|excluded| excluded == run.id.as_str())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Ok(scorecard) = self.ensure_run_scorecard_artifact(&run.id) else {
+                continue;
+            };
+            if !scorecard.completed {
+                continue;
+            }
+            if scorecard.workflow.as_deref() != Some(workflow) {
+                continue;
+            }
+            scorecards.push(scorecard);
+            if scorecards.len() >= limit {
+                break;
+            }
+        }
+        Ok(scorecards)
+    }
+
     pub fn list_artifacts(&self, run_id: &str) -> Result<Vec<String>, CoreError> {
         let run_dir = self.run_dir(run_id);
         if !run_dir.exists() {
@@ -588,6 +626,7 @@ impl RunStore {
             schema_version: RUN_SCORECARD_SCHEMA_VERSION,
             run_id: metadata.id.clone(),
             kind: metadata.kind.clone(),
+            workflow: self.resolve_workflow_name(&metadata.id),
             mode: metadata.mode.clone(),
             provider: metadata.provider.clone(),
             status: metadata.status.clone(),
@@ -618,6 +657,7 @@ impl RunStore {
         scorecard.schema_version = RUN_SCORECARD_SCHEMA_VERSION;
         scorecard.run_id = metadata.id.clone();
         scorecard.kind = metadata.kind.clone();
+        scorecard.workflow = self.resolve_workflow_name(&metadata.id);
         scorecard.mode = metadata.mode.clone();
         scorecard.provider = metadata.provider.clone();
         scorecard.status = metadata.status.clone();
@@ -631,6 +671,13 @@ impl RunStore {
         scorecard.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
         scorecard.quality_score = compute_quality_score(scorecard);
         scorecard.updated_at = Utc::now();
+    }
+
+    fn resolve_workflow_name(&self, run_id: &str) -> Option<String> {
+        self.read_json_artifact_optional::<StoredWorkflowRequest>(run_id, "workflow-request.json")
+            .ok()
+            .flatten()
+            .map(|request| request.workflow)
     }
 
     fn scan_run_activity(&self, run_id: &str) -> Result<(u32, u32, u32), CoreError> {

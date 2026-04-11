@@ -233,6 +233,7 @@ mod tests {
             steps,
             budget: None,
             reliability: None,
+            eval_gate: None,
         }
     }
 
