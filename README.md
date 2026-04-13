@@ -20,6 +20,10 @@ agent007 runs as an MCP server that gives your AI editor a 44-tool orchestration
 
 ## Install
 
+Current release strategy: GitHub Releases plus a curl-based installer. Homebrew,
+`apt`, and other package-manager distribution are intentionally deferred while
+the project is still moving quickly. See [docs/release-strategy.md](docs/release-strategy.md).
+
 ```bash
 cargo install --path crates/cli
 ```
