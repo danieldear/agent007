@@ -23,6 +23,12 @@ use crate::server::AppState;
 
 const RESUME_TARGET_ARTIFACT: &str = "resume-target.json";
 const RESUME_SOURCE_ARTIFACT: &str = "resume-source.json";
+const EXTERNAL_WORKFLOW_CONTROL_ERROR: &str =
+    "This workflow is controlled by the client that started it. Review, approve, and continue it there; the web dashboard is read-only for external workflow runs.";
+
+fn dashboard_controls_workflow(kind: &str) -> bool {
+    kind.starts_with("workflow-web-")
+}
 
 // ── request/response shapes ───────────────────────────────────────────────────
 
@@ -130,8 +136,30 @@ pub async fn run_handler(
         agent007_core::types::PromptStore::default(),
     ));
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
-    let run = match store.create_run("web-run", &payload.task, "standalone", None) {
+    let provider = state.model_router.route("task");
+    let run = match store.create_run(
+        "web-run",
+        &payload.task,
+        "standalone",
+        Some(provider.name()),
+    ) {
         Ok(run) => run,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let trace = match store
+        .spawn_dispatcher_trace(
+            run.id.clone(),
+            state.dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
+        )
+        .await
+    {
+        Ok(handle) => Some(handle),
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -150,18 +178,25 @@ pub async fn run_handler(
 
     let core_task = agent007_core::Task::new(&payload.task);
     match orchestrator.run(core_task).await {
-        Ok(_) => {
-            let _ = store.finish_run(&run.id, true, "Task submitted to agent007 orchestrator.");
+        Ok(result) => {
+            if let Some(trace) = trace {
+                let _ = trace.await;
+            }
+            let _ = store.write_text_artifact(&run.id, "output.txt", &result.output);
+            let _ = store.finish_run(&run.id, true, &result.output);
             (
                 StatusCode::OK,
                 Json(RunResponse {
-                    message: "Task submitted to agent007 orchestrator.".to_string(),
+                    message: result.output,
                     session: Some(run.id),
                 }),
             )
                 .into_response()
         }
         Err(e) => {
+            if let Some(trace) = trace {
+                trace.abort();
+            }
             let _ = store.finish_run(&run.id, false, e.to_string());
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -599,6 +634,10 @@ pub async fn run_detail_handler(
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
     match store.load_run(&id) {
         Ok(run) => {
+            let output_text = store
+                .read_text_artifact_optional(&id, "output.txt")
+                .ok()
+                .flatten();
             let workflow_request = store
                 .read_json_artifact_optional::<serde_json::Value>(&id, "workflow-request.json")
                 .ok()
@@ -613,6 +652,7 @@ pub async fn run_detail_handler(
                 .flatten();
             Json(serde_json::json!({
                 "run": run,
+                "output_text": output_text,
                 "workflow_request": workflow_request,
                 "workflow_source": workflow_source,
                 "workflow_state": workflow_state,
@@ -633,6 +673,23 @@ pub async fn run_approval_handler(
     Json(payload): Json<ApprovalRequest>,
 ) -> impl IntoResponse {
     let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let detail = match store.load_run(&id) {
+        Ok(detail) => detail,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    if !dashboard_controls_workflow(&detail.metadata.kind) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": EXTERNAL_WORKFLOW_CONTROL_ERROR })),
+        )
+            .into_response();
+    }
     let mut state: agent007_workflows::WorkflowRunState =
         match store.read_json_artifact(&id, "workflow-state.json") {
             Ok(state) => state,
@@ -723,6 +780,13 @@ pub async fn run_resume_handler(
                 .into_response();
         }
     };
+    if !dashboard_controls_workflow(&detail.metadata.kind) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": EXTERNAL_WORKFLOW_CONTROL_ERROR })),
+        )
+            .into_response();
+    }
 
     if detail.metadata.status == agent007_core::run_store::RunStatus::Succeeded {
         return (
@@ -2652,7 +2716,9 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
 
 #[cfg(test)]
 mod tests {
+    use super::EXTERNAL_WORKFLOW_CONTROL_ERROR;
     use crate::server::WebServer;
+    use axum::http::StatusCode;
     use axum_test::TestServer;
 
     fn test_server() -> TestServer {
@@ -2665,7 +2731,6 @@ mod tests {
     #[tokio::test]
     async fn api_run_accepts_task() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("AGENT007_DRY_RUN", "1");
         let ts = test_server();
         let response = ts
             .post("/api/run")
@@ -2673,9 +2738,38 @@ mod tests {
             .await;
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
-        assert!(body.get("message").is_some());
-        assert!(body.get("session").is_some());
-        std::env::remove_var("AGENT007_DRY_RUN");
+        assert_eq!(
+            body.get("message").and_then(|value| value.as_str()),
+            Some("test")
+        );
+        let session = body
+            .get("session")
+            .and_then(|value| value.as_str())
+            .expect("session should be present");
+
+        let detail = ts.get(&format!("/api/runs/{session}")).await;
+        detail.assert_status_ok();
+        let detail_body: serde_json::Value = detail.json();
+        assert_eq!(
+            detail_body
+                .get("output_text")
+                .and_then(|value| value.as_str()),
+            Some("test")
+        );
+        assert_eq!(
+            detail_body["run"]["metadata"]["output_preview"].as_str(),
+            Some("test")
+        );
+        assert_eq!(
+            detail_body["run"]["metadata"]["provider"].as_str(),
+            Some("mock")
+        );
+        assert_eq!(
+            detail_body["run"]["entries"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(2)
+        );
     }
 
     #[tokio::test]
@@ -2942,7 +3036,7 @@ mod tests {
             sessions.join("meta.json"),
             serde_json::json!({
                 "id": "session-1",
-                "kind": "workflow",
+                "kind": "workflow-web-resume",
                 "task": "approve auth",
                 "mode": "standalone",
                 "provider": "mock",
@@ -3009,6 +3103,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_run_approval_rejects_external_workflow_run() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "workflow",
+                "task": "approve auth",
+                "mode": "standalone",
+                "provider": "mock",
+                "started_at": chrono::Utc::now(),
+                "finished_at": null,
+                "status": "awaiting-approval",
+                "output_preview": "approval required"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-state.json"),
+            serde_json::json!({
+                "workflow": "approval-flow",
+                "task": "approve auth",
+                "status": "waiting-approval",
+                "steps_total": 1,
+                "steps_completed": 0,
+                "completed_steps": [],
+                "skipped_steps": [],
+                "retry_counts": {},
+                "outputs": {},
+                "budget_used": { "tokens": 0, "estimated_usd": 0.0 },
+                "steps": [{
+                    "id": "approve-me",
+                    "agent": "Architect",
+                    "status": "awaiting-approval",
+                    "attempts": 1,
+                    "output_key": "plan",
+                    "output_preview": "draft plan",
+                    "selected_route": null,
+                    "selected_target": null,
+                    "error": null
+                }],
+                "pending_approval": {
+                    "step_id": "approve-me",
+                    "agent": "Architect",
+                    "output_key": "plan",
+                    "content": "draft plan",
+                    "content_preview": "draft plan"
+                },
+                "approval_decisions": {},
+                "last_error": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts
+            .post("/api/runs/session-1/approval")
+            .json(&serde_json::json!({ "decision": "approve" }))
+            .await;
+        response.assert_status(StatusCode::CONFLICT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(
+            body.get("error").and_then(|value| value.as_str()),
+            Some(EXTERNAL_WORKFLOW_CONTROL_ERROR)
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
     async fn api_run_resume_creates_new_session() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -3036,7 +3206,7 @@ requires_approval = true
             sessions.join("meta.json"),
             serde_json::json!({
                 "id": "session-1",
-                "kind": "workflow",
+                "kind": "workflow-web-resume",
                 "task": "approve auth",
                 "mode": "standalone",
                 "provider": "mock",
@@ -3117,13 +3287,19 @@ requires_approval = true
             .and_then(|value| value.as_str())
             .expect("resume response must include a new session id");
         assert_ne!(resumed_id, "session-1");
-        assert_eq!(body.get("already_resumed").and_then(|value| value.as_bool()), None);
+        assert_eq!(
+            body.get("already_resumed")
+                .and_then(|value| value.as_bool()),
+            None
+        );
 
         let resumed_again = ts.post("/api/runs/session-1/resume").await;
         resumed_again.assert_status_ok();
         let resumed_again_body: serde_json::Value = resumed_again.json();
         assert_eq!(
-            resumed_again_body.get("session").and_then(|value| value.as_str()),
+            resumed_again_body
+                .get("session")
+                .and_then(|value| value.as_str()),
             Some(resumed_id)
         );
         assert_eq!(
@@ -3155,4 +3331,101 @@ requires_approval = true
         std::env::remove_var("AGENT007_HOME");
     }
 
+    #[tokio::test]
+    async fn api_run_resume_rejects_external_workflow_run() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        let workflows = home.path().join("workflows");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        std::fs::write(
+            workflows.join("approval-flow.toml"),
+            r#"
+name = "approval-flow"
+
+[[steps]]
+id = "approve-me"
+agent = "Architect"
+prompt = "Plan {{task}}"
+output = "plan"
+requires_approval = true
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "workflow",
+                "task": "approve auth",
+                "mode": "standalone",
+                "provider": "mock",
+                "started_at": chrono::Utc::now(),
+                "finished_at": chrono::Utc::now(),
+                "status": "awaiting-approval",
+                "output_preview": "approval required"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-request.json"),
+            serde_json::json!({
+                "workflow": "approval-flow",
+                "task": "approve auth"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-state.json"),
+            serde_json::json!({
+                "workflow": "approval-flow",
+                "task": "approve auth",
+                "status": "running",
+                "steps_total": 1,
+                "steps_completed": 1,
+                "completed_steps": ["approve-me"],
+                "skipped_steps": [],
+                "retry_counts": {},
+                "outputs": { "plan": "approved plan v2" },
+                "budget_used": { "tokens": 0, "estimated_usd": 0.0 },
+                "steps": [{
+                    "id": "approve-me",
+                    "agent": "Architect",
+                    "status": "approved",
+                    "attempts": 1,
+                    "output_key": "plan",
+                    "output_preview": "approved plan v2",
+                    "selected_route": null,
+                    "selected_target": null,
+                    "error": null
+                }],
+                "pending_approval": null,
+                "approval_decisions": {
+                    "approve-me": {
+                        "decision": "approve",
+                        "content": null
+                    }
+                },
+                "last_error": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts.post("/api/runs/session-1/resume").await;
+        response.assert_status(StatusCode::CONFLICT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(
+            body.get("error").and_then(|value| value.as_str()),
+            Some(EXTERNAL_WORKFLOW_CONTROL_ERROR)
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
 }

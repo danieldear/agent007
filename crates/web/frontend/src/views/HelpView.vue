@@ -13,7 +13,7 @@ const cliCommands = [
   { cmd: 'agent007 init', desc: 'Initialize .agent007/ in the current project. Seeds built-in skills, workflows, personas, and installs slash commands for Claude, Codex, and Zed.' },
   { cmd: 'agent007 init --global', desc: 'Initialize or refresh ~/.agent007/ (global). Use this to update built-in skills without touching project directories.' },
   { cmd: 'agent007 serve', desc: 'Start the MCP server (default port 8007). Exposes all agent007 tools to your editor via the Model Context Protocol.' },
-  { cmd: 'agent007 serve --standalone', desc: 'Start in standalone mode with a built-in LLM provider. Enables running skills directly from the web dashboard without the host editor.' },
+  { cmd: 'agent007 serve --standalone', desc: 'Start in standalone mode with a built-in LLM provider. Enables running tasks and skills directly from the web dashboard, with full output persisted in the selected run.' },
   { cmd: 'agent007 run "<task>"', desc: 'Run a task through the full agent stack with the TUI progress view. Useful for one-off tasks from the terminal.' },
   { cmd: 'agent007 memory list', desc: 'List all keys stored in project memory.' },
   { cmd: 'agent007 memory set <key> <value>', desc: 'Store a value in project memory. Available as {{memory.<key>}} in skill/workflow prompts.' },
@@ -398,7 +398,7 @@ const promptVars = [
                   <span class="badge badge-xs ml-auto" style="border-color: rgb(245 158 11 / 0.3); color: rgb(245 158 11)">requires_approval</span>
                 </div>
                 <p class="text-xs text-base-content/60 leading-relaxed mb-3">
-                  Pauses the workflow and waits for a human decision before continuing. The run stays in <code class="bg-base-300 px-1 rounded">pending_approval</code> state until approved or denied via the API.
+                  Pauses the workflow and waits for a human decision before continuing. Externally initiated runs surface that approval back to the initiating client; dashboard-owned standalone runs can still be resumed in the dashboard. The run stays in <code class="bg-base-300 px-1 rounded">pending_approval</code> state until approved or denied via the API.
                 </p>
                 <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 w-full overflow-x-auto">
                   <div>- <span class="text-amber-400">id</span>: gate</div>

@@ -220,11 +220,12 @@ pub async fn execute_workflow_run(
     workflow_ref: Option<String>,
 ) -> Result<()> {
     let stack = build_stack(&config).await?;
+    let provider = stack.model_router.route("task").name().to_string();
     let run = stack.run_store.create_run(
         run_kind,
         &format!("{}: {}", def.name, task),
         "standalone",
-        None,
+        Some(provider.as_str()),
     )?;
     if let Some(workflow_ref) = workflow_ref {
         stack.run_store.write_json_artifact(

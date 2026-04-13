@@ -14,7 +14,7 @@ agent007 runs as an MCP server that gives your AI editor a 44-tool orchestration
 - **Hooks** — auto-execute shell commands on lifecycle events
 - **Learning** — passive feedback recording → future PromptOptimizer
 - **Git agent** — AI-powered branch, commit, PR, and impact analysis
-- **Web dashboard** — live run/task/memory inspector at `http://localhost:8007`
+- **Web dashboard** — live run/task/memory inspector at `http://localhost:8007`, with standalone task execution when a local provider such as Ollama is configured
 
 ---
 
@@ -50,7 +50,9 @@ agent007 run "Refactor the auth module to use JWT"
 
 ## Known issues
 
-- Workflow approval ownership vs dashboard resume: see [docs/known-issues.md](docs/known-issues.md)
+- Workflow approval ownership and dashboard resume behavior:
+  externally initiated runs are read-only in the dashboard, while dashboard-owned
+  standalone runs can still be resumed there. See [docs/known-issues.md](docs/known-issues.md)
 
 ---
 
@@ -78,7 +80,9 @@ By default (no flags), all supported IDEs are configured.
 
 ### `agent007 serve`
 
-Starts the MCP server on stdio (for IDE connection) and the web dashboard.
+Starts the MCP server on stdio (for IDE connection) and the web dashboard. When
+standalone execution is available, dashboard task runs persist the full model
+output in the selected run detail view.
 
 ```
 agent007 serve [OPTIONS]

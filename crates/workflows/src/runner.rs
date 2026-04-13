@@ -17,6 +17,7 @@ use crate::eval_gates::{
     evaluate_workflow_eval_gate, persist_eval_gate_artifacts, EvalGatePolicy,
     WorkflowEvalGateDecisionKind,
 };
+use crate::recommendations::recommend_route_for_step;
 use crate::reliability::{
     apply_degradation, evaluate_budget_decision, evaluate_confidence, evaluate_guardrail,
     BudgetDecision, EscalationDecision, GuardrailDecision, ReliabilityPolicy,
@@ -876,6 +877,35 @@ impl WorkflowRunner {
                             if let Some(routes) = &step.routes {
                                 match match_route(&final_content, routes) {
                                     Some(goto) => {
+                                        if let Some(store) = &self.run_store {
+                                            let candidates = routes
+                                                .iter()
+                                                .map(|route| route.goto.clone())
+                                                .collect::<Vec<_>>();
+                                            let recommendation = recommend_route_for_step(
+                                                store,
+                                                &def.name,
+                                                &step.id,
+                                                goto,
+                                                &candidates,
+                                                self.run_id.as_deref(),
+                                            );
+                                            state.record_routing_recommendation(
+                                                recommendation.clone(),
+                                            );
+                                            self.trace_note(
+                                                "workflow-routing-recommendation",
+                                                serde_json::json!({
+                                                    "workflow": def.name,
+                                                    "step_id": step.id,
+                                                    "current_route": recommendation.current_route,
+                                                    "recommended_route": recommendation.recommended_route,
+                                                    "confidence": recommendation.confidence,
+                                                    "fallback_used": recommendation.fallback_used,
+                                                    "sample_size": recommendation.sample_size,
+                                                }),
+                                            );
+                                        }
                                         self.trace_note(
                                             "workflow-route-selected",
                                             serde_json::json!({
@@ -1019,6 +1049,13 @@ impl WorkflowRunner {
         if let (Some(store), Some(run_id)) = (&self.run_store, &self.run_id) {
             let _ = store.write_json_artifact(run_id, "workflow-request.json", &state.request());
             let _ = store.write_json_artifact(run_id, "workflow-state.json", state);
+            if !state.routing_recommendations.is_empty() {
+                let _ = store.write_json_artifact(
+                    run_id,
+                    "routing-recommendations.json",
+                    &state.routing_recommendations,
+                );
+            }
             if let Some(decision) = &state.eval_gate_decision {
                 let _ = persist_eval_gate_artifacts(store, run_id, decision);
             }
@@ -1071,7 +1108,10 @@ impl WorkflowRunner {
             WorkflowEvalGateDecisionKind::Block => {
                 state.mark_failed(
                     None,
-                    format!("eval gate blocked workflow '{}': {}", def.name, decision.message),
+                    format!(
+                        "eval gate blocked workflow '{}': {}",
+                        def.name, decision.message
+                    ),
                 );
             }
         }
@@ -1312,14 +1352,8 @@ pub(crate) fn render_prompt(
 
     for (k, v) in outputs {
         match k.as_str() {
-            "task"
-            | "args"
-            | "memory"
-            | "memory.project"
-            | "memory.user"
-            | "memory.global"
-            | "memory.repo_brain"
-            | "rag_context" => {}
+            "task" | "args" | "memory" | "memory.project" | "memory.user" | "memory.global"
+            | "memory.repo_brain" | "rag_context" => {}
             _ => {
                 ctx.insert(k, v);
             }
@@ -1488,7 +1522,6 @@ mod tests {
         BudgetConfig, EvalGateConfig, EvalGateMode, EvalGateThresholdConfig, EvaluateConfig,
         RouteConfig, StepDef, StepType, WorkflowDef,
     };
-    use chrono::Utc;
     use agent007_core::dispatcher::LocalDispatcher;
     use agent007_core::persona::NoOpPersonaProvider;
     use agent007_core::{RunScorecard, RunStatus, RunStore};
@@ -1496,6 +1529,7 @@ mod tests {
         CompletionRequest, CompletionResponse, MockProvider, ModelError, ModelProvider, ModelRouter,
     };
     use async_trait::async_trait;
+    use chrono::Utc;
     use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
@@ -1598,10 +1632,7 @@ mod tests {
         )
         .expect("template should render");
 
-        assert_eq!(
-            rendered,
-            "Task=review current diff\nProject=\nBrain=\nRag="
-        );
+        assert_eq!(rendered, "Task=review current diff\nProject=\nBrain=\nRag=");
     }
 
     #[test]
@@ -2349,6 +2380,186 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn router_records_shadow_routing_recommendation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(RunStore::new(dir.path()));
+        for (route, quality) in [
+            ("ui-work", 45.0),
+            ("ui-work", 48.0),
+            ("api-work", 95.0),
+            ("api-work", 91.0),
+        ] {
+            let run = store
+                .create_run("workflow-test", "baseline", "standalone", Some("mock"))
+                .unwrap();
+            store
+                .write_json_artifact(
+                    &run.id,
+                    "workflow-request.json",
+                    &serde_json::json!({
+                        "workflow": "router-test",
+                        "task": "baseline"
+                    }),
+                )
+                .unwrap();
+            store
+                .write_json_artifact(
+                    &run.id,
+                    "workflow-state.json",
+                    &serde_json::json!({
+                        "workflow": "router-test",
+                        "task": "baseline",
+                        "status": "succeeded",
+                        "steps_total": 1,
+                        "steps_completed": 1,
+                        "completed_steps": ["classify"],
+                        "skipped_steps": [],
+                        "retry_counts": {},
+                        "recovery_retry_counts": {},
+                        "outputs": {},
+                        "budget_used": { "tokens": 0, "estimated_usd": 0.0 },
+                        "degradation_count": 0,
+                        "reliability_transitions": [],
+                        "reliability_events": [],
+                        "eval_gate_decision": null,
+                        "routing_recommendations": [],
+                        "steps": [{
+                            "id": "classify",
+                            "agent": "Router",
+                            "status": "completed",
+                            "attempts": 1,
+                            "output_key": "classification",
+                            "output_preview": route,
+                            "selected_route": route,
+                            "selected_target": null,
+                            "error": null
+                        }],
+                        "pending_approval": null,
+                        "approval_decisions": {},
+                        "last_error": null
+                    }),
+                )
+                .unwrap();
+            let finished = store.finish_run(&run.id, true, "baseline ok").unwrap();
+            let retry_count = ((100.0_f64 - quality).max(0.0) / 4.0).round() as u32;
+            let scorecard = RunScorecard {
+                schema_version: 1,
+                run_id: run.id.clone(),
+                kind: "workflow-test".to_string(),
+                workflow: Some("router-test".to_string()),
+                mode: finished.mode.clone(),
+                provider: finished.provider.clone(),
+                status: RunStatus::Succeeded,
+                completed: true,
+                success: true,
+                started_at: finished.started_at,
+                finished_at: finished.finished_at,
+                duration_ms: Some(100),
+                tokens: 0,
+                requests: 1,
+                estimated_usd: 0.0,
+                retry_count,
+                tool_calls: 0,
+                tool_errors: 0,
+                quality_score: quality,
+                updated_at: Utc::now(),
+            };
+            store
+                .write_json_artifact(&run.id, "run-scorecard.json", &scorecard)
+                .unwrap();
+        }
+
+        let run = store
+            .create_run("workflow-test", "build api", "standalone", Some("mock"))
+            .unwrap();
+        let runner = mock_runner("ui-work").for_run(store.clone(), run.id.clone());
+        let def = WorkflowDef {
+            name: "router-test".to_string(),
+            description: None,
+            steps: vec![
+                StepDef {
+                    id: "classify".to_string(),
+                    agent: "Router".to_string(),
+                    model: None,
+                    inputs: None,
+                    depends_on: None,
+                    prompt: Some("classify {{task}}".to_string()),
+                    skill: None,
+                    output: Some("classification".to_string()),
+                    requires_approval: None,
+                    r#type: StepType::Router,
+                    evaluate: None,
+                    routes: Some(vec![
+                        RouteConfig {
+                            when: Some("ui-work".to_string()),
+                            goto: "ui-work".to_string(),
+                            default: false,
+                        },
+                        RouteConfig {
+                            when: Some("api-work".to_string()),
+                            goto: "api-work".to_string(),
+                            default: false,
+                        },
+                    ]),
+                    workflow: None,
+                },
+                StepDef {
+                    id: "ui-work".to_string(),
+                    agent: "UI".to_string(),
+                    model: None,
+                    inputs: None,
+                    depends_on: Some(vec!["classify".to_string()]),
+                    prompt: Some("ui {{task}}".to_string()),
+                    skill: None,
+                    output: Some("ui_result".to_string()),
+                    requires_approval: None,
+                    r#type: StepType::Execute,
+                    evaluate: None,
+                    routes: None,
+                    workflow: None,
+                },
+                StepDef {
+                    id: "api-work".to_string(),
+                    agent: "API".to_string(),
+                    model: None,
+                    inputs: None,
+                    depends_on: Some(vec!["classify".to_string()]),
+                    prompt: Some("api {{task}}".to_string()),
+                    skill: None,
+                    output: Some("api_result".to_string()),
+                    requires_approval: None,
+                    r#type: StepType::Execute,
+                    evaluate: None,
+                    routes: None,
+                    workflow: None,
+                },
+            ],
+            budget: None,
+            reliability: None,
+            eval_gate: None,
+        };
+
+        let _ = runner.run(&def, "build api").await.unwrap();
+
+        let state: crate::state::WorkflowRunState = store
+            .read_json_artifact(&run.id, "workflow-state.json")
+            .unwrap();
+        assert_eq!(state.routing_recommendations.len(), 1);
+        let recommendation = &state.routing_recommendations[0];
+        assert_eq!(recommendation.step_id, "classify");
+        assert_eq!(recommendation.current_route, "ui-work");
+        assert_eq!(recommendation.recommended_route, "api-work");
+        assert!(!recommendation.fallback_used);
+        assert!(store
+            .read_json_artifact_optional::<serde_json::Value>(
+                &run.id,
+                "routing-recommendations.json"
+            )
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn budget_governor_degrades_output_before_abort() {
         let _guard = crate::reliability::test_env_lock();
         std::env::set_var("AGENT007_RELIABILITY_ENABLED", "1");
@@ -2510,13 +2721,18 @@ mod tests {
             .run(&release_gated_def(EvalGateMode::FailClosed), "ship auth")
             .await
             .unwrap_err();
-        assert!(matches!(err, crate::error::WorkflowError::EvalGateBlocked { .. }));
+        assert!(matches!(
+            err,
+            crate::error::WorkflowError::EvalGateBlocked { .. }
+        ));
 
         let state: crate::state::WorkflowRunState = store
             .read_json_artifact(&run.id, "workflow-state.json")
             .unwrap();
         assert_eq!(state.status, crate::state::WorkflowRunStatus::Failed);
-        let decision = state.eval_gate_decision.expect("eval gate decision missing");
+        let decision = state
+            .eval_gate_decision
+            .expect("eval gate decision missing");
         assert_eq!(
             decision.decision,
             crate::eval_gates::WorkflowEvalGateDecisionKind::Block
@@ -2554,7 +2770,9 @@ mod tests {
             .read_json_artifact(&run.id, "workflow-state.json")
             .unwrap();
         assert_eq!(state.status, crate::state::WorkflowRunStatus::Succeeded);
-        let decision = state.eval_gate_decision.expect("eval gate decision missing");
+        let decision = state
+            .eval_gate_decision
+            .expect("eval gate decision missing");
         assert_eq!(
             decision.decision,
             crate::eval_gates::WorkflowEvalGateDecisionKind::Warn

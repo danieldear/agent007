@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
+use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
@@ -124,6 +125,14 @@ pub fn selected_runtime_provider(config: &Config) -> Option<String> {
 pub fn selected_runtime_model(config: &Config) -> Option<String> {
     selected_runtime_provider(config)
         .map(|provider| config.models.default_model_for_provider(&provider))
+}
+
+fn should_use_non_interactive_mode() -> bool {
+    is_dry_run()
+        || std::env::var("AGENT007_NO_TUI")
+            .map(|value| value != "0")
+            .unwrap_or(false)
+        || !std::io::stderr().is_terminal()
 }
 
 pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
@@ -593,7 +602,7 @@ fn generate_auto_insights(
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
     let mode = runtime_mode_label(&config);
-    let provider = selected_runtime_provider(&config).unwrap_or_else(|| "hosted-mcp".to_string());
+    let provider = stack.model_router.route("task").name().to_string();
     let run = stack
         .run_store
         .create_run("task", &task, mode, Some(provider.as_str()))?;
@@ -613,9 +622,9 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
         }
     });
 
-    // When AGENT007_DRY_RUN=1, skip the TUI and execute synchronously so the
-    // run trace is fully persisted before returning.
-    if std::env::var("AGENT007_DRY_RUN").is_ok() {
+    // In dry-run or non-interactive shells, skip the TUI and execute synchronously
+    // so scripted usage still works and the run trace is persisted before returning.
+    if should_use_non_interactive_mode() {
         let agent_task = Task::new(&task);
         match stack.orchestrator.run(agent_task).await {
             Ok(result) => {
@@ -627,6 +636,9 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
                 }
                 generate_auto_insights(&stack.memory_store, &stack.run_store, &run.id, &task, true);
                 tracing::info!("task completed: {}", result.output);
+                if !is_dry_run() {
+                    println!("{}", result.output);
+                }
             }
             Err(error) => {
                 let _ = stack
@@ -808,5 +820,13 @@ mod tests {
 
         std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
+    }
+
+    #[test]
+    fn no_tui_env_forces_non_interactive_mode() {
+        let _guard = env_lock();
+        std::env::set_var("AGENT007_NO_TUI", "1");
+        assert!(should_use_non_interactive_mode());
+        std::env::remove_var("AGENT007_NO_TUI");
     }
 }

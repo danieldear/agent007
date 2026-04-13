@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -43,6 +43,8 @@ pub enum P2pError {
     InvalidEnvelopeSignature { envelope_id: String },
     #[error("payload hash mismatch for {envelope_id}")]
     PayloadHashMismatch { envelope_id: String },
+    #[error("replayed collaboration envelope detected: {envelope_id}")]
+    ReplayDetected { envelope_id: String },
     #[error("envelope validation failed: {0}")]
     EnvelopeValidation(#[from] EnvelopeError),
 }
@@ -55,6 +57,7 @@ pub struct P2pService {
     collaboration: CollaborationConfig,
     known_peers: HashMap<String, PeerIdentity>,
     collaboration_envelopes: Vec<CollaborationEnvelope>,
+    seen_envelope_ids: HashSet<String>,
 }
 
 impl P2pService {
@@ -70,6 +73,7 @@ impl P2pService {
             collaboration,
             known_peers: HashMap::new(),
             collaboration_envelopes: Vec::new(),
+            seen_envelope_ids: HashSet::new(),
         }
     }
 
@@ -147,7 +151,13 @@ impl P2pService {
                 envelope_id: envelope.envelope_id.clone(),
             });
         }
+        if self.seen_envelope_ids.contains(&envelope.envelope_id) {
+            return Err(P2pError::ReplayDetected {
+                envelope_id: envelope.envelope_id.clone(),
+            });
+        }
 
+        self.seen_envelope_ids.insert(envelope.envelope_id.clone());
         self.collaboration_envelopes.push(envelope);
         Ok(())
     }
@@ -237,6 +247,54 @@ mod tests {
             .ingest_envelope(envelope, "payload-tampered")
             .unwrap_err();
         assert!(matches!(err, P2pError::PayloadHashMismatch { .. }));
+    }
+
+    #[test]
+    fn ingest_rejects_unknown_peer_as_allowlist_violation() {
+        let local = PeerIdentity::new("peer-local").with_signing_secret("local-secret");
+        let remote = PeerIdentity::new("peer-remote").with_signing_secret("shared-secret");
+        let payload = "payload-ok";
+        let envelope = CollaborationEnvelope::new_signed(
+            &remote,
+            ArtifactKind::MemoryNote,
+            "memory:1",
+            "update",
+            payload,
+            vec!["memory".to_string()],
+        )
+        .expect("envelope");
+
+        let mut service = P2pService::new(local);
+        service.start();
+        service.set_collaboration_enabled(true);
+
+        let err = service.ingest_envelope(envelope, payload).unwrap_err();
+        assert!(matches!(err, P2pError::UnknownPeer { .. }));
+    }
+
+    #[test]
+    fn ingest_rejects_replayed_envelope() {
+        let local = PeerIdentity::new("peer-local").with_signing_secret("local-secret");
+        let remote = PeerIdentity::new("peer-remote").with_signing_secret("shared-secret");
+        let payload = "payload-ok";
+        let envelope = CollaborationEnvelope::new_signed(
+            &remote,
+            ArtifactKind::MemoryNote,
+            "memory:1",
+            "update",
+            payload,
+            vec!["memory".to_string()],
+        )
+        .expect("envelope");
+
+        let mut service = P2pService::new(local);
+        service.start();
+        service.set_collaboration_enabled(true);
+        service.register_peer(remote);
+
+        service.ingest_envelope(envelope.clone(), payload).unwrap();
+        let err = service.ingest_envelope(envelope, payload).unwrap_err();
+        assert!(matches!(err, P2pError::ReplayDetected { .. }));
     }
 
     #[test]

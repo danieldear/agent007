@@ -242,16 +242,19 @@ fn candidate_scorecard(
     workflow: &str,
     budget_used: &BudgetUsed,
 ) -> Result<RunScorecard, WorkflowError> {
-    let detail = store.load_run(run_id).map_err(|error| WorkflowError::StepFailed {
-        id: "eval-gate".to_string(),
-        reason: format!("failed to load current run metadata: {error}"),
-    })?;
-    let existing = store
-        .read_run_scorecard_optional(run_id)
+    let detail = store
+        .load_run(run_id)
         .map_err(|error| WorkflowError::StepFailed {
             id: "eval-gate".to_string(),
-            reason: format!("failed to read current run scorecard: {error}"),
+            reason: format!("failed to load current run metadata: {error}"),
         })?;
+    let existing =
+        store
+            .read_run_scorecard_optional(run_id)
+            .map_err(|error| WorkflowError::StepFailed {
+                id: "eval-gate".to_string(),
+                reason: format!("failed to read current run scorecard: {error}"),
+            })?;
 
     let finished_at = Some(Utc::now());
     let duration_ms = finished_at.map(|finished| {

@@ -2468,12 +2468,6 @@ fn create_delegate_run(kind: &str, task: &str) -> Result<String> {
     Ok(run.id)
 }
 
-/// Returns the model label for hosted-mcp runs.
-/// Checks AGENT007_HOST_MODEL env var first; falls back to "hosted-mcp".
-fn hosted_model_label() -> String {
-    std::env::var("AGENT007_HOST_MODEL").unwrap_or_else(|_| "hosted-mcp".to_string())
-}
-
 /// Appends an exact ModelRequest event with the actual token count reported by the host LLM,
 /// updates RunMetadata.provider with the real model name so the dashboard shows it correctly,
 /// then finishes the run so it transitions from "Running" → "completed" in the dashboard.
@@ -2565,19 +2559,6 @@ fn record_actual_tokens(
             tokens, run_id, model
         ))
     }
-}
-
-fn record_estimated_tokens(run_id: &str, prompt_chars: usize, model: &str) {
-    let token_estimate = (prompt_chars / 4).max(1);
-    let _ = load_run_store().append_event(
-        run_id,
-        &AgentEvent::ModelRequest {
-            provider: model.to_string(),
-            prompt_ref: PromptRef::new(),
-            token_estimate,
-        },
-    );
-    write_statusline();
 }
 
 /// Cost per token in USD (blended input+output at Claude Sonnet rates).
@@ -3298,6 +3279,9 @@ fn hosted_workflow_response(
                 "6. Call agent007_workflow_next to get the next batch of ready steps.",
                 "7. Repeat until progress.status is 'succeeded' or 'failed'.",
                 "8. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
+                "   - Before approving, surface progress.pending_approval.content_preview (and the full content when available) back to the user in this same conversation.",
+                "   - Collect the user's approve/edit/deny decision inline in this client, not in the web dashboard.",
+                "   - After recording the decision, call agent007_workflow_next to continue.",
             ],
             "model_hint_values": {
                 "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
@@ -3361,8 +3345,7 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
 fn workflow_hosted_next(session: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine =
-            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
+        let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.dispatch(&def, &mut state) {
             Ok(progress) => {
@@ -3390,8 +3373,7 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
 fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine =
-            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
+        let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.submit_step_output(&def, &mut state, step, output) {
             Ok(progress) => {
@@ -3430,8 +3412,7 @@ fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Resul
 fn workflow_hosted_status(session: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
-        let engine =
-            hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
+        let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.status(&def, &mut state) {
             Ok(progress) => {
@@ -3499,16 +3480,45 @@ async fn execute_workflow_session(
         }
         Err(error) => match &error {
             agent007_workflows::WorkflowError::ApprovalRequired { id } => {
+                let pending = stack
+                    .run_store
+                    .read_json_artifact_optional::<agent007_workflows::WorkflowRunState>(
+                        &run_id,
+                        "workflow-state.json",
+                    )
+                    .ok()
+                    .flatten()
+                    .and_then(|state| state.pending_approval);
+                let pending_content = pending
+                    .as_ref()
+                    .map(|approval| approval.content.as_str())
+                    .unwrap_or("");
                 let summary = format!(
-                    "Workflow '{}' is waiting for approval on step '{}'. Run ID: {}",
-                    def.name, id, run_id,
+                    "Workflow '{}' is waiting for approval on step '{}'. Run ID: {}\n\n\
+                     Pending approval content:\n{}\n\n\
+                     Continue in this same client:\n\
+                     1. Review the content above with the user.\n\
+                     2. Call agent007_workflow_approve with session={}, step={}, decision=approve|edit|deny.\n\
+                     3. If decision=edit, pass the revised content.\n\
+                     4. Call agent007_workflow_resume with session={}.\n",
+                    def.name,
+                    id,
+                    run_id,
+                    if pending_content.is_empty() {
+                        "(content unavailable)"
+                    } else {
+                        pending_content
+                    },
+                    run_id,
+                    id,
+                    run_id,
                 );
                 let _ = stack.run_store.finish_run_with_status(
                     &run_id,
                     agent007_core::run_store::RunStatus::AwaitingApproval,
                     &summary,
                 );
-                Err(anyhow::anyhow!(summary))
+                Ok(summary)
             }
             _ => {
                 let _ = stack
@@ -5181,6 +5191,39 @@ output = "quality_findings"
             .unwrap();
         assert!(report.contains("Workflow: Code Review"));
         assert!(report.contains("quality_findings"));
+
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_returns_inline_approval_instructions() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        std::env::set_var("AGENT007_DRY_RUN", "1");
+        write_workflow_fixture(
+            tmp.path(),
+            "approval-flow",
+            r#"
+name = "Approval Flow"
+
+[[steps]]
+id = "plan"
+agent = "Architect"
+prompt = "Plan {{task}}"
+output = "plan"
+requires_approval = true
+"#,
+        );
+
+        let report = workflow_run(&Config::default(), "approval-flow", "ship feature")
+            .await
+            .unwrap();
+        assert!(report.contains("waiting for approval on step 'plan'"));
+        assert!(report.contains("Pending approval content:"));
+        assert!(report.contains("agent007_workflow_approve"));
+        assert!(report.contains("agent007_workflow_resume"));
 
         std::env::remove_var("AGENT007_DRY_RUN");
         std::env::remove_var("AGENT007_HOME");

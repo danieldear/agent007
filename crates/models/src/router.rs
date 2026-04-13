@@ -55,7 +55,8 @@ impl ModelRouter {
         }
 
         let resolved_requested = self.resolve_provider_name(requested_model);
-        if self.providers.contains_key(resolved_requested) && resolved_requested == selected_provider
+        if self.providers.contains_key(resolved_requested)
+            && resolved_requested == selected_provider
         {
             return requested_model.to_string();
         }

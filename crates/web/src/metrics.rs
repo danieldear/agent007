@@ -428,13 +428,13 @@ fn load_or_synthesize_scorecard(
             .num_milliseconds()
             .max(0)
     });
-        let mut scorecard = RunScorecard {
-            schema_version: 1,
-            run_id: run.id.clone(),
-            kind: run.kind.clone(),
-            workflow: None,
-            mode: run.mode.clone(),
-            provider: run.provider.clone(),
+    let mut scorecard = RunScorecard {
+        schema_version: 1,
+        run_id: run.id.clone(),
+        kind: run.kind.clone(),
+        workflow: None,
+        mode: run.mode.clone(),
+        provider: run.provider.clone(),
         status: run.status.clone(),
         completed,
         success,

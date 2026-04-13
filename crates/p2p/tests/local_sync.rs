@@ -83,3 +83,36 @@ fn local_peer_sync_rejects_tampered_payload_after_policy() {
 
     assert!(matches!(err, P2pError::PayloadHashMismatch { .. }));
 }
+
+#[test]
+fn local_peer_sync_rejects_replayed_envelope() {
+    let author = PeerIdentity::new("peer-author").with_signing_secret("mesh-shared-secret");
+    let receiver_identity =
+        PeerIdentity::new("peer-receiver").with_signing_secret("receiver-secret");
+
+    let mut receiver = P2pService::new(receiver_identity);
+    receiver.start();
+    receiver.set_collaboration_enabled(true);
+    receiver.register_peer(author.clone());
+
+    let payload = "status=ok";
+    let envelope = CollaborationEnvelope::new_signed(
+        &author,
+        ArtifactKind::RunLearning,
+        "run:replay",
+        "run learning",
+        payload,
+        vec!["learning".to_string()],
+    )
+    .expect("envelope");
+
+    receiver
+        .ingest_envelope(envelope.clone(), payload.as_bytes())
+        .expect("first ingest should succeed");
+
+    let err = receiver
+        .ingest_envelope(envelope, payload.as_bytes())
+        .expect_err("duplicate envelope must be rejected");
+
+    assert!(matches!(err, P2pError::ReplayDetected { .. }));
+}

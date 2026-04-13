@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::approval::ApprovalDecision;
 use crate::eval_gates::WorkflowEvalGateDecision;
+use crate::recommendations::RoutingRecommendation;
 use crate::reliability::ReliabilityTransition;
 use crate::types::{BudgetUsed, StepDef, WorkflowDef};
 
@@ -91,6 +92,8 @@ pub struct WorkflowRunState {
     pub reliability_events: Vec<WorkflowReliabilityEvent>,
     #[serde(default)]
     pub eval_gate_decision: Option<WorkflowEvalGateDecision>,
+    #[serde(default)]
+    pub routing_recommendations: Vec<RoutingRecommendation>,
     pub steps: Vec<WorkflowStepState>,
     pub pending_approval: Option<PendingApproval>,
     pub approval_decisions: HashMap<String, ApprovalDecision>,
@@ -115,6 +118,7 @@ impl WorkflowRunState {
             reliability_transitions: Vec::new(),
             reliability_events: Vec::new(),
             eval_gate_decision: None,
+            routing_recommendations: Vec::new(),
             steps: def.steps.iter().map(WorkflowStepState::from).collect(),
             pending_approval: None,
             approval_decisions: HashMap::new(),
@@ -256,13 +260,17 @@ impl WorkflowRunState {
             .copied()
             .unwrap_or(0);
         let attempts = evaluator_attempts.max(recovery_attempts);
-        let step_state = self.step_mut(step_id);
-        step_state.status = WorkflowStepStatus::Pending;
-        step_state.attempts = attempts;
-        step_state.output_preview = None;
-        step_state.selected_route = None;
-        step_state.selected_target = None;
-        step_state.error = None;
+        {
+            let step_state = self.step_mut(step_id);
+            step_state.status = WorkflowStepStatus::Pending;
+            step_state.attempts = attempts;
+            step_state.output_preview = None;
+            step_state.selected_route = None;
+            step_state.selected_target = None;
+            step_state.error = None;
+        }
+        self.routing_recommendations
+            .retain(|recommendation| recommendation.step_id != step_id);
     }
 
     pub fn sync_outputs(&mut self, outputs: HashMap<String, String>) {
@@ -292,6 +300,14 @@ impl WorkflowRunState {
 
     pub fn set_eval_gate_decision(&mut self, decision: WorkflowEvalGateDecision) {
         self.eval_gate_decision = Some(decision);
+    }
+
+    pub fn record_routing_recommendation(&mut self, recommendation: RoutingRecommendation) {
+        self.routing_recommendations
+            .retain(|existing| existing.step_id != recommendation.step_id);
+        self.routing_recommendations.push(recommendation);
+        self.routing_recommendations
+            .sort_by(|left, right| left.step_id.cmp(&right.step_id));
     }
 
     pub fn mark_failed(&mut self, step_id: Option<&str>, error: impl Into<String>) {

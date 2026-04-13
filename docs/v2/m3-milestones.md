@@ -29,6 +29,11 @@
 2. Load/perf/soak validation.
 3. Rollout controls and runbook publication.
 
+Current backend progress:
+1. Tamper rejection is covered in `crates/p2p/tests/local_sync.rs`.
+2. Replay rejection is enforced in `agent007-p2p::P2pService::ingest_envelope(...)`.
+3. Allowlist coverage currently maps to registered peers only; unknown peers are rejected during ingest.
+
 ## Parallel Workstreams
 1. Workstream A: collaboration infra (`p2p`, `sharing`, `core`).
 2. Workstream B: eval + recommendation (`learning`, `workflows`).

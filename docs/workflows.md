@@ -39,20 +39,23 @@ agent007_workflow_approve session="<id>"
 # Approve a human-gate step
 ```
 
-### Known issue: approval ownership vs dashboard resume
+### Approval ownership and dashboard resume
 
-There is a known bug in the current approval UX:
+Approval-gated workflows now follow a split ownership model:
 
 ```text
 workflow starts from Codex / Claude / Cursor / Copilot / Zed
--> workflow pauses for approval
--> web dashboard may offer Resume Workflow
--> dashboard continuation can create a separate resumed run
+-> approval surfaces back to the initiating client
+-> the web dashboard stays read-only for that externally initiated run
+
+workflow starts from the dashboard's standalone runtime
+-> dashboard can show Resume Workflow
+-> the standalone run can resume there
 ```
 
-The intended model is:
-- approvals should surface back to the client that initiated the workflow
-- the dashboard should primarily be a monitoring surface for hosted workflows
+The practical rule is:
+- externally initiated workflows are approved and continued in the initiating client
+- dashboard-owned standalone workflows can still be resumed from the dashboard
 
 For current limitations and guidance, see [Known Issues](./known-issues.md).
 
@@ -151,6 +154,74 @@ secrets-scan ──────┤─► synthesize
 threat-model ──────┤
 dependency-scan ───┘
 ```
+
+---
+
+## Eval Gates
+
+Eval Gates score each workflow run against a rolling baseline and make a `pass / warn / block` decision before the run proceeds past the gate.
+
+```yaml
+# Configured per-workflow in the workflow YAML
+eval_gate:
+  min_baseline_runs: 5      # runs needed before gating starts
+  baseline_window: 20       # rolling window size
+  warn_threshold: 0.15      # score drop that triggers warn
+  block_threshold: 0.30     # score drop that triggers block
+```
+
+**Decision fields surfaced in the dashboard:**
+
+| Field | Description |
+|---|---|
+| `decision` | `pass` / `warn` / `block` |
+| `baseline_sample_size` | Runs in the current baseline window |
+| `min_baseline_runs` | Minimum runs needed to activate the gate |
+| `baseline_window` | Rolling window size used for scoring |
+| `reason_codes` | Machine-readable codes explaining the decision |
+| `message` | Human-readable explanation |
+
+When the gate fires `block`, the workflow step is halted and the run is marked failed. `warn` continues but records the degradation. `pass` continues silently.
+
+Eval gate results are visible in the **Persisted Runs** accordion in the web dashboard.
+
+---
+
+## Reliability Engine
+
+The reliability engine wraps each workflow step with four additive controls. All behaviors are feature-gated and backward-compatible — existing workflows are unaffected unless you opt in.
+
+### Budget Governor
+Tracks token spend per step and per run. On budget breach:
+- If a degradation path is available → truncates step output and continues (`degrade` transition)
+- If no degradation path → aborts the step (`budget-exceeded` transition)
+
+### Guardrails Hook
+Runs a pre-step check before executing any step marked as risky. If the guardrails check blocks the operation, the step is transitioned to `guardrail-blocked` and the run fails that step cleanly.
+
+### Confidence-Driven Escalation
+After a step produces output, the reliability engine scores confidence. Low-confidence output routes into the existing approval flow — a human can review and approve or reject before the workflow continues.
+
+### Recovery Transitions
+Each failure mode is recorded as an explicit transition (not a silent crash). Steps retry up to a bounded limit before marking as `failed`. Transition records are queryable on the run detail.
+
+---
+
+## Adaptive Shadow
+
+Adaptive Shadow records advisory routing recommendations alongside each run without changing execution. The router observes which model/route was used for each step and computes what it *would* recommend based on historical performance — logged as a shadow recommendation.
+
+**This is read-only.** The actual route used does not change. Shadow recommendations accumulate over time and can be used to tune `ModelRouter` config.
+
+Shadow data is surfaced in the **Persisted Runs** accordion under **Routing Recommendations**:
+
+```
+step_id          current_route       recommended_route    confidence
+researcher       claude-sonnet-4-6   claude-opus-4-6      74%  (12 samples)
+implementer      claude-sonnet-4-6   claude-sonnet-4-6    91%  (12 samples)
+```
+
+`fallback: true` means the router had insufficient data and used the default.
 
 ---
 

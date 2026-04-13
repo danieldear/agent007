@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useApi } from '../composables/useApi.js'
 
 const props = defineProps({ events: Array, connected: Boolean, stats: Object })
@@ -15,6 +15,102 @@ const selectedRunId = ref(null)
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
+const taskPanelOpen = ref(false)
+const expandedRunId = ref(null)
+const chatMessages = ref([])
+const chatPending = ref(false)
+const slashCommands = ref([])
+const slashCommandsLoaded = ref(false)
+const showSlashMenu = ref(false)
+const slashFilter = ref('')
+const slashMenuIndex = ref(0)
+const slashMenuRef = ref(null)
+
+watch(slashMenuIndex, (idx) => {
+  nextTick(() => {
+    const items = slashMenuRef.value?.querySelectorAll('button[data-slash-item]')
+    items?.[idx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+})
+
+const filteredSlashCommands = computed(() => {
+  const q = slashFilter.value.toLowerCase()
+  const all = slashCommands.value
+  if (!q) return all.slice(0, 12)
+  return all.filter(c =>
+    c.trigger.toLowerCase().includes(q) ||
+    c.name?.toLowerCase().includes(q) ||
+    c.description?.toLowerCase().includes(q)
+  ).slice(0, 12)
+})
+
+async function loadSlashCommands() {
+  if (slashCommandsLoaded.value) return
+  slashCommandsLoaded.value = true
+  try {
+    const [skills, workflows] = await Promise.all([
+      api.listSkills(),
+      api.listWorkflows(),
+    ])
+    const cmds = []
+    for (const s of skills || []) {
+      if (s.trigger) cmds.push({
+        type: 'skill',
+        trigger: s.trigger,
+        name: s.name || s.trigger,
+        description: s.description || '',
+        source: s.source || 'global',
+      })
+    }
+    for (const w of workflows || []) {
+      cmds.push({
+        type: 'workflow',
+        trigger: `/workflow:${w.name}`,
+        name: w.name,
+        description: 'Run workflow',
+        source: w.source || 'global',
+      })
+    }
+    slashCommands.value = cmds.sort((a, b) => a.trigger.localeCompare(b.trigger))
+  } catch { slashCommandsLoaded.value = false }
+}
+
+function onChatInput(e) {
+  const val = taskInput.value
+  const ta = e.target
+  ta.style.height = 'auto'
+  ta.style.height = Math.min(ta.scrollHeight, 144) + 'px'
+  const m = val.match(/^\/(\S*)$/)
+  if (m !== null) {
+    slashFilter.value = m[1]
+    showSlashMenu.value = true
+    slashMenuIndex.value = 0
+    loadSlashCommands()
+  } else {
+    showSlashMenu.value = false
+  }
+}
+
+function onChatKeydown(e) {
+  if (showSlashMenu.value) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashMenuIndex.value = Math.min(slashMenuIndex.value + 1, filteredSlashCommands.value.length - 1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); slashMenuIndex.value = Math.max(slashMenuIndex.value - 1, 0) }
+    else if (e.key === 'Escape') { e.preventDefault(); showSlashMenu.value = false }
+    else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      const cmd = filteredSlashCommands.value[slashMenuIndex.value]
+      if (cmd) { e.preventDefault(); selectSlashCommand(cmd) }
+      else if (e.key === 'Enter') submitTask()
+    }
+    return
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitTask() }
+}
+
+function selectSlashCommand(cmd) {
+  taskInput.value = cmd.trigger + ' '
+  showSlashMenu.value = false
+  slashFilter.value = ''
+}
 let refreshTimer = null
 
 onMounted(async () => {
@@ -25,8 +121,8 @@ onMounted(async () => {
     try {
       metrics.value = await api.getStats() || metrics.value
       await refreshRuns()
-      if (selectedRunId.value) {
-        selectedRun.value = await api.getRunDetail(selectedRunId.value)
+      if (expandedRunId.value) {
+        selectedRun.value = await api.getRunDetail(expandedRunId.value)
       }
     } catch {
       // Keep the last successful snapshot when background refresh fails.
@@ -77,7 +173,11 @@ function fmtMs(ms) {
 const recentEvents = computed(() => [...(props.events || [])].reverse().slice(0, 50))
 const selectedWorkflowState = computed(() => selectedRun.value?.workflow_state || null)
 const selectedEvalGateDecision = computed(() => selectedWorkflowState.value?.eval_gate_decision || null)
+const selectedRoutingRecommendations = computed(() => selectedWorkflowState.value?.routing_recommendations || [])
 const pendingApproval = computed(() => selectedWorkflowState.value?.pending_approval || null)
+const selectedRunOutput = computed(() => selectedRun.value?.output_text || '')
+const selectedRunKind = computed(() => selectedRun.value?.run?.metadata?.kind || '')
+const dashboardOwnsSelectedWorkflow = computed(() => selectedRunKind.value.startsWith('workflow-web-'))
 const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
 const selectedRunAlreadyResumed = computed(() => selectedRunArtifacts.value.includes('resume-target.json'))
 const selectedRunHasApprovalDecision = computed(() => {
@@ -87,9 +187,25 @@ const selectedRunHasApprovalDecision = computed(() => {
 const canResumeSelectedRun = computed(() => {
   const run = selectedRun.value?.run?.metadata
   if (!run || !selectedWorkflowState.value || pendingApproval.value) return false
+  if (!dashboardOwnsSelectedWorkflow.value) return false
   if (selectedRunAlreadyResumed.value) return false
   if (!selectedRunHasApprovalDecision.value) return false
   return run.status === 'awaiting-approval' || selectedWorkflowState.value.status === 'running'
+})
+const externalWorkflowControlNotice = computed(() => {
+  const run = selectedRun.value?.run?.metadata
+  if (!selectedWorkflowState.value || dashboardOwnsSelectedWorkflow.value) return ''
+  if (pendingApproval.value) {
+    return 'This workflow is waiting for approval in the client that started it. Review and approve there; the dashboard is read-only for external workflow runs.'
+  }
+  if (
+    selectedRunHasApprovalDecision.value &&
+    run &&
+    (run.status === 'awaiting-approval' || selectedWorkflowState.value.status === 'running')
+  ) {
+    return 'Approval has been recorded, but continuation belongs to the client that started this workflow. Continue there; the dashboard is read-only for external workflow runs.'
+  }
+  return ''
 })
 
 function fmtReasonCodes(codes) {
@@ -97,13 +213,35 @@ function fmtReasonCodes(codes) {
   return codes.join(', ')
 }
 
+function fmtConfidence(value) {
+  if (typeof value !== 'number') return '0%'
+  return `${Math.round(value * 100)}%`
+}
+
 async function refreshRuns() {
   runs.value = await api.listRuns() || []
-  if (!selectedRunId.value && runs.value.length) {
-    await selectRun(runs.value[0].id)
-  } else if (selectedRunId.value && !runs.value.find((run) => run.id === selectedRunId.value)) {
+  // Never auto-select — only refresh detail for the currently expanded run
+  if (expandedRunId.value) {
+    if (runs.value.find(r => r.id === expandedRunId.value)) {
+      selectedRun.value = await api.getRunDetail(expandedRunId.value)
+    } else {
+      expandedRunId.value = null
+      selectedRunId.value = null
+      selectedRun.value = null
+    }
+  }
+}
+
+async function toggleRun(id) {
+  if (expandedRunId.value === id) {
+    expandedRunId.value = null
     selectedRunId.value = null
     selectedRun.value = null
+    approvalStatus.value = ''
+    resumeStatus.value = ''
+  } else {
+    expandedRunId.value = id
+    await selectRun(id)
   }
 }
 
@@ -115,7 +253,7 @@ async function selectRun(id) {
 }
 
 async function recordApproval(decision) {
-  if (!selectedRunId.value || !pendingApproval.value) return
+  if (!selectedRunId.value || !pendingApproval.value || !dashboardOwnsSelectedWorkflow.value) return
   approvalStatus.value = 'Saving approval...'
   try {
     await api.approveRunStep(selectedRunId.value, {
@@ -142,6 +280,7 @@ async function resumeSelectedRun() {
     approvalStatus.value = ''
     await refreshRuns()
     if (response?.session) {
+      expandedRunId.value = response.session
       await selectRun(response.session)
     } else {
       await selectRun(selectedRunId.value)
@@ -159,468 +298,760 @@ async function resumeSelectedRun() {
 }
 
 async function submitTask() {
-  if (!taskInput.value.trim()) return
-  taskStatus.value = 'Submitting...'
+  const input = taskInput.value.trim()
+  if (!input || chatPending.value) return
+
+  // Add user bubble immediately
+  chatMessages.value.push({ role: 'user', content: input })
+  // Add pending assistant bubble
+  chatMessages.value.push({ role: 'assistant', content: '', status: 'running', sessionId: null })
+  const replyIdx = chatMessages.value.length - 1
+
+  taskInput.value = ''
+  chatPending.value = true
+
   try {
-    const response = await api.runTask(taskInput.value.trim())
-    taskStatus.value = response?.session ? `Submitted as ${response.session}` : 'Submitted'
-    taskInput.value = ''
-    setTimeout(async () => {
-      await refreshRuns()
-      if (response?.session) {
-        await selectRun(response.session)
-      }
-    }, 800)
+    const response = await api.runTask(input)
+    const sessionId = response?.session || null
+
+    let output = ''
+    if (sessionId) {
+      expandedRunId.value = sessionId
+      await selectRun(sessionId)
+      output = selectedRun.value?.output_text || ''
+    }
+
+    chatMessages.value.splice(replyIdx, 1, {
+      role: 'assistant',
+      content: output || '(no output)',
+      status: 'completed',
+      sessionId,
+    })
+    await refreshRuns()
   } catch (e) {
-    taskStatus.value = `Error: ${e.message}`
+    chatMessages.value.splice(replyIdx, 1, {
+      role: 'assistant',
+      content: e.message,
+      status: 'error',
+      sessionId: null,
+    })
+  } finally {
+    chatPending.value = false
   }
-  setTimeout(() => { taskStatus.value = '' }, 4000)
 }
 </script>
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
-      <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Dashboard</span>
-      <div class="flex items-center gap-2">
+
+    <!-- ── Header bar ─────────────────────────────────────────────────── -->
+    <div class="px-5 py-3 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40 shrink-0">Dashboard</span>
+        <span class="text-base-content/20 shrink-0">·</span>
+        <span class="badge badge-xs font-mono shrink-0" :class="{
+          'badge-warning': m.runtime_mode === 'hosted-mcp',
+          'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
+          'badge-info': m.runtime_mode === 'dry-run',
+        }">{{ m.runtime_mode || 'hosted-mcp' }}</span>
+        <span class="text-[11px] font-mono text-base-content/35 truncate hidden sm:block">{{ m.model_provider || '—' }}</span>
+        <span class="text-base-content/20 shrink-0 hidden md:block">·</span>
+        <span class="text-[11px] font-mono text-base-content/30 shrink-0 hidden md:block">
+          {{ m.skills_count }}sk · {{ m.workflows_count }}wf · {{ m.personas_count }}p · {{ m.memory_keys }}mem
+        </span>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <span class="text-[11px] font-mono text-base-content/30 hidden sm:block">{{ uptime }}</span>
         <span class="w-1.5 h-1.5 rounded-full" :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"></span>
         <span class="text-[11px] font-mono" :class="connected ? 'text-success/60' : 'text-error/60'">{{ connected ? 'live' : 'offline' }}</span>
+        <div class="w-px h-4 bg-base-300"></div>
+        <button
+          class="btn btn-sm btn-primary font-mono text-xs gap-1.5"
+          @click="taskPanelOpen = true"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+          </svg>
+          New Task
+        </button>
       </div>
     </div>
 
+    <!-- ── Scrollable body ────────────────────────────────────────────── -->
     <div class="flex-1 overflow-auto p-4 space-y-4">
 
-      <!-- Stats Row 1: Runtime -->
+      <!-- Primary Stats: 4 hero cards -->
       <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-primary/60 relative overflow-hidden">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Active Agents</div>
-          <div class="text-3xl font-bold font-mono text-primary tabular-nums">{{ m.active_agents }}</div>
-          <div v-if="m.active_agents > 0" class="absolute top-3 right-3 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
+          <div class="absolute inset-0 bg-gradient-to-br from-primary/8 to-transparent pointer-events-none"></div>
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Active Agents</div>
+          <div class="text-4xl font-bold font-mono text-primary tabular-nums">{{ m.active_agents }}</div>
+          <div v-if="m.active_agents > 0" class="absolute top-4 right-4 flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            <span class="text-[10px] font-mono text-primary/50">active</span>
+          </div>
+          <div v-else class="text-[10px] font-mono text-base-content/25 mt-1">idle</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-info/60 relative overflow-hidden">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Running Tasks</div>
-          <div class="text-3xl font-bold font-mono text-info tabular-nums">{{ m.running_tasks }}</div>
-          <div v-if="m.running_tasks > 0" class="absolute top-3 right-3 w-1.5 h-1.5 rounded-full bg-info animate-pulse" />
+        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
+          <div class="absolute inset-0 bg-gradient-to-br from-info/8 to-transparent pointer-events-none"></div>
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Running</div>
+          <div class="text-4xl font-bold font-mono text-info tabular-nums">{{ m.running_tasks }}</div>
+          <div v-if="m.running_tasks > 0" class="absolute top-4 right-4">
+            <span class="w-1.5 h-1.5 rounded-full bg-info animate-pulse inline-block"></span>
+          </div>
+          <div class="text-[10px] font-mono text-base-content/25 mt-1">{{ m.session_requests }} requests</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-success/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Completed</div>
-          <div class="text-3xl font-bold font-mono text-success tabular-nums">{{ m.completed_tasks }}</div>
+        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
+          <div class="absolute inset-0 bg-gradient-to-br from-success/8 to-transparent pointer-events-none"></div>
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Completed</div>
+          <div class="text-4xl font-bold font-mono text-success tabular-nums">{{ m.completed_tasks }}</div>
+          <div class="text-[10px] font-mono text-success/40 mt-1" v-if="m.success_rate">
+            {{ ((m.success_rate || 0) * 100).toFixed(1) }}% success rate
+          </div>
+          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-else>—</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-error/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Failed</div>
-          <div class="text-3xl font-bold font-mono text-error tabular-nums">{{ m.failed_tasks }}</div>
+        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
+          <div class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
+          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Failed</div>
+          <div class="text-4xl font-bold font-mono text-error tabular-nums">{{ m.failed_tasks }}</div>
+          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-if="m.total_retries">{{ m.total_retries }} retries</div>
+          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-else>—</div>
         </div>
       </div>
 
-      <!-- Stats Row 2: Tokens, Cost, Reward, Uptime -->
-      <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-secondary/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Total Tokens</div>
-          <div class="flex items-baseline gap-2">
-            <div class="text-3xl font-bold font-mono text-secondary tabular-nums">{{ fmtTokens(m.total_tokens) }}</div>
-            <span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] font-mono text-base-content/30" title="Estimated from prompt length (chars ÷ 4)">est</span>
+      <!-- Secondary Stats: compact 6-column KPI row -->
+      <div class="grid grid-cols-6 gap-2">
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Tokens</div>
+          <div class="text-base font-bold font-mono text-secondary tabular-nums mt-0.5">
+            {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[9px] text-base-content/25 ml-0.5" title="Estimated from prompt length">~</span>
           </div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-if="m.runtime_mode === 'hosted-mcp'">
-            {{ m.session_requests }}req ·
-            <span :title="'Set AGENT007_HOST_MODEL env var to specify your model'">{{ m.model_provider || '?' }}</span>
-          </div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-else>{{ m.session_requests }} requests</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.session_requests }}req</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-warning/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Est. Cost</div>
-          <div class="flex items-baseline gap-2">
-            <div class="text-3xl font-bold font-mono text-warning tabular-nums">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
-            <span v-if="m.runtime_mode === 'hosted-mcp' && m.estimated_usd > 0" class="text-[10px] font-mono text-base-content/30" title="Rough estimate at $0.002/1k tokens">~</span>
-          </div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5" v-if="m.runtime_mode === 'hosted-mcp'">
-            <span title="Set AGENT007_HOST_MODEL env var for accurate tracking">set HOST_MODEL for accuracy</span>
-          </div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Est. Cost</div>
+          <div class="text-base font-bold font-mono text-warning tabular-nums mt-0.5">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">${{ (m.avg_cost_usd || 0).toFixed(4) }}/run</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-accent/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Reward</div>
-          <div class="text-3xl font-bold font-mono text-accent tabular-nums">{{ (m.avg_reward || 0).toFixed(3) }}</div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.feedback_count }}fb · {{ m.prompt_improvements }}imp</div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Success</div>
+          <div class="text-base font-bold font-mono text-success tabular-nums mt-0.5">{{ ((m.success_rate || 0) * 100).toFixed(1) }}%</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.scorecard_run_count || 0 }} scorecards</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-base-content/20">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Uptime</div>
-          <div class="text-3xl font-bold font-mono text-base-content tabular-nums">{{ uptime }}</div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Avg Latency</div>
+          <div class="text-base font-bold font-mono text-info tabular-nums mt-0.5">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ (m.avg_retries_per_run || 0).toFixed(2) }} retries/run</div>
         </div>
-      </div>
-
-      <!-- Stats Row 3: Scorecard KPIs -->
-      <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-success/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Success Rate</div>
-          <div class="text-3xl font-bold font-mono text-success tabular-nums">{{ ((m.success_rate || 0) * 100).toFixed(1) }}%</div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.scorecard_run_count || 0 }} scorecards</div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Avg Reward</div>
+          <div class="text-base font-bold font-mono text-accent tabular-nums mt-0.5">{{ (m.avg_reward || 0).toFixed(3) }}</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.feedback_count }}fb · {{ m.prompt_improvements }}imp</div>
         </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-info/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Latency</div>
-          <div class="text-3xl font-bold font-mono text-info tabular-nums">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-warning/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Cost / Run</div>
-          <div class="text-3xl font-bold font-mono text-warning tabular-nums">${{ (m.avg_cost_usd || 0).toFixed(4) }}</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-4 border-l-2 border-secondary/60">
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-2">Avg Retries</div>
-          <div class="text-3xl font-bold font-mono text-secondary tabular-nums">{{ (m.avg_retries_per_run || 0).toFixed(2) }}</div>
-          <div class="text-[11px] font-mono text-base-content/35 mt-1.5">{{ m.total_retries || 0 }} total retries</div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Uptime</div>
+          <div class="text-base font-bold font-mono text-base-content tabular-nums mt-0.5">{{ uptime }}</div>
+          <div class="text-[9px] text-base-content/25 font-mono mt-0.5 truncate">{{ m.model_provider || '—' }}</div>
         </div>
       </div>
 
-      <!-- System Status -->
-      <div class="bg-base-200 rounded-lg p-4">
-        <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-3 flex items-center gap-2">
-          <span class="w-3 h-px bg-base-content/20"></span>
-          System Status
-          <span class="flex-1 h-px bg-base-content/10"></span>
-        </div>
-        <div class="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="text-[11px] font-mono text-base-content/40">exec</span>
-            <span class="badge badge-sm font-mono" :class="{
-              'badge-warning': m.runtime_mode === 'hosted-mcp',
-              'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
-              'badge-info': m.runtime_mode === 'dry-run',
-            }">
-              {{ m.runtime_mode || 'hosted-mcp' }}
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[11px] font-mono text-base-content/40">model</span>
-            <span class="font-mono text-xs text-base-content/70">{{ m.model_provider || '—' }}</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-[11px] font-mono text-base-content/40">ws</span>
-            <span class="badge badge-sm font-mono" :class="connected ? 'badge-success' : 'badge-error'">{{ connected ? 'live' : 'off' }}</span>
-          </div>
-        </div>
-        <div class="my-3 h-px bg-base-300/60"></div>
-        <div class="flex flex-wrap gap-x-6 gap-y-2">
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-mono text-base-content/40">skills</span>
-            <span class="text-[11px] font-mono font-bold text-primary/80">{{ m.skills_count }}</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-mono text-base-content/40">workflows</span>
-            <span class="text-[11px] font-mono font-bold text-secondary/80">{{ m.workflows_count }}</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-mono text-base-content/40">personas</span>
-            <span class="text-[11px] font-mono font-bold text-accent/80">{{ m.personas_count }}</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-mono text-base-content/40">mem-keys</span>
-            <span class="text-[11px] font-mono font-bold text-info/80">{{ m.memory_keys }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Recent Tasks -->
-      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 36vh">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
+      <!-- Recent Tasks (session) -->
+      <div class="bg-base-200 rounded-xl border border-base-300 flex flex-col" style="max-height: 26vh">
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center shrink-0">
           <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Recent Tasks</span>
-          <span class="text-[10px] font-mono text-base-content/30">{{ m.recent_tasks?.length || 0 }} entries</span>
+          <span class="text-[10px] font-mono text-base-content/30">{{ m.recent_tasks?.length || 0 }} this session</span>
         </div>
         <div class="overflow-auto flex-1">
-          <table class="table table-xs w-full" v-if="m.recent_tasks?.length">
+          <table class="table table-sm w-full" v-if="m.recent_tasks?.length">
             <thead class="sticky top-0 bg-base-200 z-10">
-              <tr class="text-xs text-base-content/50">
-                <th class="w-[35%]">Task</th>
-                <th class="w-[15%]">Mode</th>
-                <th class="w-[15%]">Model</th>
-                <th class="w-[10%]">Status</th>
-                <th class="w-[10%]">Tokens</th>
-                <th class="w-[15%]">Time</th>
+              <tr class="text-[10px] text-base-content/35 uppercase tracking-wider">
+                <th class="w-[38%] font-medium">Task</th>
+                <th class="w-[12%] font-medium">Mode</th>
+                <th class="w-[15%] font-medium">Model</th>
+                <th class="w-[10%] font-medium">Status</th>
+                <th class="w-[9%] font-medium">Tokens</th>
+                <th class="w-[16%] font-medium">Time</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30">
-                <td class="max-w-[0] truncate font-mono text-xs" :title="t.task">{{ t.task }}</td>
-                <td class="text-xs">
-                  <span class="badge badge-xs" :class="{
+              <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30 transition-colors">
+                <td class="max-w-[0] truncate font-mono text-xs text-base-content/80" :title="t.task">{{ t.task }}</td>
+                <td>
+                  <span class="badge badge-xs font-mono" :class="{
                     'badge-warning': t.agent === 'hosted-mcp',
                     'badge-success': t.agent === 'standalone',
                     'badge-info': t.agent === 'dry-run',
                     'badge-ghost': !['hosted-mcp','standalone','dry-run'].includes(t.agent),
                   }">{{ t.agent || '—' }}</span>
                 </td>
-                <td class="text-xs font-mono text-base-content/70" :title="t.model">
-                  {{ t.model || '—' }}
-                </td>
+                <td class="text-xs font-mono text-base-content/50 truncate max-w-[0]" :title="t.model">{{ t.model || '—' }}</td>
                 <td>
-                  <span class="badge badge-xs"
-                    :class="{
-                      'badge-info': t.status === 'running',
-                      'badge-success': t.status === 'completed',
-                      'badge-error': t.status === 'failed',
-                      'badge-warning': t.status === 'awaiting-approval',
-                    }"
-                  >{{ t.status }}</span>
+                  <span class="badge badge-xs" :class="{
+                    'badge-info': t.status === 'running',
+                    'badge-success': t.status === 'completed',
+                    'badge-error': t.status === 'failed',
+                    'badge-warning': t.status === 'awaiting-approval',
+                  }">{{ t.status }}</span>
                 </td>
-                <td class="text-xs font-mono">
-                  <span v-if="t.tokens > 0">
-                    {{ fmtTokens(t.tokens) }}
-                    <span v-if="t.agent === 'hosted-mcp'" class="text-base-content/30" title="Estimated from prompt length">~</span>
-                  </span>
-                  <span v-else class="text-base-content/30">—</span>
+                <td class="text-xs font-mono text-base-content/50">
+                  <span v-if="t.tokens > 0">{{ fmtTokens(t.tokens) }}<span v-if="t.agent === 'hosted-mcp'" class="text-base-content/25">~</span></span>
+                  <span v-else class="text-base-content/25">—</span>
                 </td>
-                <td class="text-xs text-base-content/60 font-mono">
-                  {{ t.started_at }}<span v-if="t.finished_at && t.finished_at !== t.started_at"> → {{ t.finished_at }}</span>
-                </td>
+                <td class="text-[11px] text-base-content/40 font-mono">{{ t.started_at }}</td>
               </tr>
             </tbody>
           </table>
-          <div v-else class="p-6 text-center text-base-content/40 text-sm">No tasks yet this session</div>
+          <div v-else class="p-8 text-center text-base-content/30 text-sm font-mono">No tasks yet this session</div>
         </div>
       </div>
 
-      <!-- Persisted Runs -->
-      <div class="bg-base-200 rounded-lg overflow-hidden">
+      <!-- Persisted Runs: accordion list -->
+      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
           <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3">
             <span class="text-[10px] font-mono text-base-content/30">{{ runs.length }} runs</span>
-            <button class="btn btn-ghost btn-xs text-[11px] font-mono" @click="refreshRuns">↺ refresh</button>
+            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuns">↺ refresh</button>
           </div>
         </div>
-        <div class="grid grid-cols-[320px_1fr] min-h-[16rem]">
-          <div class="border-r border-base-300 overflow-auto max-h-[24rem]">
+
+        <div v-if="runs.length" class="divide-y divide-base-300/40">
+          <div v-for="run in runs" :key="run.id">
+            <!-- Run row: click to expand/collapse -->
             <button
-              v-for="run in runs"
-              :key="run.id"
-              class="w-full text-left px-4 py-3 border-b border-base-300/40 hover:bg-base-300/30"
-              :class="{ 'bg-base-300/50': selectedRunId === run.id }"
-              @click="selectRun(run.id)"
+              class="w-full text-left px-4 py-3 hover:bg-base-300/20 transition-colors flex items-center gap-4 group"
+              :class="expandedRunId === run.id ? 'bg-base-300/30' : ''"
+              @click="toggleRun(run.id)"
             >
-              <div class="flex items-center justify-between gap-2">
-                <span class="font-mono text-[11px] truncate">{{ run.kind }}</span>
-                <span
-                  class="badge badge-xs"
-                  :class="{
-                    'badge-info': run.status === 'running',
-                    'badge-warning': run.status === 'awaiting-approval',
-                    'badge-success': run.status === 'succeeded',
-                    'badge-error': run.status === 'failed',
-                  }"
-                >{{ run.status }}</span>
-              </div>
-              <div class="text-xs text-base-content/70 mt-1 truncate">{{ run.task }}</div>
-              <div class="text-[11px] text-base-content/40 mt-1">
-                {{ run.mode }} · {{ run.provider || 'hosted-mcp' }}
-              </div>
+              <!-- Expand chevron -->
+              <svg
+                class="w-3.5 h-3.5 text-base-content/25 shrink-0 transition-transform duration-200"
+                :class="expandedRunId === run.id ? 'rotate-90 text-primary/50' : 'group-hover:text-base-content/40'"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+              </svg>
+              <!-- Status dot -->
+              <span class="w-2 h-2 rounded-full shrink-0" :class="{
+                'bg-info animate-pulse': run.status === 'running',
+                'bg-warning animate-pulse': run.status === 'awaiting-approval',
+                'bg-success': run.status === 'succeeded',
+                'bg-error': run.status === 'failed',
+                'bg-base-content/20': !['running','awaiting-approval','succeeded','failed'].includes(run.status),
+              }"></span>
+              <!-- Kind -->
+              <span class="font-mono text-xs text-base-content/60 shrink-0 w-44 truncate" :title="run.kind">{{ run.kind }}</span>
+              <!-- Task -->
+              <span class="font-mono text-xs text-base-content/50 flex-1 truncate" :title="run.task">{{ run.task }}</span>
+              <!-- Mode / provider (hidden on small screens) -->
+              <span class="text-[10px] font-mono text-base-content/25 shrink-0 hidden lg:block">{{ run.mode }} · {{ run.provider || 'hosted-mcp' }}</span>
+              <!-- Status badge -->
+              <span class="badge badge-xs shrink-0" :class="{
+                'badge-info': run.status === 'running',
+                'badge-warning': run.status === 'awaiting-approval',
+                'badge-success': run.status === 'succeeded',
+                'badge-error': run.status === 'failed',
+              }">{{ run.status }}</span>
             </button>
-            <div v-if="!runs.length" class="p-6 text-center text-base-content/40 text-sm">No persisted runs yet</div>
-          </div>
 
-          <div class="p-4 overflow-auto max-h-[24rem]">
-            <template v-if="selectedRun?.run">
-              <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                <div><span class="text-base-content/50">ID:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.id }}</span></div>
-                <div><span class="text-base-content/50">Kind:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.kind }}</span></div>
-                <div><span class="text-base-content/50">Status:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.status }}</span></div>
-                <div><span class="text-base-content/50">Started:</span> <span class="font-mono text-xs">{{ selectedRun.run.metadata.started_at }}</span></div>
-              </div>
-
-              <div class="mt-4">
-                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Task</div>
-                <div class="bg-base-300/40 rounded p-3 font-mono text-xs whitespace-pre-wrap">{{ selectedRun.run.metadata.task }}</div>
-              </div>
-
-              <div class="mt-4" v-if="selectedWorkflowState">
-                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Workflow State</div>
-                <div class="grid grid-cols-4 gap-3 mb-3 text-sm">
-                  <div class="bg-base-300/30 rounded p-3">
-                    <div class="text-[11px] text-base-content/50 uppercase">Workflow</div>
-                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.workflow }}</div>
-                  </div>
-                  <div class="bg-base-300/30 rounded p-3">
-                    <div class="text-[11px] text-base-content/50 uppercase">Progress</div>
-                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}</div>
-                  </div>
-                  <div class="bg-base-300/30 rounded p-3">
-                    <div class="text-[11px] text-base-content/50 uppercase">Budget</div>
-                    <div class="font-mono text-xs mt-1">{{ selectedWorkflowState.budget_used?.tokens || 0 }} tokens</div>
-                  </div>
-                  <div class="bg-base-300/30 rounded p-3">
-                    <div class="text-[11px] text-base-content/50 uppercase">Artifacts</div>
-                    <div class="font-mono text-xs mt-1">{{ selectedRun.run.artifacts?.join(', ') || '—' }}</div>
-                  </div>
+            <!-- Accordion detail panel -->
+            <div
+              v-if="expandedRunId === run.id && selectedRun?.run"
+              class="border-t border-base-300/40 bg-base-100/50 px-6 py-5 space-y-5"
+            >
+              <!-- Metadata grid -->
+              <div class="grid grid-cols-4 gap-3">
+                <div class="bg-base-200 rounded-lg p-3">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Run ID</div>
+                  <div class="font-mono text-xs text-base-content/60 truncate" :title="selectedRun.run.metadata.id">{{ selectedRun.run.metadata.id }}</div>
                 </div>
-                <div
-                  v-if="selectedEvalGateDecision"
-                  class="rounded p-4 mb-3 border"
-                  :class="{
-                    'border-success/40 bg-success/10': selectedEvalGateDecision.decision === 'pass',
-                    'border-warning/40 bg-warning/10': selectedEvalGateDecision.decision === 'warn',
-                    'border-error/40 bg-error/10': selectedEvalGateDecision.decision === 'block',
-                  }"
-                >
-                  <div class="flex items-center justify-between gap-3">
-                    <div>
-                      <div class="text-xs font-bold uppercase tracking-wider"
-                        :class="{
+                <div class="bg-base-200 rounded-lg p-3">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Kind</div>
+                  <div class="font-mono text-xs text-base-content/60 truncate">{{ selectedRun.run.metadata.kind }}</div>
+                </div>
+                <div class="bg-base-200 rounded-lg p-3">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Status</div>
+                  <span class="badge badge-sm font-mono" :class="{
+                    'badge-info': selectedRun.run.metadata.status === 'running',
+                    'badge-warning': selectedRun.run.metadata.status === 'awaiting-approval',
+                    'badge-success': selectedRun.run.metadata.status === 'succeeded',
+                    'badge-error': selectedRun.run.metadata.status === 'failed',
+                  }">{{ selectedRun.run.metadata.status }}</span>
+                </div>
+                <div class="bg-base-200 rounded-lg p-3">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Started</div>
+                  <div class="font-mono text-xs text-base-content/60">{{ selectedRun.run.metadata.started_at }}</div>
+                </div>
+              </div>
+
+              <!-- Task -->
+              <div>
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
+                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed">{{ selectedRun.run.metadata.task }}</div>
+              </div>
+
+              <!-- Output -->
+              <div v-if="selectedRunOutput">
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
+                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed max-h-48 overflow-auto">{{ selectedRunOutput }}</div>
+              </div>
+
+              <!-- Workflow State -->
+              <template v-if="selectedWorkflowState">
+                <div>
+                  <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-3">Workflow State</div>
+                  <div class="grid grid-cols-4 gap-3 mb-4">
+                    <div class="bg-base-200 rounded-lg p-3">
+                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Workflow</div>
+                      <div class="font-mono text-xs text-base-content/75">{{ selectedWorkflowState.workflow }}</div>
+                    </div>
+                    <div class="bg-base-200 rounded-lg p-3">
+                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1.5">Progress · {{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}</div>
+                      <progress class="progress progress-primary w-full h-1.5" :value="selectedWorkflowState.steps_completed" :max="selectedWorkflowState.steps_total || 1"></progress>
+                    </div>
+                    <div class="bg-base-200 rounded-lg p-3">
+                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Budget Used</div>
+                      <div class="font-mono text-xs text-base-content/75">{{ fmtTokens(selectedWorkflowState.budget_used?.tokens || 0) }} tokens</div>
+                    </div>
+                    <div class="bg-base-200 rounded-lg p-3">
+                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Artifacts</div>
+                      <div class="font-mono text-xs text-base-content/75">{{ selectedRun.run.artifacts?.length || 0 }} file(s)</div>
+                      <div class="text-[9px] font-mono text-base-content/30 mt-0.5 truncate" :title="selectedRun.run.artifacts?.join(', ')">{{ selectedRun.run.artifacts?.join(', ') || '—' }}</div>
+                    </div>
+                  </div>
+
+                  <!-- Eval Gate -->
+                  <div
+                    v-if="selectedEvalGateDecision"
+                    class="rounded-lg p-4 mb-4 border"
+                    :class="{
+                      'border-success/40 bg-success/10': selectedEvalGateDecision.decision === 'pass',
+                      'border-warning/40 bg-warning/10': selectedEvalGateDecision.decision === 'warn',
+                      'border-error/40 bg-error/10': selectedEvalGateDecision.decision === 'block',
+                    }"
+                  >
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <div class="text-xs font-bold uppercase tracking-wider" :class="{
                           'text-success': selectedEvalGateDecision.decision === 'pass',
                           'text-warning': selectedEvalGateDecision.decision === 'warn',
                           'text-error': selectedEvalGateDecision.decision === 'block',
-                        }"
-                      >Eval Gate</div>
-                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.workflow }} · {{ selectedEvalGateDecision.mode }}</div>
-                    </div>
-                    <span
-                      class="badge badge-sm"
-                      :class="{
+                        }">Eval Gate</div>
+                        <div class="font-mono text-xs mt-1 text-base-content/55">{{ selectedEvalGateDecision.workflow }} · {{ selectedEvalGateDecision.mode }}</div>
+                      </div>
+                      <span class="badge badge-sm" :class="{
                         'badge-success': selectedEvalGateDecision.decision === 'pass',
                         'badge-warning': selectedEvalGateDecision.decision === 'warn',
                         'badge-error': selectedEvalGateDecision.decision === 'block',
-                      }"
-                    >{{ selectedEvalGateDecision.decision }}</span>
-                  </div>
-                  <div class="grid grid-cols-3 gap-3 mt-3 text-sm">
-                    <div class="bg-base-300/30 rounded p-3">
-                      <div class="text-[11px] text-base-content/50 uppercase">Baseline</div>
-                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_sample_size }}/{{ selectedEvalGateDecision.min_baseline_runs }}</div>
+                      }">{{ selectedEvalGateDecision.decision }}</span>
                     </div>
-                    <div class="bg-base-300/30 rounded p-3">
-                      <div class="text-[11px] text-base-content/50 uppercase">Window</div>
-                      <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_window }} runs</div>
-                    </div>
-                    <div class="bg-base-300/30 rounded p-3">
-                      <div class="text-[11px] text-base-content/50 uppercase">Reason Codes</div>
-                      <div class="font-mono text-xs mt-1">{{ fmtReasonCodes(selectedEvalGateDecision.reason_codes) }}</div>
-                    </div>
-                  </div>
-                  <div class="font-mono text-xs whitespace-pre-wrap mt-3">{{ selectedEvalGateDecision.message }}</div>
-                </div>
-                <div v-if="pendingApproval" class="rounded border border-warning/40 bg-warning/10 p-4 mb-3">
-                  <div class="flex items-center justify-between gap-3">
-                    <div>
-                      <div class="text-xs font-bold uppercase tracking-wider text-warning">Approval Pending</div>
-                      <div class="font-mono text-xs mt-1">{{ pendingApproval.step_id }} · {{ pendingApproval.agent }}</div>
-                    </div>
-                    <span class="badge badge-sm badge-warning">awaiting approval</span>
-                  </div>
-                  <div class="font-mono text-xs whitespace-pre-wrap mt-3">{{ pendingApproval.content_preview }}</div>
-                  <textarea
-                    v-model="approvalEditContent"
-                    class="textarea textarea-bordered w-full mt-3 font-mono text-xs"
-                    rows="6"
-                    placeholder="Edited approval content"
-                  />
-                  <div class="flex items-center gap-2 mt-3">
-                    <button class="btn btn-xs btn-success" @click="recordApproval('approve')">Approve</button>
-                    <button class="btn btn-xs btn-warning" @click="recordApproval('edit')">Approve Edit</button>
-                    <button class="btn btn-xs btn-error" @click="recordApproval('deny')">Deny</button>
-                    <span v-if="approvalStatus" class="text-xs text-base-content/70">{{ approvalStatus }}</span>
-                  </div>
-                </div>
-                <div v-else-if="canResumeSelectedRun" class="rounded border border-info/40 bg-info/10 p-4 mb-3">
-                  <div class="flex items-center justify-between gap-3">
-                    <div>
-                      <div class="text-xs font-bold uppercase tracking-wider text-info">Resume Ready</div>
-                      <div v-if="m.runtime_mode === 'hosted-mcp'" class="text-xs text-base-content/70 mt-1">
-                        Approval recorded. Your AI assistant will continue automatically — ask it to call <code class="font-mono bg-base-200 px-1 rounded">agent007_workflow_next</code>.
+                    <div class="grid grid-cols-3 gap-2 mb-3">
+                      <div class="bg-base-300/30 rounded p-2">
+                        <div class="text-[9px] text-base-content/35 uppercase">Baseline</div>
+                        <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_sample_size }}/{{ selectedEvalGateDecision.min_baseline_runs }}</div>
                       </div>
-                      <div v-else class="text-xs text-base-content/70 mt-1">
-                        Approval has been recorded for this paused workflow. Resume it to continue execution.
+                      <div class="bg-base-300/30 rounded p-2">
+                        <div class="text-[9px] text-base-content/35 uppercase">Window</div>
+                        <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_window }} runs</div>
+                      </div>
+                      <div class="bg-base-300/30 rounded p-2">
+                        <div class="text-[9px] text-base-content/35 uppercase">Reasons</div>
+                        <div class="font-mono text-xs mt-1 truncate" :title="fmtReasonCodes(selectedEvalGateDecision.reason_codes)">{{ fmtReasonCodes(selectedEvalGateDecision.reason_codes) }}</div>
                       </div>
                     </div>
-                    <button v-if="m.runtime_mode !== 'hosted-mcp'" class="btn btn-xs btn-info" @click="resumeSelectedRun">Resume Workflow</button>
+                    <div class="font-mono text-xs whitespace-pre-wrap text-base-content/65">{{ selectedEvalGateDecision.message }}</div>
                   </div>
-                  <div v-if="resumeStatus" class="text-xs text-base-content/70 mt-3">{{ resumeStatus }}</div>
-                </div>
-                <div class="space-y-2">
-                  <div
-                    v-for="step in selectedWorkflowState.steps || []"
-                    :key="step.id"
-                    class="rounded border border-base-300/60 p-3"
-                  >
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="font-mono text-xs">{{ step.id }}</span>
-                      <span
-                        class="badge badge-xs"
-                        :class="{
-                          'badge-ghost': step.status === 'pending',
-                          'badge-info': step.status === 'running',
-                          'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
-                          'badge-success': step.status === 'completed',
-                          'badge-error': step.status === 'failed',
-                        }"
-                      >{{ step.status }}</span>
-                    </div>
-                    <div class="text-[11px] text-base-content/50 mt-1">{{ step.agent }} · attempts {{ step.attempts }}</div>
-                    <div v-if="step.output_preview" class="font-mono text-xs mt-2 whitespace-pre-wrap">{{ step.output_preview }}</div>
-                    <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
-                  </div>
-                </div>
-              </div>
 
-              <div class="mt-4" v-if="selectedRun.run.entries?.length">
-                <div class="text-xs font-bold uppercase tracking-wider text-base-content/60 mb-2">Recent Trace</div>
+                  <!-- Routing Recommendations -->
+                  <div v-if="selectedRoutingRecommendations.length" class="rounded-lg border border-info/30 bg-info/10 p-4 mb-4">
+                    <div class="flex items-center justify-between mb-3">
+                      <div>
+                        <div class="text-xs font-bold uppercase tracking-wider text-info">Adaptive Shadow</div>
+                        <div class="font-mono text-xs mt-0.5 text-base-content/50">Advisory only — execution not changed.</div>
+                      </div>
+                      <span class="badge badge-sm badge-info">shadow-only</span>
+                    </div>
+                    <div class="space-y-3">
+                      <div v-for="rec in selectedRoutingRecommendations" :key="rec.step_id" class="bg-base-300/25 rounded-lg p-3">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                          <div>
+                            <div class="text-[9px] text-base-content/35 uppercase">Router Step</div>
+                            <div class="font-mono text-xs mt-0.5">{{ rec.step_id }}</div>
+                          </div>
+                          <span class="badge badge-xs" :class="rec.fallback_used ? 'badge-warning' : 'badge-success'">{{ rec.fallback_used ? 'fallback' : 'recommended' }}</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 mb-2">
+                          <div class="bg-base-200/50 rounded p-2">
+                            <div class="text-[9px] text-base-content/30">Current</div>
+                            <div class="font-mono text-xs mt-0.5">{{ rec.current_route }}</div>
+                          </div>
+                          <div class="bg-base-200/50 rounded p-2">
+                            <div class="text-[9px] text-base-content/30">Recommended</div>
+                            <div class="font-mono text-xs mt-0.5">{{ rec.recommended_route }}</div>
+                          </div>
+                          <div class="bg-base-200/50 rounded p-2">
+                            <div class="text-[9px] text-base-content/30">Confidence</div>
+                            <div class="font-mono text-xs mt-0.5">{{ fmtConfidence(rec.confidence) }} · {{ rec.sample_size }}s</div>
+                          </div>
+                        </div>
+                        <div class="font-mono text-xs whitespace-pre-wrap text-base-content/55">{{ rec.reason }}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Approval Pending -->
+                  <div v-if="pendingApproval" class="rounded-lg border border-warning/40 bg-warning/10 p-4 mb-4">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <div class="text-xs font-bold uppercase tracking-wider text-warning">Approval Pending</div>
+                        <div class="font-mono text-xs mt-0.5 text-base-content/55">{{ pendingApproval.step_id }} · {{ pendingApproval.agent }}</div>
+                      </div>
+                      <span class="badge badge-sm badge-warning">awaiting</span>
+                    </div>
+                    <div class="font-mono text-xs whitespace-pre-wrap text-base-content/65 bg-base-300/30 rounded-lg p-3 mb-3">{{ pendingApproval.content_preview }}</div>
+                    <template v-if="dashboardOwnsSelectedWorkflow">
+                      <textarea
+                        v-model="approvalEditContent"
+                        class="textarea textarea-bordered textarea-sm w-full font-mono text-xs mb-3"
+                        rows="5"
+                        placeholder="Edited approval content"
+                      />
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <button class="btn btn-sm btn-success" @click="recordApproval('approve')">Approve</button>
+                        <button class="btn btn-sm btn-warning" @click="recordApproval('edit')">Approve Edit</button>
+                        <button class="btn btn-sm btn-error" @click="recordApproval('deny')">Deny</button>
+                        <span v-if="approvalStatus" class="text-xs text-base-content/55 flex-1">{{ approvalStatus }}</span>
+                      </div>
+                    </template>
+                    <div v-else class="text-xs text-base-content/55">{{ externalWorkflowControlNotice }}</div>
+                  </div>
+
+                  <!-- External Control Notice -->
+                  <div v-else-if="externalWorkflowControlNotice" class="rounded-lg border border-info/40 bg-info/10 p-4 mb-4">
+                    <div class="text-xs font-bold uppercase tracking-wider text-info mb-1.5">External Control</div>
+                    <div class="text-xs text-base-content/55">{{ externalWorkflowControlNotice }}</div>
+                  </div>
+
+                  <!-- Resume Ready -->
+                  <div v-else-if="canResumeSelectedRun" class="rounded-lg border border-info/40 bg-info/10 p-4 mb-4">
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="text-xs font-bold uppercase tracking-wider text-info mb-1">Resume Ready</div>
+                        <div v-if="m.runtime_mode === 'hosted-mcp'" class="text-xs text-base-content/55">
+                          Approval recorded. Ask your AI assistant to call <code class="font-mono bg-base-200 px-1 py-0.5 rounded text-[10px]">agent007_workflow_next</code>.
+                        </div>
+                        <div v-else class="text-xs text-base-content/55">Approval recorded. Resume to continue execution.</div>
+                      </div>
+                      <button v-if="m.runtime_mode !== 'hosted-mcp'" class="btn btn-sm btn-info shrink-0" @click="resumeSelectedRun">Resume</button>
+                    </div>
+                    <div v-if="resumeStatus" class="text-xs text-base-content/55 mt-2">{{ resumeStatus }}</div>
+                  </div>
+
+                  <!-- Workflow Steps -->
+                  <div>
+                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Steps</div>
+                    <div class="space-y-2">
+                      <div
+                        v-for="step in selectedWorkflowState.steps || []"
+                        :key="step.id"
+                        class="rounded-lg border p-3 transition-colors"
+                        :class="{
+                          'border-base-300/60': step.status === 'pending',
+                          'border-info/40 bg-info/5': step.status === 'running',
+                          'border-success/40 bg-success/5': step.status === 'completed',
+                          'border-error/40 bg-error/5': step.status === 'failed',
+                          'border-warning/40 bg-warning/5': step.status === 'awaiting-approval' || step.status === 'skipped',
+                        }"
+                      >
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="font-mono text-xs font-medium text-base-content/80">{{ step.id }}</span>
+                          <span class="badge badge-xs" :class="{
+                            'badge-ghost': step.status === 'pending',
+                            'badge-info': step.status === 'running',
+                            'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
+                            'badge-success': step.status === 'completed',
+                            'badge-error': step.status === 'failed',
+                          }">{{ step.status }}</span>
+                        </div>
+                        <div class="text-[10px] text-base-content/35 mt-1">{{ step.agent }} · {{ step.attempts }} attempt(s)</div>
+                        <div v-if="step.output_preview" class="font-mono text-xs mt-2 whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2">{{ step.output_preview }}</div>
+                        <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Recent Trace -->
+              <div v-if="selectedRun.run.entries?.length">
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Recent Trace</div>
                 <div class="space-y-2">
                   <div
                     v-for="entry in selectedRun.run.entries.slice(-10).reverse()"
                     :key="`${entry.timestamp}-${entry.kind}`"
-                    class="bg-base-300/30 rounded p-3"
+                    class="bg-base-200 rounded-lg p-3"
                   >
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="font-mono text-xs">{{ entry.kind }}</span>
-                      <span class="text-[11px] text-base-content/40">{{ entry.timestamp }}</span>
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <span class="font-mono text-xs text-base-content/60">{{ entry.kind }}</span>
+                      <span class="text-[10px] text-base-content/30 font-mono">{{ entry.timestamp }}</span>
                     </div>
-                    <div class="font-mono text-[11px] text-base-content/70 mt-2 whitespace-pre-wrap">{{ JSON.stringify(entry.payload, null, 2) }}</div>
+                    <div class="font-mono text-[10px] text-base-content/45 whitespace-pre-wrap leading-relaxed">{{ JSON.stringify(entry.payload, null, 2) }}</div>
                   </div>
                 </div>
               </div>
-            </template>
-            <div v-else class="h-full flex items-center justify-center text-base-content/40 text-sm">
-              Select a run to inspect its persisted state
+
+            </div>
+            <!-- /accordion detail -->
+          </div>
+        </div>
+        <div v-else class="p-10 text-center text-base-content/30 text-sm font-mono">No persisted runs yet</div>
+      </div>
+
+    </div>
+    <!-- /scrollable body -->
+
+    <!-- ── Task submission slide-over ─────────────────────────────────── -->
+
+    <!-- Backdrop -->
+    <Transition
+      enter-active-class="transition-opacity duration-200"
+      leave-active-class="transition-opacity duration-150"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="taskPanelOpen"
+        class="fixed inset-0 bg-base-300/30 backdrop-blur-[1px] z-40"
+        @click="taskPanelOpen = false"
+      ></div>
+    </Transition>
+
+    <!-- Panel -->
+    <Transition
+      enter-active-class="transition-transform duration-300 ease-out"
+      leave-active-class="transition-transform duration-200 ease-in"
+      enter-from-class="translate-x-full"
+      enter-to-class="translate-x-0"
+      leave-from-class="translate-x-0"
+      leave-to-class="translate-x-full"
+    >
+      <div
+        v-if="taskPanelOpen"
+        class="fixed top-0 right-0 h-full w-[42rem] max-w-[92vw] bg-base-100 border-l border-base-300 shadow-2xl z-50 flex flex-col"
+      >
+        <!-- Chat header -->
+        <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-3">
+            <div class="w-7 h-7 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+              <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+              </svg>
+            </div>
+            <div>
+              <div class="text-sm font-semibold text-base-content/80 leading-none mb-1">agent007</div>
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="connected ? 'bg-success' : 'bg-base-content/20'"></span>
+                <span class="badge badge-xs font-mono" :class="{
+                  'badge-warning': m.runtime_mode === 'hosted-mcp',
+                  'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
+                  'badge-info': m.runtime_mode === 'dry-run',
+                }">{{ m.runtime_mode || 'hosted-mcp' }}</span>
+                <span class="text-[10px] font-mono text-base-content/30">{{ m.model_provider || '—' }}</span>
+              </div>
             </div>
           </div>
+          <div class="flex items-center gap-1">
+            <button
+              v-if="chatMessages.length"
+              class="btn btn-ghost btn-xs font-mono text-[10px] text-base-content/35 hover:text-base-content/60"
+              @click="chatMessages = []"
+              title="Clear conversation"
+            >clear</button>
+            <button
+              class="btn btn-ghost btn-sm btn-square text-base-content/35 hover:text-base-content"
+              @click="taskPanelOpen = false"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
 
-      <!-- Event Log -->
-      <div class="bg-base-200 rounded-lg flex flex-col" style="max-height: 35vh">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
-          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Event Log</span>
-          <span class="text-[10px] font-mono text-base-content/30">{{ events?.length || 0 }} events</span>
+        <!-- Chat messages area -->
+        <div class="flex-1 overflow-auto flex flex-col" ref="chatScrollRef">
+
+          <!-- Empty state: show suggested prompts -->
+          <div v-if="!chatMessages.length" class="flex-1 flex flex-col items-center justify-center p-8 gap-6">
+            <div class="text-center">
+              <div class="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
+                <svg class="w-6 h-6 text-primary/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <div class="text-sm font-medium text-base-content/50 mb-1">What should agent007 do?</div>
+              <div class="text-xs text-base-content/30 font-mono">Run skills, workflows, or any task</div>
+            </div>
+
+            <!-- Suggested prompts from recent tasks -->
+            <div v-if="m.recent_tasks?.length" class="w-full space-y-2">
+              <div class="text-[10px] font-mono text-base-content/25 uppercase tracking-widest text-center mb-3">recent tasks</div>
+              <button
+                v-for="(t, i) in [...(m.recent_tasks || [])].reverse().slice(0, 4)"
+                :key="i"
+                class="w-full text-left px-4 py-3 rounded-xl border border-base-300/50 hover:border-primary/30 hover:bg-primary/5 transition-all group"
+                @click="taskInput = t.task"
+              >
+                <div class="flex items-start gap-3">
+                  <span class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="{
+                    'bg-success': t.status === 'completed',
+                    'bg-error': t.status === 'failed',
+                    'bg-info animate-pulse': t.status === 'running',
+                    'bg-base-content/15': !['completed','failed','running'].includes(t.status),
+                  }"></span>
+                  <span class="font-mono text-xs text-base-content/45 group-hover:text-base-content/70 transition-colors leading-relaxed line-clamp-2">{{ t.task }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Conversation messages -->
+          <div v-else class="flex flex-col gap-4 p-5">
+            <template v-for="(msg, i) in chatMessages" :key="i">
+
+              <!-- User message: right-aligned bubble -->
+              <div v-if="msg.role === 'user'" class="flex justify-end">
+                <div class="max-w-[82%]">
+                  <div class="bg-primary/15 border border-primary/20 rounded-2xl rounded-tr-sm px-4 py-3">
+                    <p class="font-mono text-xs text-base-content/85 whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Assistant message: left-aligned -->
+              <div v-else class="flex items-start gap-3">
+                <!-- Avatar -->
+                <div class="w-6 h-6 rounded-lg bg-primary/15 flex items-center justify-center shrink-0 mt-0.5">
+                  <svg class="w-3 h-3 text-primary/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                </div>
+
+                <div class="flex-1 min-w-0">
+                  <!-- Thinking indicator -->
+                  <div v-if="msg.status === 'running'" class="flex items-center gap-2 py-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 0ms"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 150ms"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 300ms"></span>
+                    <span class="text-xs font-mono text-base-content/35 ml-1">running…</span>
+                  </div>
+
+                  <!-- Response content -->
+                  <template v-else>
+                    <div
+                      class="rounded-2xl rounded-tl-sm px-4 py-3 border"
+                      :class="msg.status === 'error'
+                        ? 'bg-error/10 border-error/25'
+                        : 'bg-base-200 border-base-300/50'"
+                    >
+                      <p
+                        class="font-mono text-xs whitespace-pre-wrap leading-relaxed"
+                        :class="msg.status === 'error' ? 'text-error/80' : 'text-base-content/75'"
+                      >{{ msg.content }}</p>
+                    </div>
+
+                    <!-- Session metadata pill -->
+                    <div v-if="msg.sessionId" class="flex items-center gap-2 mt-1.5 px-1">
+                      <span class="badge badge-xs" :class="msg.status === 'completed' ? 'badge-success' : 'badge-error'">
+                        {{ msg.status }}
+                      </span>
+                      <span class="text-[10px] font-mono text-base-content/25">{{ msg.sessionId }}</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+            </template>
+          </div>
         </div>
-        <div class="overflow-auto flex-1 font-mono text-xs">
+
+        <!-- Input area: always pinned at bottom -->
+        <div class="shrink-0 border-t border-base-300 bg-base-200/60 p-4">
+
+          <!-- Slash command menu (floats above input) -->
           <div
-            v-for="(evt, i) in recentEvents"
-            :key="i"
-            class="px-4 py-1.5 border-b border-base-300/30 flex gap-3 hover:bg-base-300/30"
+            v-if="showSlashMenu && filteredSlashCommands.length"
+            class="mb-2 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden"
           >
-            <span class="text-base-content/40 shrink-0 w-20">{{ evt._ts?.slice(11, 19) || '' }}</span>
-            <span
-              class="badge badge-xs shrink-0"
-              :class="{
-                'badge-info': evt.type === 'AgentEvent',
-                'badge-success': evt.type === 'LearningEvent',
-                'badge-warning': evt.type === 'StatusUpdate',
-              }"
-            >{{ evt.type || 'event' }}</span>
-            <span class="truncate text-base-content/70">{{ JSON.stringify(evt.payload || evt).slice(0, 120) }}</span>
+            <div class="px-3 py-1.5 border-b border-base-300/50 flex items-center justify-between">
+              <span class="text-[10px] font-mono text-base-content/30 uppercase tracking-widest">Commands · ↑↓ navigate · ↵ select · Esc close</span>
+              <span class="text-[10px] font-mono text-base-content/25">{{ filteredSlashCommands.length }} match{{ filteredSlashCommands.length !== 1 ? 'es' : '' }}</span>
+            </div>
+            <div ref="slashMenuRef" class="max-h-64 overflow-auto">
+              <button
+                v-for="(cmd, i) in filteredSlashCommands"
+                :key="cmd.trigger"
+                data-slash-item
+                class="w-full text-left px-3 py-2.5 flex items-start gap-3 transition-colors"
+                :class="i === slashMenuIndex ? 'bg-primary/10' : 'hover:bg-base-200'"
+                @mouseenter="slashMenuIndex = i"
+                @click="selectSlashCommand(cmd)"
+              >
+                <!-- Type icon -->
+                <div
+                  class="w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5"
+                  :class="cmd.type === 'workflow' ? 'bg-secondary/15' : 'bg-primary/15'"
+                >
+                  <svg v-if="cmd.type === 'workflow'" class="w-3 h-3 text-secondary/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h7"/>
+                  </svg>
+                  <svg v-else class="w-3 h-3 text-primary/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                </div>
+                <!-- Content -->
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-xs font-medium text-base-content/85">{{ cmd.trigger }}</span>
+                    <span class="badge badge-xs" :class="cmd.type === 'workflow' ? 'badge-secondary' : 'badge-primary'" style="opacity:0.7">{{ cmd.type }}</span>
+                    <span v-if="cmd.source === 'project'" class="badge badge-xs badge-ghost" style="opacity:0.6">proj</span>
+                  </div>
+                  <div v-if="cmd.description && cmd.name !== cmd.trigger" class="text-[11px] text-base-content/40 truncate mt-0.5">{{ cmd.description }}</div>
+                </div>
+              </button>
+            </div>
           </div>
-          <div v-if="!recentEvents.length" class="p-8 text-center text-base-content/40">
-            Waiting for events...
+
+          <div class="flex items-end gap-2">
+            <textarea
+              v-model="taskInput"
+              class="flex-1 rounded-xl border border-base-300 bg-base-100 px-4 py-3 font-mono text-sm resize-none focus:outline-none focus:border-primary/50 transition-colors leading-relaxed placeholder:text-base-content/20 max-h-36 min-h-[44px]"
+              :placeholder="showSlashMenu ? '' : 'Ask agent007 something… or type / for commands'"
+              rows="1"
+              @input="onChatInput"
+              @keydown="onChatKeydown"
+              :disabled="chatPending"
+            ></textarea>
+            <button
+              class="btn btn-primary btn-square shrink-0 self-end"
+              :class="{ 'loading': chatPending }"
+              @click="submitTask"
+              :disabled="!taskInput.trim() || chatPending"
+            >
+              <svg v-if="!chatPending" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.269 20.876L5.999 12zm0 0h7.5"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex items-center justify-between mt-2 px-1">
+            <span class="text-[10px] font-mono text-base-content/20">↵ send · Shift↵ newline · / for commands</span>
+            <span class="text-[10px] font-mono text-base-content/20" v-if="chatMessages.length">{{ chatMessages.filter(m => m.role === 'user').length }} task(s)</span>
           </div>
         </div>
       </div>
-    </div>
+    </Transition>
 
-    <!-- Task input bar -->
-    <div class="px-4 py-3 border-t border-base-300 bg-base-200 flex items-center gap-3">
-      <span class="text-primary font-bold font-mono text-sm shrink-0 select-none">›_</span>
-      <input
-        v-model="taskInput"
-        class="input input-sm flex-1 font-mono text-sm bg-base-300/50 border-base-300 focus:border-primary/50 placeholder:text-base-content/25"
-        placeholder="describe a task for agent007…"
-        @keydown.enter="submitTask"
-      />
-      <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="submitTask">run</button>
-      <span v-if="taskStatus" class="text-[11px] font-mono text-base-content/50 shrink-0">{{ taskStatus }}</span>
-    </div>
   </div>
 </template>

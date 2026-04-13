@@ -219,6 +219,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, popup);
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::App;
