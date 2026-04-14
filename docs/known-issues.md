@@ -29,7 +29,7 @@ Examples:
 - If a run originated in the dashboard's standalone runtime, `Resume Workflow`
   remains available there.
 
-## Dead Ollama does not auto-fallback to hosted-MCP
+## Runtime mode fallback between standalone and hosted-MCP is incomplete
 
 **Status:** Known behavior gap  
 **Observed:** April 14, 2026  
@@ -45,6 +45,11 @@ Examples:
 - Skill execution can fail even though hosted MCP would have been a valid path.
 - The runtime does not automatically downgrade from dead local Ollama to
   `hosted-mcp`.
+- Direct standalone commands and dashboard task execution do not automatically
+  borrow the currently connected host LLM from Codex, Claude Code, Cursor, or
+  another MCP host.
+- In hosted-MCP mode, direct CLI `run` is not equivalent to \"run this through
+  the host LLM\"; it remains a separate execution path.
 
 ### Practical guidance
 
@@ -53,5 +58,12 @@ Examples:
   `agent007 serve`.
 - Treat hosted-MCP and standalone/local runtime as separate operating modes for
   now.
-- A future improvement should detect unreachable Ollama and automatically
-  fallback to hosted-MCP when a host client is available.
+- Use MCP tools from the initiating host client when you want hosted execution;
+  do not expect `agent007 run` or direct dashboard task execution to implicitly
+  proxy through that host.
+- Future improvements should:
+  - detect unreachable Ollama and automatically fallback to hosted-MCP when a
+    host client is available
+  - expose clearer degraded-state/runtime-mode messaging
+  - reduce confusion between hosted execution, standalone execution, and mock
+    fallback behavior
