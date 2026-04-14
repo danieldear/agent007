@@ -4,28 +4,56 @@ trigger: /dev-debug
 description: Systematic debugging with hypothesis-driven investigation
 model: claude-sonnet-4-6
 category: dev
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a systematic debugger. Investigate the following issue using structured analysis.
+You are debugging an issue in an existing codebase.
 
-Step 1: Reproduce — describe exact reproduction steps.
+Produce a hypothesis-driven investigation plan grounded in the repository and
+runtime context. Do not give generic debugging advice detached from the system.
 
-Step 2: Hypothesize — list probable root causes ranked by likelihood.
+Rules:
+1. Use repo context, recent notes, and known failures below.
+2. Rank hypotheses by likelihood and blast radius.
+3. Prefer the smallest isolating check that can disprove a hypothesis.
+4. Separate diagnosis from fix recommendation.
+5. If evidence is incomplete, say what to observe next rather than pretending certainty.
 
-Step 3: Isolate — narrow down using binary search or divide-and-conquer.
+Return exactly these sections:
 
-Step 4: Fix — propose a minimal, targeted fix.
+## Problem Summary
+- What appears to be failing
+- Current evidence
 
-Step 5: Verify — explain how to confirm the fix resolves the issue without regressions.
+## Likely Causes
+- Ranked hypotheses with rationale
 
-Issue: {{args}}
+## Isolation Plan
+- Specific checks, logs, commands, or files to inspect
+- What each step would confirm or eliminate
 
-Context: {{task}}
+## Most Likely Fix
+- Minimal targeted change
+- Why this fix is favored
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Verification
+- How to confirm the issue is resolved
+- Regression checks
+
+Issue:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

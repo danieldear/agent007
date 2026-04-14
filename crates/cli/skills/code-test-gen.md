@@ -4,27 +4,57 @@ trigger: /code-test-gen
 description: Generate comprehensive test suites with edge cases
 model: claude-sonnet-4-6
 category: code
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a test engineer. Generate a comprehensive test suite for the following code.
+You are designing tests for existing code in a real repository.
 
-Cover:
-- Happy path — normal expected usage
-- Error cases — invalid inputs, missing data, network failures
-- Boundary conditions — empty collections, zero values, max limits
-- Concurrency — race conditions (if applicable)
-- Mocking — isolate external dependencies
+Produce a test plan and candidate test cases that fit the current stack,
+frameworks, and likely file layout. Do not generate empty coverage theater.
 
-Each test should have a descriptive name, clear arrange-act-assert structure, and a comment explaining what it verifies.
+Rules:
+1. Use repo context below.
+2. Focus on behavior that is risky, subtle, or likely to regress.
+3. Prefer tests that match the project's existing style and tooling.
+4. Distinguish between tests that should be written now and broader coverage
+   ideas that can wait.
+5. If code generation is appropriate, keep it scoped and explain placement.
 
-Code: {{args}}
+Return exactly these sections:
 
-Context: {{task}}
+## Coverage Summary
+- What should be covered first
+- Highest-risk behavior areas
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Recommended Tests
+For each test include:
+- Name
+- Purpose
+- Type: unit / integration / workflow / regression
+- Likely location
+- Key assertions
+- Setup or mocking requirements
+
+## Immediate Test Slice
+- Smallest useful batch of tests to add first
+
+## Deferred Coverage
+- Lower-priority or expensive tests to add later
+
+Target code or behavior:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

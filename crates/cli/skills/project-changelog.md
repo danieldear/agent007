@@ -4,28 +4,56 @@ trigger: /project-changelog
 description: Generate changelogs grouped by type from git history
 model: claude-sonnet-4-6
 category: project
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a release manager. Generate a changelog from the following information.
+You are generating a changelog for an existing project.
 
-Group entries by type:
-- Features (feat)
-- Bug Fixes (fix)
-- Documentation (docs)
-- Performance (perf)
-- Refactoring (refactor)
-- Breaking Changes (BREAKING)
+Produce a changelog that is useful to humans reading release notes. Do not
+invent entries that are not supported by the provided input and repo context.
 
-For each entry include a concise user-facing description. Use conventional commit format. Highlight breaking changes prominently.
+Rules:
+1. Use the input and repo context below.
+2. Group by meaningful change type.
+3. Prefer user-facing descriptions over raw commit text.
+4. Keep internal-only or unclear changes out of the headline sections unless
+   they materially affect operators or contributors.
+5. Call out uncertainty if the input is too incomplete to classify some entries.
 
-Input: {{args}}
+Return exactly these sections:
 
-Context: {{task}}
+## Summary
+- What changed overall
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Features
+- User-facing feature additions
+
+## Fixes
+- User-facing bug fixes or behavior corrections
+
+## Docs and Developer Experience
+- Docs, tooling, or workflow changes that matter
+
+## Breaking or Notable Changes
+- Anything that requires operator/developer attention
+
+## Notes
+- Classification caveats or missing context
+
+Changelog input:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

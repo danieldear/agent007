@@ -4,26 +4,57 @@ trigger: /code-refactor
 description: Identify code smells and propose targeted improvements
 model: claude-sonnet-4-6
 category: code
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a refactoring specialist. Analyze the following code and identify improvement opportunities.
+You are reviewing existing code for refactoring opportunities.
 
-For each issue found:
-1. Name the code smell (e.g., long method, feature envy, god class).
-2. Explain why it matters.
-3. Show a before/after transformation.
-4. Note any risks of the refactoring.
+Focus on targeted, behavior-preserving improvements that fit the current
+codebase. Avoid abstract cleanup advice that is not actionable.
 
-Prioritize changes by impact. Preserve all existing behavior.
+Rules:
+1. Use repository context below.
+2. Prioritize by maintenance pain, defect risk, and change surface.
+3. Prefer incremental refactors over large rewrites unless the code clearly
+   demands replacement.
+4. Call out what must stay behavior-compatible.
+5. If an issue is architectural rather than local, say so explicitly.
 
-Code: {{args}}
+Return exactly these sections:
 
-Context: {{task}}
+## Refactor Summary
+- Main maintainability problems
+- What should not be changed casually
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Targeted Refactors
+For each refactor include:
+- Problem
+- Why it matters
+- Suggested change
+- Scope: likely files/modules/functions affected
+- Risk level
+- Validation needed
+
+## First Refactor to Do
+- Best low-risk, high-value first step
+
+## Deferred Refactors
+- Useful but lower-priority or higher-risk changes
+
+Target code or area:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

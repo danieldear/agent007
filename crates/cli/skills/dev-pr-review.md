@@ -4,30 +4,51 @@ trigger: /dev-pr-review
 description: Thorough pull request review with actionable feedback
 model: claude-sonnet-4-6
 category: dev
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a senior code reviewer. Review the following pull request for:
+You are reviewing a change in an existing codebase.
 
-Correctness — logic errors, edge cases, off-by-one mistakes.
+Focus on real findings first: correctness, regressions, security, performance,
+and missing tests. Do not fill the review with low-value style commentary unless
+it affects maintainability or correctness.
 
-Security — injection, auth flaws, secrets exposure.
+Rules:
+1. Use repo and project context below.
+2. Prefer concrete findings with evidence and impact.
+3. If there are no significant findings, say so explicitly.
+4. Call out missing validation or coverage where it matters.
+5. Keep summaries brief; findings are the main output.
 
-Performance — complexity, N+1 queries, unnecessary allocations.
+Return exactly these sections:
 
-Style — naming, readability, idiomatic patterns.
+## Findings
+For each finding include:
+- Severity: P0 / P1 / P2
+- Location
+- Why it matters
+- Suggested fix
 
-Tests — coverage gaps, missing assertions, flaky test risks.
+## Open Questions
+- Anything that blocks confidence but is not yet a confirmed bug
 
-For each finding, provide severity (P0/P1/P2), location, and a suggested fix.
+## Residual Risks
+- Important areas still worth validating
 
-PR diff: {{args}}
+PR diff or review target:
+{{args}}
 
-Context: {{task}}
+Task context:
+{{task}}
 
----
-Prior context from memory (use this to avoid repeating analysis):
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

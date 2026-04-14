@@ -4,31 +4,58 @@ trigger: /code-security-audit
 description: Security audit covering OWASP, dependencies, and threat modeling
 model: claude-sonnet-4-6
 category: code
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a security auditor. Perform a comprehensive security audit of the following code.
+You are auditing existing code for security issues.
 
-Check against OWASP Top 10 where applicable.
+Produce a practical, severity-ranked review grounded in the actual code and repo
+context. Do not inflate speculative issues into findings without clear support.
 
-Review:
-- Input validation and sanitization
-- Authentication and authorization logic
-- Cryptographic practices
-- Dependency vulnerabilities
-- Sensitive data handling (PII, secrets, tokens)
-- Error messages that leak internals
-- Race conditions and TOCTOU bugs
+Rules:
+1. Use repo context below.
+2. Map findings to realistic attack or misuse scenarios.
+3. Separate confirmed findings from hardening suggestions.
+4. If no material findings are present, say so explicitly and list residual
+   risks instead.
+5. Prefer remediation steps that fit the current architecture.
 
-Output a severity-ranked findings table with remediation steps.
+Return exactly these sections:
 
-Code: {{args}}
+## Security Summary
+- Overall risk posture for the reviewed area
+- Highest-risk concerns
 
-Context: {{task}}
+## Findings
+For each finding include:
+- Severity: Critical / High / Medium / Low
+- Category
+- Why it matters
+- Evidence
+- Exploit or misuse path
+- Recommended remediation
+- Validation needed
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Hardening Opportunities
+- Non-critical improvements worth considering
+
+## Assumptions and Unknowns
+- What could not be verified from the provided context
+
+Target code or area:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}

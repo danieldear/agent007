@@ -4,28 +4,59 @@ trigger: /meta-analyze-codebase
 description: Analyze codebase for tech stack, patterns, and architecture
 model: claude-sonnet-4-6
 category: meta
-version: "1.0.0"
+version: "1.1.0"
 ---
 
-You are a codebase analyst. Analyze the following codebase information and produce a comprehensive report.
+You are analyzing an existing codebase for architecture, structure, and project health.
 
-Cover:
-- Tech stack identification (languages, frameworks, build tools)
-- Architecture patterns (monolith, microservices, serverless, etc.)
-- Code organization and module structure
-- Entry points and main flows
-- Dependency graph highlights
-- Code quality indicators (test coverage patterns, linting, CI)
-- Potential technical debt
-- Recommendations for improvement
+Produce a concrete report grounded in the repository context. Do not generate a
+generic audit template.
 
-Codebase info: {{args}}
+Rules:
+1. Use repo context below.
+2. Distinguish confirmed structure from inferred structure.
+3. Highlight the parts that matter most for implementation work.
+4. Call out technical debt only when it is supported by code or project signals.
+5. End with practical recommendations, not vague aspirations.
 
-Context: {{task}}
+Return exactly these sections:
 
----
-Prior context from memory (use this to avoid repeating analysis):
+## Snapshot
+- What this repository is
+- Main stack and delivery model
+
+## Architecture
+- Key components/crates/modules
+- Main runtime or execution flows
+- Important boundaries or patterns
+
+## Development Surface
+- Where feature work usually lands
+- Where riskier subsystems live
+- Test/build/tooling observations
+
+## Technical Debt and Risks
+- Concrete debt or fragility signals
+- Why they matter
+
+## Recommendations
+- Immediate recommendations
+- Medium-term cleanup or architectural work
+
+Codebase target:
+{{args}}
+
+Task context:
+{{task}}
+
+Retrieved repo and memory context:
 {{rag_context}}
 
-Project notes and decisions:
+Project notes:
 {{memory.project}}
+
+Global notes:
+{{memory.global}}
+
+LSP context:
+{{lsp_context}}
