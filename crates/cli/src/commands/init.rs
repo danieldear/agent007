@@ -25,6 +25,21 @@ fn section(msg: &str) {
     println!("\n{BOLD}{msg}{RESET}");
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardMode {
+    ServedByMcpProcess,
+    SeparateProcess,
+}
+
+#[derive(Debug, Clone)]
+struct IntegrationCheck {
+    label: &'static str,
+    config_path: PathBuf,
+    command: String,
+    args: Vec<String>,
+    dashboard_mode: DashboardMode,
+}
+
 fn ensure_dir(path: &Path, label: &str) -> Result<bool> {
     if path.exists() {
         ok(&format!("{label} already exists"));
@@ -188,6 +203,116 @@ fn write_toml_root(path: &Path, root: &toml::Value, label: &str) -> Result<()> {
     ok(&format!("Wrote {label}"));
     ok(&format!("  config: {}", path.display()));
     Ok(())
+}
+
+fn dashboard_mode_for_args(args: &[String]) -> DashboardMode {
+    if args.iter().any(|arg| arg == "--no-dashboard") {
+        DashboardMode::SeparateProcess
+    } else {
+        DashboardMode::ServedByMcpProcess
+    }
+}
+
+fn verify_binary_target(cmd: &str) {
+    let path = Path::new(cmd);
+    if path.is_absolute() {
+        if path.exists() {
+            ok(&format!("agent007 binary resolved → {}", path.display()));
+        } else {
+            warn(&format!(
+                "configured binary path does not exist → {}",
+                path.display()
+            ));
+        }
+    } else {
+        info(&format!("agent007 binary resolved via PATH lookup → {cmd}"));
+    }
+}
+
+fn parse_json_command_entry(
+    path: &Path,
+    label: &'static str,
+    top_level_key: &str,
+) -> Result<IntegrationCheck> {
+    let root = load_json_root(path, label)?;
+    let entry = root
+        .get(top_level_key)
+        .and_then(|value| value.get("agent007"))
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| anyhow!("{label} missing agent007 entry at {}", path.display()))?;
+
+    let command = entry
+        .get("command")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("{label} missing command at {}", path.display()))?
+        .to_string();
+    let args = entry
+        .get("args")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow!("{label} missing args at {}", path.display()))?
+        .iter()
+        .filter_map(|value| value.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+
+    Ok(IntegrationCheck {
+        label,
+        config_path: path.to_path_buf(),
+        dashboard_mode: dashboard_mode_for_args(&args),
+        command,
+        args,
+    })
+}
+
+fn parse_toml_command_entry(
+    path: &Path,
+    label: &'static str,
+    top_level_key: &str,
+) -> Result<IntegrationCheck> {
+    let root = load_toml_root(path, label)?;
+    let entry = root
+        .get(top_level_key)
+        .and_then(|value| value.get("agent007"))
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| anyhow!("{label} missing agent007 entry at {}", path.display()))?;
+
+    let command = entry
+        .get("command")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("{label} missing command at {}", path.display()))?
+        .to_string();
+    let args = entry
+        .get("args")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow!("{label} missing args at {}", path.display()))?
+        .iter()
+        .filter_map(|value| value.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+
+    Ok(IntegrationCheck {
+        label,
+        config_path: path.to_path_buf(),
+        dashboard_mode: dashboard_mode_for_args(&args),
+        command,
+        args,
+    })
+}
+
+fn print_integration_check(check: &IntegrationCheck) {
+    ok(&format!(
+        "{} MCP entry verified → {} {}",
+        check.label,
+        check.command,
+        check.args.join(" ")
+    ));
+    info(&format!("config: {}", check.config_path.display()));
+    match check.dashboard_mode {
+        DashboardMode::ServedByMcpProcess => {
+            info("dashboard mode: same process as MCP (`serve`) — the web UI should come up with the editor-launched MCP server");
+        }
+        DashboardMode::SeparateProcess => {
+            info("dashboard mode: separate process (`--no-dashboard`) — start `agent007 dashboard` or `agent007 serve` manually if you want the web UI");
+        }
+    }
 }
 
 pub async fn execute(
@@ -569,10 +694,57 @@ pub async fn execute(
         step += 1;
     }
 
-    let _ = step;
+    section(&format!("{step}. Verifying editor integration wiring"));
+    verify_binary_target(&binary_path);
+    if do_claude {
+        let check = parse_json_command_entry(
+            &claude_scope_dir.join("settings.json"),
+            "Claude Code settings.json",
+            "mcpServers",
+        )?;
+        print_integration_check(&check);
+    }
+    if do_cursor {
+        let check = parse_json_command_entry(
+            &cursor_scope_dir.join("mcp.json"),
+            "Cursor mcp.json",
+            "mcpServers",
+        )?;
+        print_integration_check(&check);
+    }
+    if do_codex {
+        let check = parse_toml_command_entry(
+            &codex_scope_dir.join("config.toml"),
+            "Codex config.toml",
+            "mcp_servers",
+        )?;
+        print_integration_check(&check);
+    }
+    if do_copilot {
+        let check = parse_json_command_entry(
+            &copilot_scope_dir.join("mcp.json"),
+            "VS Code mcp.json",
+            "servers",
+        )?;
+        print_integration_check(&check);
+    }
+    if do_zed {
+        let zed_scope_dir = if global {
+            dirs_home().join(".config").join("zed")
+        } else {
+            project_dir.join(".zed")
+        };
+        let check = parse_json_command_entry(
+            &zed_scope_dir.join("settings.json"),
+            "Zed settings.json",
+            "context_servers",
+        )?;
+        print_integration_check(&check);
+    }
+    step += 1;
 
     // ── 9. Environment check ───────────────────────────────────────────────
-    section("9. Environment check");
+    section(&format!("{step}. Environment check"));
 
     let anthropic_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
     let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
@@ -610,6 +782,8 @@ pub async fn execute(
         warn("git not found in PATH")
     }
 
+    step += 1;
+
     // ── 10. Summary ────────────────────────────────────────────────────────
     let skill_count = std::fs::read_dir(&home.join("skills"))
         .map(|d| {
@@ -620,6 +794,7 @@ pub async fn execute(
         .unwrap_or(0);
 
     println!();
+    section(&format!("{step}. Summary"));
     println!("{BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
     println!("{BOLD}{GREEN}agent007 is ready!{RESET}");
     println!("{BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
