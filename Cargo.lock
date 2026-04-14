@@ -339,6 +339,7 @@ dependencies = [
  "agent007-skills",
  "agent007-testing",
  "agent007-workflows",
+ "anyhow",
  "async-trait",
  "axum",
  "axum-test",

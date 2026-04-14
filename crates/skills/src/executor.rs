@@ -111,6 +111,10 @@ impl SkillExecutor {
         ctx.insert("rag_context", &rag_context);
         ctx.insert("lsp_context", &lsp_context_str);
         ctx.insert(
+            "skill_dir",
+            &skill.skill_dir().to_string_lossy().to_string(),
+        );
+        ctx.insert(
             "memory",
             &serde_json::json!({
                 "user": memory_user,
@@ -164,6 +168,7 @@ mod tests {
         CompletionRequest, CompletionResponse, EmbeddingProvider, ModelError, ModelProvider,
     };
     use async_trait::async_trait;
+    use std::path::PathBuf;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -257,6 +262,9 @@ mod tests {
                 tags: Vec::new(),
             },
             template: template.to_string(),
+            manifest_path: PathBuf::new(),
+            entry_path: PathBuf::new(),
+            skill_dir: PathBuf::from("/tmp/test-skill"),
         }
     }
 
@@ -318,5 +326,18 @@ mod tests {
         let skill = make_skill("Args: {{args}}", "claude-sonnet-4-6");
         executor.execute(&skill, "plan").await.unwrap();
         assert_eq!(provider.last_model(), Some("ollama".to_string()));
+    }
+
+    #[tokio::test]
+    async fn executor_injects_skill_dir_into_template_context() {
+        let dir = TempDir::new().unwrap();
+        let provider = Arc::new(MockModelProvider::new());
+        let executor = make_executor(dir.path(), Arc::clone(&provider));
+        let skill = make_skill("Skill dir: {{skill_dir}}", "claude");
+
+        let result = executor.execute(&skill, "x").await.unwrap();
+        assert_eq!(result, "mock-output");
+        // Smoke assertion on render path: execution succeeded with the new variable present.
+        assert_eq!(provider.call_count(), 1);
     }
 }

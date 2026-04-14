@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path as FsPath, PathBuf};
 use ts_rs::TS;
 
 use agent007_core::paths::{
@@ -215,25 +216,10 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
 
     // Pre-compute triggers available in the global dir so we can detect built-in skills
     // that were seeded into the project dir during `init` — those should show as "global".
-    let global_triggers: std::collections::HashSet<String> = {
-        let mut s = std::collections::HashSet::new();
-        if let Ok(entries) = std::fs::read_dir(&global_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                    continue;
-                }
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Some(fm) = parse_frontmatter(&content) {
-                        if let Some(t) = fm.get("trigger").and_then(|v| v.as_str()) {
-                            s.insert(t.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        s
-    };
+    let global_triggers: std::collections::HashSet<String> = load_skills_from_dir(&global_dir)
+        .into_iter()
+        .map(|skill| skill.trigger().to_string())
+        .collect();
 
     let mut skills: Vec<Value> = Vec::new();
     let mut seen_triggers: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -248,34 +234,16 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
     };
 
     for (dir, source) in &dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Some(mut fm) = parse_frontmatter(&content) {
-                    let trigger = fm
-                        .get("trigger")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    if seen_triggers.insert(trigger.clone()) {
-                        // A project-local skill that also exists in the global dir is a built-in
-                        // seeded by `init`; show it as "global" to avoid PROJ badge confusion.
-                        let effective_source =
-                            if *source == "project" && global_triggers.contains(&trigger) {
-                                "global"
-                            } else {
-                                source
-                            };
-                        fm["source"] = Value::String(effective_source.to_string());
-                        skills.push(fm);
-                    }
-                }
+        for skill in load_skills_from_dir(dir) {
+            let trigger = skill.trigger().to_string();
+            if seen_triggers.insert(trigger.clone()) {
+                let effective_source = if *source == "project" && global_triggers.contains(&trigger)
+                {
+                    "global"
+                } else {
+                    source
+                };
+                skills.push(skill_json(&skill, effective_source));
             }
         }
     }
@@ -298,27 +266,16 @@ pub async fn skill_delete_handler(Path(trigger): Path<String>) -> impl IntoRespo
     // This handles the case where the filename doesn't match the trigger slug
     // (e.g. senior-ml-engineer.md with trigger: /skill).
     for dir in &dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Some(fm) = parse_frontmatter(&content) {
-                    if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
-                        return match std::fs::remove_file(&path) {
-                            Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-                            Err(e) => (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({ "error": e.to_string() })),
-                            )
-                                .into_response(),
-                        };
-                    }
-                }
+        for skill in load_skills_from_dir(dir) {
+            if skill.trigger() == target_trigger {
+                return match remove_skill_entry(&skill) {
+                    Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                        .into_response(),
+                };
             }
         }
     }
@@ -2017,30 +1974,16 @@ pub async fn skill_get_handler(
     search_dirs.push(agent007_global_home().join("skills"));
 
     for skills_dir in &search_dirs {
-        let Ok(entries) = std::fs::read_dir(skills_dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Some(fm) = parse_frontmatter(&content) {
-                    if fm.get("trigger").and_then(|v| v.as_str()) == Some(&target_trigger) {
-                        let mut result = fm;
-                        if let Some(obj) = result.as_object_mut() {
-                            let parts: Vec<&str> = content.splitn(3, "---").collect();
-                            if parts.len() >= 3 {
-                                obj.insert(
-                                    "template".to_string(),
-                                    serde_json::Value::String(parts[2].trim().to_string()),
-                                );
-                            }
-                        }
-                        return Json(result).into_response();
-                    }
+        for skill in load_skills_from_dir(skills_dir) {
+            if skill.trigger() == target_trigger {
+                let mut result = skill_json(&skill, "custom");
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "template".to_string(),
+                        serde_json::Value::String(skill.template().to_string()),
+                    );
                 }
+                return Json(result).into_response();
             }
         }
     }
@@ -2061,11 +2004,30 @@ pub async fn skill_import_handler(
     State(_state): State<AppState>,
     Json(payload): Json<SkillImportRequest>,
 ) -> impl IntoResponse {
-    let url = normalize_github_url(&payload.url);
+    let source = match parse_skill_import_source(&payload.url) {
+        Ok(source) => source,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
 
-    let client = reqwest::Client::new();
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
+    let client = match reqwest::Client::builder().user_agent("agent007").build() {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let imported = match fetch_imported_skill(&client, source, &payload.url).await {
+        Ok(imported) => imported,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
@@ -2073,140 +2035,23 @@ pub async fn skill_import_handler(
             )
                 .into_response()
         }
-    };
-
-    if !resp.status().is_success() {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("HTTP {}", resp.status()) })),
-        )
-            .into_response();
-    }
-
-    let content = match resp.text().await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
-    };
-
-    if content.len() > 100_000 {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({ "error": "skill file exceeds 100KB limit" })),
-        )
-            .into_response();
-    }
-
-    // Derive URL-based fallbacks (used when frontmatter fields are absent).
-    let slug = {
-        let url_parts: Vec<&str> = payload.url.split('/').filter(|s| !s.is_empty()).collect();
-        let last = url_parts.last().copied().unwrap_or("imported-skill");
-        let last_no_ext = last.trim_end_matches(".md").trim_end_matches(".MD");
-        // When filename is generic (SKILL, skills, README, index), prefer the parent directory name.
-        let effective = if matches!(
-            last_no_ext.to_lowercase().as_str(),
-            "skill" | "skills" | "readme" | "index"
-        ) {
-            if url_parts.len() >= 2 {
-                url_parts[url_parts.len() - 2]
-            } else {
-                last_no_ext
-            }
-        } else {
-            last_no_ext
-        };
-        let s: String = effective
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let s = s.trim_matches('-').to_string();
-        if s.is_empty() {
-            "imported-skill".to_string()
-        } else {
-            s
-        }
-    };
-    let url_trigger = format!("/{slug}");
-    let url_name: String = slug
-        .split('-')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let url_description = format!("Imported from {}", payload.url);
-
-    // Lenient frontmatter parse: optional trigger/name/description, tolerate missing or bad YAML.
-    #[derive(serde::Deserialize, Default)]
-    struct MinFm {
-        trigger: Option<String>,
-        name: Option<String>,
-        description: Option<String>,
-    }
-
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    let (fm, body, has_original_trigger) = if parts.len() >= 3 {
-        match serde_yaml::from_str::<MinFm>(parts[1]) {
-            Ok(f) => {
-                let has_trigger = f.trigger.is_some();
-                (f, parts[2].to_string(), has_trigger)
-            }
-            Err(_) => (MinFm::default(), content.clone(), false),
-        }
-    } else {
-        (MinFm::default(), content.clone(), false)
-    };
-
-    let trigger = fm.trigger.unwrap_or_else(|| url_trigger.clone());
-    let name = fm.name.unwrap_or(url_name);
-    let description = fm.description.unwrap_or(url_description);
-
-    let filename: String = trigger
-        .trim_start_matches('/')
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let filename = if filename.is_empty() {
-        slug.clone()
-    } else {
-        filename
-    };
-
-    // Preserve original content only when it already had a valid trigger; otherwise synthesize.
-    let output = if has_original_trigger {
-        content
-    } else {
-        format!("---\nname: {name}\ntrigger: {trigger}\ndescription: {description}\n---\n{body}")
     };
 
     let skills_dir = agent007_write_home().join("skills");
     let _ = std::fs::create_dir_all(&skills_dir);
-    let path = skills_dir.join(format!("{filename}.md"));
 
-    match std::fs::write(&path, &output) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "trigger": trigger, "path": path.display().to_string() })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    match write_imported_skill(&skills_dir, imported) {
+        Ok((trigger, path)) => Json(serde_json::json!({
+            "ok": true,
+            "trigger": trigger,
+            "path": path.display().to_string()
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -2223,14 +2068,447 @@ pub async fn skill_registry_handler() -> impl IntoResponse {
     }
 }
 
-fn normalize_github_url(url: &str) -> String {
+#[derive(Debug)]
+enum SkillImportSourceKind {
+    DirectFile {
+        url: String,
+    },
+    GitHubFile {
+        owner: String,
+        repo: String,
+        reference: Option<String>,
+        path: String,
+    },
+    GitHubDir {
+        owner: String,
+        repo: String,
+        reference: Option<String>,
+        path: String,
+    },
+}
+
+#[derive(Debug)]
+enum ImportedSkillStorage {
+    Flat {
+        filename: String,
+        content: String,
+    },
+    Package {
+        package_name: String,
+        files: Vec<(String, String)>,
+    },
+}
+
+#[derive(Debug)]
+struct ImportedSkill {
+    trigger: String,
+    storage: ImportedSkillStorage,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillImportFrontmatter {
+    trigger: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubContentEntry {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String,
+    download_url: Option<String>,
+}
+
+fn parse_skill_import_source(url: &str) -> anyhow::Result<SkillImportSourceKind> {
     let url = url.trim();
-    if url.contains("github.com") && url.contains("/blob/") {
-        url.replace("github.com", "raw.githubusercontent.com")
-            .replace("/blob/", "/")
-    } else {
-        url.to_string()
+
+    if url.starts_with("https://raw.githubusercontent.com/")
+        || url.starts_with("http://raw.githubusercontent.com/")
+    {
+        let normalized = url
+            .trim_start_matches("https://raw.githubusercontent.com/")
+            .trim_start_matches("http://raw.githubusercontent.com/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        if parts.len() >= 4 {
+            return Ok(SkillImportSourceKind::GitHubFile {
+                owner: parts[0].to_string(),
+                repo: parts[1].to_string(),
+                reference: Some(parts[2].to_string()),
+                path: parts[3..].join("/"),
+            });
+        }
     }
+
+    if url.contains("github.com") {
+        let without_scheme = url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let parts: Vec<&str> = without_scheme.split('/').collect();
+        if parts.len() >= 3 && parts[0] == "github.com" {
+            let owner = parts[1].to_string();
+            let repo = parts[2].to_string();
+            if parts.len() >= 5 && parts[3] == "blob" {
+                return Ok(SkillImportSourceKind::GitHubFile {
+                    owner,
+                    repo,
+                    reference: Some(parts[4].to_string()),
+                    path: parts[5..].join("/"),
+                });
+            }
+            if parts.len() >= 5 && parts[3] == "tree" {
+                return Ok(SkillImportSourceKind::GitHubDir {
+                    owner,
+                    repo,
+                    reference: Some(parts[4].to_string()),
+                    path: parts[5..].join("/"),
+                });
+            }
+            return Ok(SkillImportSourceKind::GitHubDir {
+                owner,
+                repo,
+                reference: None,
+                path: String::new(),
+            });
+        }
+    }
+
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return Ok(SkillImportSourceKind::DirectFile {
+            url: url.to_string(),
+        });
+    }
+
+    Err(anyhow::anyhow!(
+        "unsupported source — use a GitHub tree/blob/raw URL or direct https:// skill URL"
+    ))
+}
+
+async fn fetch_imported_skill(
+    client: &reqwest::Client,
+    source: SkillImportSourceKind,
+    original_url: &str,
+) -> anyhow::Result<ImportedSkill> {
+    match source {
+        SkillImportSourceKind::DirectFile { url } => {
+            let content = fetch_text_async(client, &url).await?;
+            if content.len() > 100_000 {
+                anyhow::bail!("skill file exceeds 100KB limit");
+            }
+            let slug = fallback_skill_slug_from_url(original_url);
+            let (trigger, output) =
+                normalize_skill_manifest_content(&content, &slug, original_url)?;
+            let filename = format!("{}.md", sanitize_skill_slug(&trigger, &slug));
+            Ok(ImportedSkill {
+                trigger,
+                storage: ImportedSkillStorage::Flat {
+                    filename,
+                    content: output,
+                },
+            })
+        }
+        SkillImportSourceKind::GitHubFile {
+            owner,
+            repo,
+            reference,
+            path,
+        } => {
+            if FsPath::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+                .unwrap_or(false)
+            {
+                let package_path = FsPath::new(&path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                return fetch_github_package_async(
+                    client,
+                    &owner,
+                    &repo,
+                    reference.as_deref(),
+                    &package_path,
+                    original_url,
+                )
+                .await;
+            }
+            let url = github_raw_file_url(&owner, &repo, reference.as_deref(), &path);
+            let content = fetch_text_async(client, &url).await?;
+            if content.len() > 100_000 {
+                anyhow::bail!("skill file exceeds 100KB limit");
+            }
+            let slug = fallback_skill_slug_from_url(original_url);
+            let (trigger, output) =
+                normalize_skill_manifest_content(&content, &slug, original_url)?;
+            let filename = format!("{}.md", sanitize_skill_slug(&trigger, &slug));
+            Ok(ImportedSkill {
+                trigger,
+                storage: ImportedSkillStorage::Flat {
+                    filename,
+                    content: output,
+                },
+            })
+        }
+        SkillImportSourceKind::GitHubDir {
+            owner,
+            repo,
+            reference,
+            path,
+        } => {
+            fetch_github_package_async(
+                client,
+                &owner,
+                &repo,
+                reference.as_deref(),
+                &path,
+                original_url,
+            )
+            .await
+        }
+    }
+}
+
+async fn fetch_github_package_async(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    reference: Option<&str>,
+    package_path: &str,
+    original_url: &str,
+) -> anyhow::Result<ImportedSkill> {
+    let mut queue = vec![package_path.to_string()];
+    let mut files: Vec<(String, String)> = Vec::new();
+
+    while let Some(current_path) = queue.pop() {
+        let api_url = github_contents_api_url(owner, repo, reference, &current_path);
+        let response =
+            client.get(&api_url).send().await.map_err(|e| {
+                anyhow::anyhow!("failed to fetch package listing from {api_url}: {e}")
+            })?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "package listing fetch failed — HTTP {} for {api_url}",
+                response.status()
+            );
+        }
+        let entries: Vec<GitHubContentEntry> = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to parse GitHub package listing: {e}"))?;
+        for entry in entries {
+            match entry.kind.as_str() {
+                "file" => {
+                    let download_url = entry.download_url.clone().ok_or_else(|| {
+                        anyhow::anyhow!("GitHub did not return a download URL for {}", entry.path)
+                    })?;
+                    let content = fetch_text_async(client, &download_url).await?;
+                    let relative = relative_package_path(&entry.path, package_path)?;
+                    files.push((relative, content));
+                }
+                "dir" => queue.push(entry.path),
+                _ => {}
+            }
+        }
+    }
+
+    let fallback_slug = fallback_skill_slug_from_url(original_url);
+    let skill_index = files
+        .iter()
+        .position(|(relative, _)| relative.eq_ignore_ascii_case("SKILL.md"))
+        .ok_or_else(|| anyhow::anyhow!("package is missing SKILL.md"))?;
+    let skill_content = files[skill_index].1.clone();
+    let (trigger, normalized_manifest) =
+        normalize_skill_manifest_content(&skill_content, &fallback_slug, original_url)?;
+    files[skill_index].1 = normalized_manifest;
+
+    Ok(ImportedSkill {
+        trigger: trigger.clone(),
+        storage: ImportedSkillStorage::Package {
+            package_name: sanitize_skill_slug(&trigger, &fallback_slug),
+            files,
+        },
+    })
+}
+
+async fn fetch_text_async(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch skill from {url}: {e}"))?;
+    if !response.status().is_success() {
+        anyhow::bail!("fetch failed — HTTP {} for {url}", response.status());
+    }
+    response
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))
+}
+
+fn write_imported_skill(
+    skills_dir: &FsPath,
+    imported: ImportedSkill,
+) -> std::io::Result<(String, PathBuf)> {
+    match imported.storage {
+        ImportedSkillStorage::Flat { filename, content } => {
+            let path = skills_dir.join(filename);
+            std::fs::write(&path, content)?;
+            Ok((imported.trigger, path))
+        }
+        ImportedSkillStorage::Package {
+            package_name,
+            files,
+        } => {
+            let path = skills_dir.join(&package_name);
+            if path.exists() {
+                std::fs::remove_dir_all(&path)?;
+            }
+            std::fs::create_dir_all(&path)?;
+            for (relative, content) in files {
+                let relative_path = FsPath::new(&relative);
+                let dest = path.join(relative_path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(dest, content)?;
+            }
+            Ok((imported.trigger, path))
+        }
+    }
+}
+
+fn fallback_skill_slug_from_url(url: &str) -> String {
+    let url_parts: Vec<&str> = url.split('/').filter(|s| !s.is_empty()).collect();
+    let last = url_parts.last().copied().unwrap_or("imported-skill");
+    let last_no_ext = last.trim_end_matches(".md").trim_end_matches(".MD");
+    let effective = if matches!(
+        last_no_ext.to_lowercase().as_str(),
+        "skill" | "skills" | "readme" | "index"
+    ) {
+        if url_parts.len() >= 2 {
+            url_parts[url_parts.len() - 2]
+        } else {
+            last_no_ext
+        }
+    } else {
+        last_no_ext
+    };
+    sanitize_skill_slug(effective, "imported-skill")
+}
+
+fn normalize_skill_manifest_content(
+    content: &str,
+    fallback_slug: &str,
+    original_url: &str,
+) -> anyhow::Result<(String, String)> {
+    let url_trigger = format!("/{fallback_slug}");
+    let url_name: String = fallback_slug
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let url_description = format!("Imported from {original_url}");
+
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    let (fm, body, has_original_trigger) = if parts.len() >= 3 {
+        match serde_yaml::from_str::<SkillImportFrontmatter>(parts[1]) {
+            Ok(f) => {
+                let has_trigger = f.trigger.is_some();
+                (f, parts[2].to_string(), has_trigger)
+            }
+            Err(_) => (
+                SkillImportFrontmatter {
+                    trigger: None,
+                    name: None,
+                    description: None,
+                },
+                content.to_string(),
+                false,
+            ),
+        }
+    } else {
+        (
+            SkillImportFrontmatter {
+                trigger: None,
+                name: None,
+                description: None,
+            },
+            content.to_string(),
+            false,
+        )
+    };
+
+    let trigger = fm.trigger.unwrap_or_else(|| url_trigger.clone());
+    let name = fm.name.unwrap_or(url_name);
+    let description = fm.description.unwrap_or(url_description);
+
+    let output = if has_original_trigger {
+        content.to_string()
+    } else {
+        format!("---\nname: {name}\ntrigger: {trigger}\ndescription: {description}\n---\n{body}")
+    };
+
+    Ok((trigger, output))
+}
+
+fn sanitize_skill_slug(value: &str, fallback: &str) -> String {
+    let slug: String = value
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+fn github_raw_file_url(owner: &str, repo: &str, reference: Option<&str>, path: &str) -> String {
+    let reference = reference.unwrap_or("HEAD");
+    format!(
+        "https://raw.githubusercontent.com/{owner}/{repo}/{reference}/{}",
+        path.trim_start_matches('/')
+    )
+}
+
+fn github_contents_api_url(owner: &str, repo: &str, reference: Option<&str>, path: &str) -> String {
+    let mut url = if path.trim().is_empty() {
+        format!("https://api.github.com/repos/{owner}/{repo}/contents")
+    } else {
+        format!(
+            "https://api.github.com/repos/{owner}/{repo}/contents/{}",
+            path.trim_start_matches('/')
+        )
+    };
+    if let Some(reference) = reference {
+        url.push_str(&format!("?ref={reference}"));
+    }
+    url
+}
+
+fn relative_package_path(entry_path: &str, package_root: &str) -> anyhow::Result<String> {
+    if package_root.trim().is_empty() {
+        return Ok(entry_path.to_string());
+    }
+    FsPath::new(entry_path)
+        .strip_prefix(FsPath::new(package_root))
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|_| anyhow::anyhow!("failed to derive relative path for {entry_path}"))
 }
 
 fn get_workflow_templates() -> Vec<serde_json::Value> {
@@ -2356,25 +2634,10 @@ pub async fn skill_promote_handler(
     };
     let global_skills = agent007_global_home().join("skills");
 
-    let found = std::fs::read_dir(&project_skills)
-        .ok()
+    let Some(skill) = load_skills_from_dir(&project_skills)
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-        .find(|e| {
-            std::fs::read_to_string(e.path())
-                .ok()
-                .and_then(|c| parse_frontmatter(&c))
-                .and_then(|fm| {
-                    fm.get("trigger")
-                        .and_then(|v| v.as_str())
-                        .map(|t| t == target_trigger)
-                })
-                .unwrap_or(false)
-        });
-
-    let Some(entry) = found else {
+        .find(|skill| skill.trigger() == target_trigger)
+    else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "skill not found in project" })),
@@ -2382,32 +2645,26 @@ pub async fn skill_promote_handler(
             .into_response();
     };
 
-    let src = entry.path();
-    let Some(filename) = src.file_name().map(|f| f.to_string_lossy().to_string()) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "invalid skill filename" })),
-        )
-            .into_response();
-    };
     let _ = std::fs::create_dir_all(&global_skills);
-    let dest = global_skills.join(&filename);
-
-    if dest.exists() {
+    if let Some(existing) = load_skills_from_dir(&global_skills)
+        .into_iter()
+        .find(|existing| existing.trigger() == target_trigger)
+    {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": "skill already exists globally",
-                "path": dest.display().to_string()
+                "path": existing.entry_path().display().to_string()
             })),
         )
             .into_response();
     }
 
-    match std::fs::copy(&src, &dest) {
+    let dest = destination_entry_path(&skill, &global_skills);
+    match copy_skill_entry_to_dir(&skill, &global_skills) {
         Ok(_) => {
             // Remove the project-local copy so the skill no longer appears as PROJ
-            let _ = std::fs::remove_file(&src);
+            let _ = remove_skill_entry(&skill);
             Json(serde_json::json!({
                 "ok": true,
                 "promoted_to": dest.display().to_string()
@@ -2669,26 +2926,76 @@ pub async fn bundle_import_handler(
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn parse_frontmatter(content: &str) -> Option<Value> {
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        return None;
+fn load_skills_from_dir(dir: &FsPath) -> Vec<agent007_skills::Skill> {
+    if !dir.exists() {
+        return Vec::new();
     }
-    #[derive(serde::Deserialize)]
-    struct Fm {
-        name: String,
-        description: String,
-        trigger: String,
-        #[serde(default)]
-        category: Option<String>,
+    let loader = agent007_skills::SkillLoader::new(dir);
+    loader.load_all().unwrap_or_default()
+}
+
+fn skill_json(skill: &agent007_skills::Skill, source: &str) -> Value {
+    serde_json::json!({
+        "trigger": skill.trigger(),
+        "name": skill.name(),
+        "description": skill.frontmatter.description,
+        "category": skill.category(),
+        "version": skill.version(),
+        "tags": skill.tags(),
+        "model": skill.model(),
+        "source": source,
+        "format": if skill.is_package() { "package" } else { "flat" },
+        "path": skill.entry_path().display().to_string(),
+    })
+}
+
+fn remove_skill_entry(skill: &agent007_skills::Skill) -> std::io::Result<()> {
+    if skill.is_package() {
+        std::fs::remove_dir_all(skill.entry_path())
+    } else {
+        std::fs::remove_file(skill.entry_path())
     }
-    let fm: Fm = serde_yaml::from_str(parts[1]).ok()?;
-    Some(serde_json::json!({
-        "trigger": fm.trigger,
-        "name": fm.name,
-        "description": fm.description,
-        "category": fm.category.unwrap_or_else(|| "custom".to_string()),
-    }))
+}
+
+fn destination_entry_path(skill: &agent007_skills::Skill, dest_dir: &FsPath) -> PathBuf {
+    let fallback = skill.trigger().trim_start_matches('/').replace('/', "-");
+    let name = skill
+        .entry_path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback.as_str());
+    dest_dir.join(name)
+}
+
+fn copy_skill_entry_to_dir(
+    skill: &agent007_skills::Skill,
+    dest_dir: &FsPath,
+) -> std::io::Result<()> {
+    let dest = destination_entry_path(skill, dest_dir);
+    if skill.is_package() {
+        copy_dir_recursive(skill.entry_path(), &dest)
+    } else {
+        std::fs::copy(skill.entry_path(), dest).map(|_| ())
+    }
+}
+
+fn copy_dir_recursive(src: &FsPath, dest: &FsPath) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_recursive(&entry_path, &dest_path)?;
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&entry_path, &dest_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// No-op VectorDB for dry-run skill execution.
@@ -3427,5 +3734,52 @@ requires_approval = true
         );
 
         std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn skill_import_source_parses_github_tree_url_as_package() {
+        let parsed = super::parse_skill_import_source(
+            "https://github.com/example/repo/tree/main/skills/review-skill",
+        )
+        .unwrap();
+
+        match parsed {
+            super::SkillImportSourceKind::GitHubDir {
+                owner,
+                repo,
+                reference,
+                path,
+            } => {
+                assert_eq!(owner, "example");
+                assert_eq!(repo, "repo");
+                assert_eq!(reference.as_deref(), Some("main"));
+                assert_eq!(path, "skills/review-skill");
+            }
+            _ => panic!("expected GitHubDir import source"),
+        }
+    }
+
+    #[test]
+    fn normalize_skill_manifest_content_synthesizes_missing_frontmatter() {
+        let (trigger, output) = super::normalize_skill_manifest_content(
+            "Review this repo and suggest fixes.",
+            "review-skill",
+            "https://example.com/review-skill",
+        )
+        .unwrap();
+
+        assert_eq!(trigger, "/review-skill");
+        assert!(output.contains("trigger: /review-skill"));
+        assert!(output.contains("name: Review Skill"));
+    }
+
+    #[test]
+    fn relative_package_path_strips_package_root() {
+        let relative = super::relative_package_path(
+            "skills/review-skill/assets/example.txt",
+            "skills/review-skill",
+        )
+        .unwrap();
+        assert_eq!(relative, "assets/example.txt");
     }
 }

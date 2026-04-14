@@ -1,10 +1,12 @@
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkillFrontmatter {
     pub name: String,
     pub description: String,
     pub trigger: String,
+    #[serde(default = "default_model")]
     pub model: String,
     #[serde(default = "default_category")]
     pub category: String,
@@ -20,6 +22,10 @@ fn default_category() -> String {
     "custom".to_string()
 }
 
+fn default_model() -> String {
+    "claude-sonnet-4-6".to_string()
+}
+
 fn default_version() -> String {
     "1.0.0".to_string()
 }
@@ -28,6 +34,9 @@ fn default_version() -> String {
 pub struct Skill {
     pub frontmatter: SkillFrontmatter,
     pub template: String,
+    pub manifest_path: PathBuf,
+    pub entry_path: PathBuf,
+    pub skill_dir: PathBuf,
 }
 
 impl Skill {
@@ -51,5 +60,17 @@ impl Skill {
     }
     pub fn tags(&self) -> &[String] {
         &self.frontmatter.tags
+    }
+    pub fn manifest_path(&self) -> &Path {
+        &self.manifest_path
+    }
+    pub fn entry_path(&self) -> &Path {
+        &self.entry_path
+    }
+    pub fn skill_dir(&self) -> &Path {
+        &self.skill_dir
+    }
+    pub fn is_package(&self) -> bool {
+        self.entry_path != self.manifest_path
     }
 }
