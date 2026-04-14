@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +24,7 @@ use agent007_memory::store::{MemoryEntryType, MemoryMeta, MemoryStore};
 use agent007_memory::vectordb::LanceDBStore;
 use agent007_memory::Retriever;
 use agent007_models::{
-    ClaudeProvider, CodexProvider, MockProvider, ModelProvider, ModelRouter,
+    ClaudeProvider, CodexProvider, EmbeddingProvider, MockProvider, ModelProvider, ModelRouter,
     OllamaEmbeddingProvider, OllamaProvider,
 };
 use agent007_personas::PersonaRegistry;
@@ -53,6 +54,48 @@ pub struct Stack {
     pub workflow_runner: Arc<agent007_workflows::WorkflowRunner>,
     pub cancel: CancellationToken,
     pub tracker: TaskTracker,
+}
+
+struct ResilientEmbeddingProvider {
+    primary: Arc<dyn EmbeddingProvider>,
+    primary_name: String,
+    fallback_dim: usize,
+    warned: AtomicBool,
+}
+
+impl ResilientEmbeddingProvider {
+    fn new(primary: Arc<dyn EmbeddingProvider>, fallback_dim: usize) -> Self {
+        Self {
+            primary_name: primary.name().to_string(),
+            primary,
+            fallback_dim,
+            warned: AtomicBool::new(false),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingProvider for ResilientEmbeddingProvider {
+    fn name(&self) -> &str {
+        self.primary_name.as_str()
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, agent007_models::ModelError> {
+        match self.primary.embed(text).await {
+            Ok(embedding) => Ok(embedding),
+            Err(err) => {
+                if !self.warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        provider = %self.primary_name,
+                        fallback_dim = self.fallback_dim,
+                        error = %err,
+                        "embedding provider unavailable; falling back to zero-vector retrieval"
+                    );
+                }
+                Ok(vec![0.0; self.fallback_dim])
+            }
+        }
+    }
 }
 
 pub fn is_dry_run() -> bool {
@@ -456,18 +499,51 @@ async fn build_skill_executor(
     _skills_dir: &std::path::Path,
     is_dry_run: bool,
 ) -> Result<SkillExecutor> {
-    // Use OllamaEmbeddingProvider if Ollama is configured, else fall back to mock (all-zeros).
-    let (embedder, embed_dim): (Arc<dyn agent007_models::EmbeddingProvider>, usize) =
-        if let Some(ollama) = &config.models.ollama {
-            let ep = OllamaEmbeddingProvider::new(&ollama.base_url, "nomic-embed-text");
-            (Arc::new(ep), 768)
-        } else {
+    let rag_config = config
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.rag.as_ref());
+
+    // Prefer configured embeddings when available, but never let missing local
+    // embedding support break skills/workflows. Zero-vector fallback still
+    // enables keyword-based memory retrieval via Retriever.
+    let (embedder, embed_dim): (Arc<dyn EmbeddingProvider>, usize) = match rag_config {
+        Some(rag) if !rag.enabled => {
             let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
+            (Arc::new(ep) as Arc<dyn EmbeddingProvider>, 384)
+        }
+        Some(rag)
+            if rag.embedding_provider.eq_ignore_ascii_case("ollama")
+                && config.models.ollama.is_some() =>
+        {
+            let ollama = config.models.ollama.as_ref().unwrap();
+            let primary = Arc::new(OllamaEmbeddingProvider::new(
+                &ollama.base_url,
+                &rag.embedding_model,
+            )) as Arc<dyn EmbeddingProvider>;
             (
-                Arc::new(ep) as Arc<dyn agent007_models::EmbeddingProvider>,
-                384,
+                Arc::new(ResilientEmbeddingProvider::new(primary, 768))
+                    as Arc<dyn EmbeddingProvider>,
+                768,
             )
-        };
+        }
+        _ if config.models.ollama.is_some() => {
+            let ollama = config.models.ollama.as_ref().unwrap();
+            let primary = Arc::new(OllamaEmbeddingProvider::new(
+                &ollama.base_url,
+                "nomic-embed-text",
+            )) as Arc<dyn EmbeddingProvider>;
+            (
+                Arc::new(ResilientEmbeddingProvider::new(primary, 768))
+                    as Arc<dyn EmbeddingProvider>,
+                768,
+            )
+        }
+        _ => {
+            let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
+            (Arc::new(ep) as Arc<dyn EmbeddingProvider>, 384)
+        }
+    };
 
     // Try to build LanceDB; in dry-run, fall back to a no-op VectorDB if it fails.
     let db: Arc<dyn agent007_memory::VectorDB> = if is_dry_run {
@@ -722,6 +798,23 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::test_support::env_lock;
+    use agent007_models::ModelError;
+
+    struct FailingEmbedder;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FailingEmbedder {
+        fn name(&self) -> &str {
+            "failing-embedder"
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, ModelError> {
+            Err(ModelError::Api {
+                provider: "failing-embedder".to_string(),
+                message: "HTTP 404".to_string(),
+            })
+        }
+    }
 
     #[tokio::test]
     async fn run_command_builds_stack_without_panic() {
@@ -828,5 +921,12 @@ mod tests {
         std::env::set_var("AGENT007_NO_TUI", "1");
         assert!(should_use_non_interactive_mode());
         std::env::remove_var("AGENT007_NO_TUI");
+    }
+
+    #[tokio::test]
+    async fn resilient_embedding_provider_returns_zero_vector_on_failure() {
+        let provider = ResilientEmbeddingProvider::new(Arc::new(FailingEmbedder), 7);
+        let embedding = provider.embed("hello").await.unwrap();
+        assert_eq!(embedding, vec![0.0; 7]);
     }
 }

@@ -164,25 +164,15 @@ impl OllamaEmbeddingProvider {
             model: model.to_string(),
         }
     }
-}
 
-#[async_trait]
-impl EmbeddingProvider for OllamaEmbeddingProvider {
-    fn name(&self) -> &str {
-        "ollama-embed"
-    }
-
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, ModelError> {
+    async fn post_json(&self, path: &str, body: Value) -> Result<Value, ModelError> {
         let client = reqwest::Client::new();
-        let url = format!("{}/api/embeddings", self.base_url);
+        let url = format!("{}{}", self.base_url, path);
 
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "model": self.model,
-                "prompt": text,
-            }))
+            .json(&body)
             .send()
             .await?;
 
@@ -193,17 +183,88 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             });
         }
 
-        let json: Value = response.json().await?;
-        let embedding = json["embedding"]
-            .as_array()
-            .ok_or_else(|| ModelError::Api {
-                provider: "ollama-embed".to_string(),
-                message: "missing embedding field".to_string(),
-            })?
-            .iter()
-            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-            .collect();
+        Ok(response.json().await?)
+    }
 
-        Ok(embedding)
+    fn parse_embedding(json: &Value) -> Result<Vec<f32>, ModelError> {
+        if let Some(embeddings) = json.get("embeddings").and_then(Value::as_array) {
+            if let Some(first) = embeddings.first().and_then(Value::as_array) {
+                return Ok(first
+                    .iter()
+                    .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                    .collect());
+            }
+        }
+
+        if let Some(embedding) = json.get("embedding").and_then(Value::as_array) {
+            return Ok(embedding
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect());
+        }
+
+        Err(ModelError::Api {
+            provider: "ollama-embed".to_string(),
+            message: "missing embedding field".to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OllamaEmbeddingProvider {
+    fn name(&self) -> &str {
+        "ollama-embed"
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, ModelError> {
+        match self
+            .post_json(
+                "/api/embed",
+                serde_json::json!({
+                    "model": self.model,
+                    "input": text,
+                }),
+            )
+            .await
+        {
+            Ok(json) => Self::parse_embedding(&json),
+            Err(ModelError::Api { message, .. }) if message == "HTTP 404" => {
+                let legacy = self
+                    .post_json(
+                        "/api/embeddings",
+                        serde_json::json!({
+                            "model": self.model,
+                            "prompt": text,
+                        }),
+                    )
+                    .await?;
+                Self::parse_embedding(&legacy)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    use super::OllamaEmbeddingProvider;
+    use serde_json::json;
+
+    #[test]
+    fn ollama_parse_current_embed_shape() {
+        let parsed = OllamaEmbeddingProvider::parse_embedding(&json!({
+            "embeddings": [[0.1, 0.2, 0.3]]
+        }))
+        .unwrap();
+        assert_eq!(parsed, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn ollama_parse_legacy_embedding_shape() {
+        let parsed = OllamaEmbeddingProvider::parse_embedding(&json!({
+            "embedding": [0.4, 0.5]
+        }))
+        .unwrap();
+        assert_eq!(parsed, vec![0.4, 0.5]);
     }
 }
