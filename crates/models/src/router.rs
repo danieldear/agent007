@@ -64,23 +64,26 @@ impl ModelRouter {
         selected_provider.to_string()
     }
 
+    fn provider_key_for_task_type(&self, task_type: &str) -> String {
+        if let Some(name) = self.rules.get(task_type) {
+            self.resolve_provider_name(name).to_string()
+        } else {
+            self.default.clone()
+        }
+    }
+
     /// Route a task type to the appropriate provider.
     ///
     /// The default provider **must** be registered via `register()` before calling this method.
     /// Panics if neither the rule-matched provider nor the default provider is registered.
     #[instrument(skip(self), fields(provider = tracing::field::Empty))]
     pub fn route(&self, task_type: &str) -> Arc<dyn ModelProvider> {
-        // Check rules first
-        let provider_name = if let Some(name) = self.rules.get(task_type) {
-            self.resolve_provider_name(name)
-        } else {
-            self.default.as_str()
-        };
+        let provider_name = self.provider_key_for_task_type(task_type);
 
         // Look up provider, fall back to default if not found
         let provider = self
             .providers
-            .get(provider_name)
+            .get(provider_name.as_str())
             .cloned()
             .unwrap_or_else(|| {
                 self.providers
@@ -95,6 +98,21 @@ impl ModelRouter {
             });
         tracing::Span::current().record("provider", provider.name());
         provider
+    }
+
+    pub async fn complete_for_task_type(
+        &self,
+        task_type: &str,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, ModelError> {
+        let requested_model = request.model.clone();
+        let key = self.provider_key_for_task_type(task_type);
+        let provider = self.providers.get(&key).ok_or_else(|| {
+            ModelError::NotConfigured(format!("no provider registered for '{key}'"))
+        })?;
+        let mut routed_request = request;
+        routed_request.model = self.normalize_request_model(&key, &requested_model);
+        provider.complete(routed_request).await
     }
 }
 
@@ -288,5 +306,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.content, "qwen2.5-coder:7b");
+    }
+
+    #[tokio::test]
+    async fn router_complete_for_task_type_normalizes_foreign_model_hint() {
+        let mut r = ModelRouter::new("ollama");
+        r.register(
+            "ollama",
+            Arc::new(EchoModelProvider {
+                name: "ollama/qwen2.5-coder:7b",
+            }),
+        );
+        r.add_rule("reasoning", "ollama");
+        r.alias("claude-sonnet-4-6", "claude");
+
+        let resp = r
+            .complete_for_task_type(
+                "reasoning",
+                CompletionRequest {
+                    model: "claude-sonnet-4-6".into(),
+                    messages: vec![Message {
+                        role: Role::User,
+                        content: "plan".into(),
+                    }],
+                    max_tokens: None,
+                    temperature: None,
+                    system: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.content, "ollama");
     }
 }

@@ -128,13 +128,6 @@ impl SkillExecutor {
             }
         })?;
 
-        // 5. Resolve provider: use category-based routing if router is available
-        let provider: Arc<dyn ModelProvider> = if let Some(router) = &self.router {
-            router.route(skill.category())
-        } else {
-            Arc::clone(&self.provider)
-        };
-
         let request = CompletionRequest {
             model: skill.model().to_string(),
             messages: vec![Message {
@@ -146,13 +139,17 @@ impl SkillExecutor {
             system: None,
         };
 
-        let response = provider
-            .complete(request)
-            .await
-            .map_err(|e| SkillError::Model {
-                name: skill.name().to_string(),
-                source: e,
-            })?;
+        let response = if let Some(router) = &self.router {
+            router
+                .complete_for_task_type(skill.category(), request)
+                .await
+        } else {
+            self.provider.complete(request).await
+        }
+        .map_err(|e| SkillError::Model {
+            name: skill.name().to_string(),
+            source: e,
+        })?;
 
         Ok(response.content)
     }
@@ -304,6 +301,22 @@ mod tests {
         let executor = make_executor(dir.path(), Arc::clone(&provider));
         let skill = make_skill("Args: {{args}}", "ollama");
         executor.execute(&skill, "x").await.unwrap();
+        assert_eq!(provider.last_model(), Some("ollama".to_string()));
+    }
+
+    #[tokio::test]
+    async fn executor_uses_router_to_normalize_foreign_model_hints() {
+        let dir = TempDir::new().unwrap();
+        let provider = Arc::new(MockModelProvider::new());
+        let mut router = ModelRouter::new("ollama");
+        router.register("ollama", Arc::clone(&provider) as Arc<dyn ModelProvider>);
+        router.add_rule("custom", "ollama");
+        router.alias("claude-sonnet-4-6", "claude");
+
+        let executor =
+            make_executor(dir.path(), Arc::clone(&provider)).with_router(Arc::new(router));
+        let skill = make_skill("Args: {{args}}", "claude-sonnet-4-6");
+        executor.execute(&skill, "plan").await.unwrap();
         assert_eq!(provider.last_model(), Some("ollama".to_string()));
     }
 }
