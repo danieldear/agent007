@@ -885,8 +885,20 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">📊</div>
         <div class="feature-title">Web Dashboard</div>
-        <div class="feature-desc">Live run inspector at <code>localhost:8007</code>. See active tasks, token usage, memory contents, skill history, and model costs in real time.</div>
+        <div class="feature-desc">ChatGPT-style chat interface at <code>localhost:8007</code>. Submit tasks with <code>/slash</code> autocomplete for skills and workflows. Accordion run history with inline eval gate results, routing recommendations, and approval controls.</div>
         <span class="feature-tag">localhost:8007</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🎯</div>
+        <div class="feature-title">Eval Gates</div>
+        <div class="feature-desc">Quality gates on every workflow run. Score each run against a rolling baseline and make a pass / warn / block decision before the run continues. Configurable thresholds per workflow.</div>
+        <span class="feature-tag">pass · warn · block</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <div class="feature-title">Reliability Engine</div>
+        <div class="feature-desc">Four additive controls per workflow step: budget governor with graceful degradation, guardrails hook for risky ops, confidence-driven human escalation, and bounded retry transitions. All opt-in — existing workflows unaffected.</div>
+        <span class="feature-tag">Opt-in · backward-compatible</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🔀</div>
@@ -1132,6 +1144,7 @@ footer {
     <li><a href="#skills">Skills</a></li>
     <li><a href="#workflows">Workflows</a></li>
     <li><a href="https://github.com/danieldear/agent007/blob/main/docs/configuration.md" target="_blank">Config ↗</a></li>
+    <li><a href="https://github.com/danieldear/agent007/blob/main/docs/known-issues.md" target="_blank">Known Issues ↗</a></li>
     <li><a href="https://github.com/danieldear/agent007" target="_blank">GitHub ↗</a></li>
   </ul>
   <span class="footer-copy">MIT License · Built in Rust</span>

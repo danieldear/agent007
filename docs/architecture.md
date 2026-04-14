@@ -8,13 +8,13 @@ agent007 is a layered Rust workspace of 18 crates. The CLI binary (`crates/cli`)
 crates/
 ├── cli/          Binary entry point — clap CLI + MCP server (serve.rs) + web dashboard
 ├── core/         Foundational types: Task, AgentId, Dispatcher, Orchestrator, budget, context
-├── models/       LLM provider abstraction (Claude, Codex, Ollama) + ModelRouter
+├── models/       LLM provider abstraction (Claude, Codex, Ollama) + ModelRouter + Adaptive Shadow
 ├── memory/       Scoped key-value store + LanceDB vector search + MemoryStore API
 ├── skills/       Skill loading, frontmatter parsing (SkillFrontmatter), SkillDispatcher
 ├── hooks/        HookConfig (hooks.toml) + HookExecutor (spawns shell commands)
 ├── learning/     LearningStore + FeedbackEntry recording + PromptOptimizer + InsightGenerator
 ├── personas/     PersonaSpec loading from ~/.agent007/personas/*.md
-├── workflows/    WorkflowDef YAML schema + step graph + WorkflowEngine
+├── workflows/    WorkflowDef YAML schema + step graph + WorkflowEngine + hosted engine + eval gates + reliability engine
 ├── mcp/          MCP client (connects to downstream MCP servers) + tool proxy
 ├── tui/          Ratatui-based terminal dashboard
 ├── web/          Axum web dashboard (WebSocket + REST) served on --port
@@ -59,6 +59,10 @@ AI Editor (Claude Code / Cursor / Codex / Copilot / Zed)
 │    │                             are detected)          │
 │    │                                                     │
 │    ├── agent007_workflow_* ────► workflows::WorkflowEngine│
+│    │       ├── eval gates (pass/warn/block per run)    │
+│    │       ├── reliability engine (budget, guardrails, │
+│    │       │   confidence escalation, retry transitions)│
+│    │       └── hosted engine (session-based step loop) │
 │    │                                                     │
 │    └── agent007_mcp_tool_call ─► mcp::McpClient          │
 │                                   (downstream MCP servers)│
@@ -107,6 +111,14 @@ Attached to `FeedbackCollector` via `with_insight_generator(Arc<InsightGenerator
 
 ### `workflows::WorkflowEngine`
 Parses `~/.agent007/workflows/<name>.yaml`. Builds a dependency graph (petgraph). Steps without `depends_on` run in parallel. Approval gates block progression until `workflow_approve` is called. Hosted-MCP mode: the engine emits step prompts; the host LLM executes and submits outputs back.
+
+**V2 subsystems (opt-in, backward-compatible):**
+- **Eval Gates** (`eval_gates.rs`) — score each run against a rolling baseline; make `pass / warn / block` decisions. Configurable per workflow via `eval_gate:` YAML block.
+- **Reliability Engine** — four additive controls: budget governor (token spend tracking with graceful degradation), guardrails hook (pre-step safety check), confidence-driven escalation (routes low-confidence output to human approval), recovery transitions (bounded retry with explicit transition records).
+- **Hosted Engine** (`hosted.rs`) — session-based loop for multi-step workflows where the host LLM runs each step. Approval ownership follows the initiating client.
+
+### `models::ModelRouter` + Adaptive Shadow
+Rule-based routing selects the model for each task. Adaptive Shadow runs alongside every step, recording which route *would* have been recommended based on historical performance — without changing the actual route. Shadow recommendations accumulate in the run record and surface in the web dashboard under **Routing Recommendations**.
 
 ## Directory layout (~/.agent007/)
 

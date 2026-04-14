@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::path::{Path, PathBuf};
 
 use super::run::{selected_runtime_model, selected_runtime_provider, standalone_mode_available};
@@ -39,19 +40,154 @@ fn write_if_missing(path: &Path, content: &str, label: &str) -> Result<bool> {
     write_file(path, content, label, false)
 }
 
+fn backup_path_for(path: &Path) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("cannot create backup path for {}", path.display()))?;
+    let mut candidate = path.with_file_name(format!("{file_name}.agent007.bak"));
+    let mut index = 1usize;
+    while candidate.exists() {
+        candidate = path.with_file_name(format!("{file_name}.agent007.bak.{index}"));
+        index += 1;
+    }
+    Ok(candidate)
+}
+
+fn backup_existing_file(path: &Path) -> Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let backup = backup_path_for(path)?;
+    std::fs::copy(path, &backup).with_context(|| {
+        format!(
+            "failed to back up existing file {} -> {}",
+            path.display(),
+            backup.display()
+        )
+    })?;
+    Ok(Some(backup))
+}
+
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
+    std::fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("{} has no file name", path.display()))?;
+    let tmp = parent.join(format!(".{file_name}.agent007.tmp"));
+    std::fs::write(&tmp, content)?;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 fn write_file(path: &Path, content: &str, label: &str, force: bool) -> Result<bool> {
     if path.exists() && !force {
         ok(&format!("{label} already exists — skipped"));
         Ok(false)
     } else {
-        std::fs::write(path, content)?;
-        if force && path.exists() {
-            ok(&format!("{label} updated (--force)"));
+        let existed = path.exists();
+        if existed {
+            let current = std::fs::read_to_string(path).unwrap_or_default();
+            if current == content {
+                ok(&format!("{label} already up to date"));
+                return Ok(false);
+            }
+            if let Some(backup) = backup_existing_file(path)? {
+                info(&format!("backup written: {}", backup.display()));
+            }
+        }
+        atomic_write(path, content)?;
+        if existed {
+            ok(&format!("{label} updated"));
         } else {
             ok(&format!("{label} written"));
         }
         Ok(true)
     }
+}
+
+fn load_json_root(path: &Path, label: &str) -> Result<JsonValue> {
+    if !path.exists() {
+        return Ok(JsonValue::Object(JsonMap::new()));
+    }
+
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {label} at {}", path.display()))?;
+    let parsed: JsonValue = serde_json::from_str(&raw).map_err(|error| {
+        anyhow!(
+            "failed to parse {label} at {}: {error}. Refusing to overwrite an existing file.",
+            path.display()
+        )
+    })?;
+    if !parsed.is_object() {
+        return Err(anyhow!(
+            "{label} at {} must be a JSON object. Refusing to overwrite an existing file.",
+            path.display()
+        ));
+    }
+    Ok(parsed)
+}
+
+fn write_json_root(path: &Path, root: &JsonValue, label: &str) -> Result<()> {
+    let serialized = serde_json::to_string_pretty(root)?;
+    if path.exists() && std::fs::read_to_string(path).unwrap_or_default() == serialized {
+        ok(&format!("{label} already up to date"));
+        ok(&format!("  config: {}", path.display()));
+        return Ok(());
+    }
+    if let Some(backup) = backup_existing_file(path)? {
+        info(&format!("backup written: {}", backup.display()));
+    }
+    atomic_write(path, &serialized)?;
+    ok(&format!("Wrote {label}"));
+    ok(&format!("  config: {}", path.display()));
+    Ok(())
+}
+
+fn load_toml_root(path: &Path, label: &str) -> Result<toml::Value> {
+    if !path.exists() {
+        return Ok(toml::Value::Table(toml::map::Map::new()));
+    }
+
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {label} at {}", path.display()))?;
+    let parsed: toml::Value = toml::from_str(&raw).map_err(|error| {
+        anyhow!(
+            "failed to parse {label} at {}: {error}. Refusing to overwrite an existing file.",
+            path.display()
+        )
+    })?;
+    if !parsed.is_table() {
+        return Err(anyhow!(
+            "{label} at {} must be a TOML table. Refusing to overwrite an existing file.",
+            path.display()
+        ));
+    }
+    Ok(parsed)
+}
+
+fn write_toml_root(path: &Path, root: &toml::Value, label: &str) -> Result<()> {
+    let serialized = toml::to_string_pretty(root)?;
+    if path.exists() && std::fs::read_to_string(path).unwrap_or_default() == serialized {
+        ok(&format!("{label} already up to date"));
+        ok(&format!("  config: {}", path.display()));
+        return Ok(());
+    }
+    if let Some(backup) = backup_existing_file(path)? {
+        info(&format!("backup written: {}", backup.display()));
+    }
+    atomic_write(path, &serialized)?;
+    ok(&format!("Wrote {label}"));
+    ok(&format!("  config: {}", path.display()));
+    Ok(())
 }
 
 pub async fn execute(
@@ -64,6 +200,7 @@ pub async fn execute(
     do_copilot: bool,
     do_zed: bool,
 ) -> Result<()> {
+    let binary_path = which_agent007();
     let home = if global {
         super::run::agent007_global_home()
     } else {
@@ -277,7 +414,7 @@ pub async fn execute(
 
     if do_claude {
         section(&format!("{step}. Registering MCP server with Claude Code"));
-        register_mcp_in_settings("agent007", &claude_scope_dir, force)?;
+        register_mcp_in_settings(&binary_path, &claude_scope_dir, force)?;
         step += 1;
 
         section(&format!(
@@ -314,8 +451,14 @@ pub async fn execute(
                     let cmd_content = format!(
                         "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
                     );
-                    std::fs::write(&cmd_file, cmd_content)?;
-                    installed += 1;
+                    if write_file(
+                        &cmd_file,
+                        &cmd_content,
+                        &format!("commands/agent007-{stem}.md"),
+                        force,
+                    )? {
+                        installed += 1;
+                    }
                 }
             }
         }
@@ -356,8 +499,14 @@ pub async fn execute(
                     let cmd_content = format!(
                         "{description}\n\nUse the mcp__agent007__agent007_workflow_run tool with name=\"{stem}\" and task=\"$ARGUMENTS\".\n"
                     );
-                    std::fs::write(&cmd_file, cmd_content)?;
-                    wf_installed += 1;
+                    if write_file(
+                        &cmd_file,
+                        &cmd_content,
+                        &format!("commands/agent007-workflow-{stem}.md"),
+                        force,
+                    )? {
+                        wf_installed += 1;
+                    }
                 }
             }
         }
@@ -387,17 +536,17 @@ pub async fn execute(
 
     if do_cursor {
         section(&format!("{step}. Registering MCP server with Cursor"));
-        register_cursor_mcp(&cursor_scope_dir, "agent007", force)?;
+        register_cursor_mcp(&cursor_scope_dir, &binary_path, force)?;
         step += 1;
     }
 
     if do_codex {
         section(&format!("{step}. Registering MCP server with Codex"));
-        register_codex_mcp(&codex_scope_dir, "agent007", force)?;
+        register_codex_mcp(&codex_scope_dir, &binary_path, force)?;
         step += 1;
 
         section(&format!("{step}. Installing agent007 skill into Codex"));
-        install_codex_skill(force)?;
+        install_codex_skill(&binary_path, force)?;
         step += 1;
     }
 
@@ -405,7 +554,7 @@ pub async fn execute(
         section(&format!(
             "{step}. Registering MCP server with Copilot (VS Code)"
         ));
-        register_copilot_mcp(&copilot_scope_dir, "agent007", force)?;
+        register_copilot_mcp(&copilot_scope_dir, &binary_path, force)?;
         step += 1;
     }
 
@@ -478,9 +627,9 @@ pub async fn execute(
     println!("  Home:        {DIM}{}{RESET}", home.display());
     println!("  Personas:    {GREEN}{}{RESET} available", personas.len());
     println!("  Skills:      {GREEN}{skill_count}{RESET} loaded");
-    println!("  Workflows:   {GREEN}6{RESET} built-in (log-analysis, code-review, sparc, tdd, ideation, feature)");
+    println!("  Workflows:   {GREEN}8{RESET} built-in (log-analysis, code-review, security-audit, sparc, tdd, ideation, feature, brainstorm)");
     println!("  MCP server:  {GREEN}agent007 serve{RESET}");
-    println!("  Dashboard:   {CYAN}http://localhost:8007{RESET} (auto-starts with serve)");
+    println!("  Dashboard:   {CYAN}http://localhost:8007{RESET} (served by `agent007 serve` when the dashboard is enabled)");
     println!("  IDE:         {GREEN}{ide_label}{RESET}");
     println!();
     if !standalone_mode_available(&config) {
@@ -506,12 +655,7 @@ pub async fn execute(
 fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result<()> {
     let settings_path = claude_dir.join("settings.json");
 
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let raw = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
-    };
+    let mut root = load_json_root(&settings_path, "Claude Code settings.json")?;
 
     let servers = root
         .as_object_mut()
@@ -526,14 +670,13 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
             "agent007 already registered in {}",
             settings_path.display()
         ));
-        return Ok(());
+    } else {
+        let entry = serde_json::json!({
+            "command": cmd,
+            "args": ["serve"]
+        });
+        servers.insert("agent007".to_string(), entry);
     }
-
-    let entry = serde_json::json!({
-        "command": cmd,
-        "args": ["serve"]
-    });
-    servers.insert("agent007".to_string(), entry);
 
     // Wire the statusLine so Claude Code shows live agent007 stats below the prompt.
     let obj = root.as_object_mut().unwrap();
@@ -547,10 +690,12 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-    ok(&format!("Wrote mcpServers.agent007 → {cmd}"));
-    ok("Wrote statusLine → cat ~/.agent007/statusline");
-    ok(&format!("  config: {}", settings_path.display()));
+    write_json_root(
+        &settings_path,
+        &root,
+        &format!("mcpServers.agent007 → {cmd}"),
+    )?;
+    ok("Ensured statusLine → cat ~/.agent007/statusline");
     println!();
     warn("Restart Claude Code to activate the MCP server");
     info("New Claude Code windows will pick it up automatically");
@@ -561,12 +706,7 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
 fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     let mcp_path = cursor_dir.join("mcp.json");
 
-    let mut root: serde_json::Value = if mcp_path.exists() {
-        let raw = std::fs::read_to_string(&mcp_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
-    };
+    let mut root = load_json_root(&mcp_path, "Cursor mcp.json")?;
 
     let servers = root
         .as_object_mut()
@@ -581,21 +721,18 @@ fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> 
             "agent007 already registered in {}",
             mcp_path.display()
         ));
-        return Ok(());
+    } else {
+        let entry = serde_json::json!({
+            "command": cmd,
+            "args": ["serve"]
+        });
+        servers.insert("agent007".to_string(), entry);
     }
-
-    let entry = serde_json::json!({
-        "command": cmd,
-        "args": ["serve"]
-    });
-    servers.insert("agent007".to_string(), entry);
 
     if let Some(parent) = mcp_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&mcp_path, serde_json::to_string_pretty(&root)?)?;
-    ok(&format!("Wrote mcpServers.agent007 → {cmd}"));
-    ok(&format!("  config: {}", mcp_path.display()));
+    write_json_root(&mcp_path, &root, &format!("mcpServers.agent007 → {cmd}"))?;
     println!();
     info("Restart Cursor to activate the MCP server");
     Ok(())
@@ -616,12 +753,7 @@ fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> 
 fn register_copilot_mcp(vscode_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     let mcp_path = vscode_dir.join("mcp.json");
 
-    let mut root: serde_json::Value = if mcp_path.exists() {
-        let raw = std::fs::read_to_string(&mcp_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
-    };
+    let mut root = load_json_root(&mcp_path, "VS Code mcp.json")?;
 
     let servers = root
         .as_object_mut()
@@ -636,22 +768,19 @@ fn register_copilot_mcp(vscode_dir: &Path, cmd: &str, force: bool) -> Result<()>
             "agent007 already registered in {}",
             mcp_path.display()
         ));
-        return Ok(());
+    } else {
+        let entry = serde_json::json!({
+            "type": "stdio",
+            "command": cmd,
+            "args": ["serve"]
+        });
+        servers.insert("agent007".to_string(), entry);
     }
-
-    let entry = serde_json::json!({
-        "type": "stdio",
-        "command": cmd,
-        "args": ["serve"]
-    });
-    servers.insert("agent007".to_string(), entry);
 
     if let Some(parent) = mcp_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&mcp_path, serde_json::to_string_pretty(&root)?)?;
-    ok(&format!("Wrote servers.agent007 → stdio {cmd}"));
-    ok(&format!("  config: {}", mcp_path.display()));
+    write_json_root(&mcp_path, &root, &format!("servers.agent007 → stdio {cmd}"))?;
     println!();
     info("Restart VS Code / Copilot Chat to activate the MCP server");
     Ok(())
@@ -661,12 +790,7 @@ fn register_copilot_mcp(vscode_dir: &Path, cmd: &str, force: bool) -> Result<()>
 fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     let config_path = codex_dir.join("config.toml");
 
-    let mut root: toml::Value = if config_path.exists() {
-        let raw = std::fs::read_to_string(&config_path)?;
-        toml::from_str(&raw).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
-    } else {
-        toml::Value::Table(toml::map::Map::new())
-    };
+    let mut root = load_toml_root(&config_path, "Codex config.toml")?;
 
     let table = root.as_table_mut().unwrap();
 
@@ -681,19 +805,18 @@ fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
             "agent007 already registered in {}",
             config_path.display()
         ));
-        return Ok(());
+    } else {
+        let mut entry = toml::map::Map::new();
+        entry.insert("command".to_string(), toml::Value::String(cmd.to_string()));
+        entry.insert(
+            "args".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("serve".to_string()),
+                toml::Value::String("--no-dashboard".to_string()),
+            ]),
+        );
+        servers.insert("agent007".to_string(), toml::Value::Table(entry));
     }
-
-    let mut entry = toml::map::Map::new();
-    entry.insert("command".to_string(), toml::Value::String(cmd.to_string()));
-    entry.insert(
-        "args".to_string(),
-        toml::Value::Array(vec![
-            toml::Value::String("serve".to_string()),
-            toml::Value::String("--no-dashboard".to_string()),
-        ]),
-    );
-    servers.insert("agent007".to_string(), toml::Value::Table(entry));
 
     // Re-borrow root to insert `instructions` at top level.
     root.as_table_mut()
@@ -704,9 +827,11 @@ fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&root)?)?;
-    ok(&format!("Wrote mcp_servers.agent007 → {cmd}"));
-    ok(&format!("  config: {}", config_path.display()));
+    write_toml_root(
+        &config_path,
+        &root,
+        &format!("mcp_servers.agent007 → {cmd}"),
+    )?;
     println!();
     warn("Restart Codex to activate the MCP server");
     info("Codex uses `serve --no-dashboard` by default for strict stdio MCP mode");
@@ -716,13 +841,18 @@ fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
 
 /// Install agent007 as a Codex skill so it shows up under `/` commands and `@agent007`.
 /// Skills live in ~/.codex/skills/<name>/ — always global, not project-scoped.
-fn install_codex_skill(force: bool) -> Result<()> {
+fn install_codex_skill(cmd: &str, force: bool) -> Result<()> {
     let skill_dir = dirs_home().join(".codex").join("skills").join("agent007");
     let agents_dir = skill_dir.join("agents");
     std::fs::create_dir_all(&agents_dir)?;
 
     let skill_md = skill_dir.join("SKILL.md");
     let agent_yaml = agents_dir.join("openai.yaml");
+    let skill_agent_yaml = format!(
+        "interface:\n  display_name: \"agent007\"\n  short_description: \"AI orchestration — workflows, code review, log analysis, TDD\"\n  default_prompt: \"Use agent007 to run a workflow or task. Start with agent007_workflow_list to see what's available.\"\n\n\
+dependencies:\n  tools:\n    - type: \"mcp\"\n      value: \"agent007\"\n      description: \"agent007 MCP orchestration server\"\n      transport: \"stdio\"\n      command: \"{}\"\n      args: [\"serve\", \"--no-dashboard\"]\n",
+        cmd.replace('\\', "\\\\")
+    );
 
     let mut wrote = 0usize;
     if write_file(
@@ -735,7 +865,7 @@ fn install_codex_skill(force: bool) -> Result<()> {
     }
     if write_file(
         &agent_yaml,
-        CODEX_SKILL_AGENT_YAML,
+        &skill_agent_yaml,
         "~/.codex/skills/agent007/agents/openai.yaml",
         force,
     )? {
@@ -787,12 +917,7 @@ fn register_zed(zed_dir: &Path, project_dir: &Path, force: bool) -> Result<()> {
 fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
     let settings_path = zed_dir.join("settings.json");
 
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let raw = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
-    } else {
-        serde_json::Value::Object(serde_json::Map::new())
-    };
+    let mut root = load_json_root(&settings_path, "Zed settings.json")?;
 
     let binary_path = which_agent007();
     let obj = root.as_object_mut().unwrap();
@@ -882,8 +1007,7 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
         ok("Wrote agent.tool_permissions.mcp:agent007 → allow");
     }
 
-    std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-    ok(&format!("  config: {}", settings_path.display()));
+    write_json_root(&settings_path, &root, "Zed settings.json")?;
     println!();
     warn("Restart Zed to activate the LSP and MCP server");
     Ok(())
@@ -892,14 +1016,33 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
 fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
     // Zed checks AGENTS.md before CLAUDE.md, so this takes precedence.
     let rules_path = project_dir.join("AGENTS.md");
-    if rules_path.exists() && !force {
-        ok(&format!(
-            "AGENTS.md already exists — skipped ({})",
-            rules_path.display()
-        ));
+    let generated_rules_path = project_dir.join("AGENTS.agent007.generated.md");
+    if rules_path.exists() {
+        if force {
+            write_file(
+                &generated_rules_path,
+                ZED_AGENTS_MD,
+                "AGENTS.agent007.generated.md",
+                true,
+            )?;
+            ok(&format!(
+                "Preserved existing AGENTS.md → {}",
+                rules_path.display()
+            ));
+            info(&format!(
+                "Refreshed generated scaffold → {}",
+                generated_rules_path.display()
+            ));
+        } else {
+            ok(&format!(
+                "AGENTS.md already exists — preserved ({})",
+                rules_path.display()
+            ));
+            info("Use --force to refresh AGENTS.agent007.generated.md without replacing AGENTS.md");
+        }
         return Ok(());
     }
-    std::fs::write(&rules_path, ZED_AGENTS_MD)?;
+    write_file(&rules_path, ZED_AGENTS_MD, "AGENTS.md", true)?;
     ok(&format!("Wrote AGENTS.md → {}", rules_path.display()));
     info("Zed auto-loads AGENTS.md into every Agent Panel interaction");
     Ok(())
@@ -908,16 +1051,8 @@ fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
 fn register_zed_tasks(zed_dir: &Path, force: bool) -> Result<()> {
     let tasks_path = zed_dir.join("tasks.json");
 
-    if tasks_path.exists() && !force {
-        ok(&format!(
-            "tasks.json already exists — skipped ({})",
-            tasks_path.display()
-        ));
-        return Ok(());
-    }
-
     let binary_path = which_agent007();
-    let tasks = serde_json::json!([
+    let built_in_tasks = serde_json::json!([
         {
             "label": "agent007: run task",
             "command": binary_path,
@@ -957,10 +1092,44 @@ fn register_zed_tasks(zed_dir: &Path, force: bool) -> Result<()> {
             "hide": "on_success"
         }
     ]);
-
-    std::fs::write(&tasks_path, serde_json::to_string_pretty(&tasks)?)?;
-    ok(&format!("Wrote tasks.json ({} tasks)", 5));
-    ok(&format!("  config: {}", tasks_path.display()));
+    let mut tasks = if tasks_path.exists() {
+        let raw = std::fs::read_to_string(&tasks_path)
+            .with_context(|| format!("failed to read {}", tasks_path.display()))?;
+        serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+            anyhow!(
+                "failed to parse Zed tasks.json at {}: {error}. Refusing to overwrite an existing file.",
+                tasks_path.display()
+            )
+        })?
+    } else {
+        serde_json::json!([])
+    };
+    let array = tasks.as_array_mut().ok_or_else(|| {
+        anyhow!(
+            "Zed tasks.json at {} must be a JSON array. Refusing to overwrite an existing file.",
+            tasks_path.display()
+        )
+    })?;
+    for task in built_in_tasks.as_array().unwrap() {
+        let label = task
+            .get("label")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| anyhow!("built-in Zed task is missing a label"))?;
+        if let Some(index) = array.iter().position(|entry| {
+            entry
+                .get("label")
+                .and_then(|value| value.as_str())
+                .map(|value| value == label)
+                .unwrap_or(false)
+        }) {
+            if force {
+                array[index] = task.clone();
+            }
+        } else {
+            array.push(task.clone());
+        }
+    }
+    write_json_root(&tasks_path, &tasks, "Zed tasks.json")?;
     info("Run tasks via: Zed command palette → 'task: spawn'");
     Ok(())
 }
@@ -2485,46 +2654,268 @@ mcp__agent007__agent007_task_submit  persona="Analyst"   → direct analysis
 | `brainstorm` | Free-form ideation → PRD + ideation doc (lightweight) |
 "#;
 
-const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules for Zed
+const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
 
 You have access to the **agent007** MCP server via `context_servers.agent007`.
 Always prefer agent007 tools over ad-hoc code generation for complex tasks.
+Runtime mode in editor integrations is typically **hosted-mcp**: the host LLM executes
+steps, `agent007` tracks the run, and memory improves over time.
 
-## Available Tools
+---
 
-- `agent007_run` — Run any task through the full agent stack
-- `agent007_skill_list` — List all installed skills
-- `agent007_skill_run` — Run a skill by trigger
-- `agent007_workflow_list` — List available workflows
-- `agent007_workflow_run` — Run a named workflow with a task
+## The Core Cycle
 
-## Workflows
+```text
+1. TASK
+   -> user asks for work
 
-Use `agent007_workflow_run` to route tasks to the right workflow:
+2. CONTROL
+   -> use agent007_run / agent007_skill_run / agent007_workflow_run
+   -> get a run, prompt, or structured plan
+
+3. WORK
+   -> execute with the normal editor tools
+   -> read files, edit code, run commands, inspect diffs
+
+4. RECORD
+   -> when hosted flows ask for it, call agent007_record_tokens
+   -> this updates dashboard metrics and preserves output in memory
+
+5. LEARN
+   -> future runs can reuse repo brain, memory, and prior outputs
+```
+
+The important rule is:
+
+```text
+for multi-step or high-context work, route through agent007 first
+```
+
+---
+
+## Core Tools
+
+| Tool | Purpose |
+|------|---------|
+| `agent007_run` | Run a quick task through the full agent stack |
+| `agent007_skill_list` | Discover installed skills |
+| `agent007_skill_run` | Run a named skill by trigger |
+| `agent007_workflow_list` | List available workflows |
+| `agent007_workflow_run` | Run a full workflow synchronously |
+| `agent007_workflow_start` | Start a hosted workflow session |
+| `agent007_workflow_next` | Fetch next ready hosted workflow steps |
+| `agent007_workflow_submit_step` | Submit output for a hosted step |
+| `agent007_workflow_approve` | Record an approval decision |
+| `agent007_record_tokens` | Close the hosted loop and persist output |
+| `agent007_context_compile` | Pull repo brain + memory + relevant files |
+| `agent007_memory_read` | Read saved memory |
+| `agent007_memory_write` | Persist high-signal context |
+| `agent007_run_history` | Review prior runs |
+| `agent007_repo_brain_refresh` | Rebuild project summary memory |
+
+If the exact tools differ over time, use `agent007_help`, `agent007_skill_list`,
+and `agent007_workflow_list` as the source of truth.
+
+---
+
+## Routing Guidance
+
+```text
+Quick ad-hoc task
+  -> agent007_run
+
+Focused repeatable prompt pattern
+  -> agent007_skill_run
+
+Feature delivery / code review / ideation / security / TDD
+  -> agent007_workflow_run
+
+Unsure what exists
+  -> agent007_skill_list or agent007_workflow_list
+```
+
+Recommended workflow routing:
 
 | Workflow | When to use |
 |----------|-------------|
-| `tdd` | Writing new features — Red → Green → Refactor |
-| `code-review` | Reviewing code for security, performance, quality |
-| `sparc` | Building features end-to-end from spec to completion |
-| `log-analysis` | Analyzing logs for errors, patterns, security issues |
+| `tdd` | Writing or fixing a feature test-first |
+| `code-review` | Reviewing correctness, security, performance, style |
+| `sparc` | End-to-end feature execution |
+| `feature` | Full delivery with review and approval gates |
+| `ideation` | Research to PRD to architecture to plan |
+| `brainstorm` | Lightweight ideation before committing to architecture |
+| `log-analysis` | Error and incident investigation |
+| `security-audit` | Deep security review |
 
-## How to Handle Requests
+---
 
-1. **Simple task** → use `agent007_run` with the task description
-2. **Code review** → use `agent007_workflow_run` with name=`code-review`
-3. **New feature** → use `agent007_workflow_run` with name=`tdd` or `sparc`
-4. **Log/error analysis** → use `agent007_workflow_run` with name=`log-analysis`
-5. **Skill needed** → call `agent007_skill_list` then `agent007_skill_run`
+## Working Rules
+
+1. For any complex task, prefer `agent007_context_compile` before broad edits.
+2. For hosted workflows, keep the user in the loop at approval points.
+3. When a hosted task asks for `agent007_record_tokens`, include the final output text so
+   memory and dashboard state stay useful.
+4. Treat the dashboard as telemetry and run inspection, not the primary planning brain.
+5. Preserve user-owned project instructions; update only the agent007-managed guidance.
+
+---
 
 ## Project Context
 
-- Rust workspace with a Vue 3 frontend (`crates/web/frontend/`)
-- Frontend changes require `npm run build` in `crates/web/frontend/` — use the `agent007: build frontend` task
+Fill this section in for the current repository:
+
+- Stack:
+- Key build/test commands:
+- MCP server command:
+- Dashboard URL:
+- Important modules or directories:
+- Delivery constraints:
+- Review standards:
+
+Default local commands:
+
 - LSP server: `agent007 serve-lsp --stdio`
 - MCP server: `agent007 serve --no-dashboard`
+- Full MCP + dashboard: `agent007 serve`
 - Web dashboard: `http://localhost:8007`
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn claude_settings_preserve_unrelated_keys_and_add_statusline() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings_path = claude_dir.join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&json!({
+                "theme": "dark",
+                "mcpServers": {
+                    "agent007": {
+                        "command": "/existing/agent007",
+                        "args": ["serve"]
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        register_mcp_in_settings("/new/agent007", &claude_dir, false).unwrap();
+
+        let root: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(root["theme"], "dark");
+        assert_eq!(
+            root["mcpServers"]["agent007"]["command"],
+            "/existing/agent007"
+        );
+        assert_eq!(root["statusLine"]["type"], "command");
+    }
+
+    #[test]
+    fn zed_settings_invalid_json_is_not_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let zed_dir = temp.path().join(".zed");
+        std::fs::create_dir_all(&zed_dir).unwrap();
+        let settings_path = zed_dir.join("settings.json");
+        let original = "{ invalid json";
+        std::fs::write(&settings_path, original).unwrap();
+
+        let err = register_zed_settings(&zed_dir, false).unwrap_err();
+        assert!(err.to_string().contains("Refusing to overwrite"));
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), original);
+    }
+
+    #[test]
+    fn codex_config_preserves_unrelated_tables() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_dir = temp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let config_path = codex_dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"[theme]
+name = "night"
+"#,
+        )
+        .unwrap();
+
+        register_codex_mcp(&codex_dir, "/opt/agent007", false).unwrap();
+
+        let root: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(root["theme"]["name"].as_str(), Some("night"));
+        assert_eq!(
+            root["mcp_servers"]["agent007"]["command"].as_str(),
+            Some("/opt/agent007")
+        );
+    }
+
+    #[test]
+    fn zed_tasks_merge_without_clobbering_existing_tasks() {
+        let temp = tempfile::tempdir().unwrap();
+        let zed_dir = temp.path().join(".zed");
+        std::fs::create_dir_all(&zed_dir).unwrap();
+        let tasks_path = zed_dir.join("tasks.json");
+        std::fs::write(
+            &tasks_path,
+            serde_json::to_string_pretty(&json!([
+                {
+                    "label": "custom task",
+                    "command": "echo",
+                    "args": ["hello"]
+                },
+                {
+                    "label": "agent007: run task",
+                    "command": "custom-agent007",
+                    "args": ["run"]
+                }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        register_zed_tasks(&zed_dir, false).unwrap();
+
+        let tasks: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&tasks_path).unwrap()).unwrap();
+        let entries = tasks.as_array().unwrap();
+        assert!(entries.iter().any(|entry| entry["label"] == "custom task"));
+        assert!(entries
+            .iter()
+            .any(|entry| entry["label"] == "agent007: dashboard"));
+        let run_task = entries
+            .iter()
+            .find(|entry| entry["label"] == "agent007: run task")
+            .unwrap();
+        assert_eq!(run_task["command"], "custom-agent007");
+    }
+
+    #[test]
+    fn zed_rules_force_preserves_existing_agents_and_writes_generated_companion() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_dir = temp.path();
+        let rules_path = project_dir.join("AGENTS.md");
+        std::fs::write(&rules_path, "local custom guidance").unwrap();
+
+        register_zed_rules(project_dir, true).unwrap();
+
+        let content = std::fs::read_to_string(&rules_path).unwrap();
+        assert_eq!(content, "local custom guidance");
+
+        let generated_path = project_dir.join("AGENTS.agent007.generated.md");
+        let generated = std::fs::read_to_string(&generated_path).unwrap();
+        assert!(generated.contains("## The Core Cycle"));
+        assert!(generated.contains("agent007_record_tokens"));
+        assert!(generated.contains("## Project Context"));
+    }
+}
 
 // ── Codex skill files ─────────────────────────────────────────────────────
 
@@ -2600,19 +2991,4 @@ findings in a structured report with severity rankings and actionable fixes.
 | Run a skill | `mcp__agent007__agent007_skill_run` |
 | List personas | `mcp__agent007__agent007_persona_list` |
 | Submit a task | `mcp__agent007__agent007_task_submit` |
-"#;
-
-const CODEX_SKILL_AGENT_YAML: &str = r#"interface:
-  display_name: "agent007"
-  short_description: "AI orchestration — workflows, code review, log analysis, TDD"
-  default_prompt: "Use agent007 to run a workflow or task. Start with agent007_workflow_list to see what's available."
-
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "agent007"
-      description: "agent007 MCP orchestration server"
-      transport: "stdio"
-      command: "agent007"
-      args: ["serve", "--no-dashboard"]
 "#;
