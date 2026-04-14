@@ -28,3 +28,30 @@ Examples:
 - Use the dashboard for monitoring, diagnostics, and standalone dashboard runs.
 - If a run originated in the dashboard's standalone runtime, `Resume Workflow`
   remains available there.
+
+## Dead Ollama does not auto-fallback to hosted-MCP
+
+**Status:** Known behavior gap  
+**Observed:** April 14, 2026  
+**Area:** Runtime selection, standalone vs hosted execution
+
+### Current behavior
+
+If project config still declares an Ollama provider, `agent007` may classify the
+runtime as standalone/local even when the Ollama service is unavailable.
+
+Examples:
+- `agent007 run` can fail or hang waiting on the local Ollama endpoint.
+- Skill execution can fail even though hosted MCP would have been a valid path.
+- The runtime does not automatically downgrade from dead local Ollama to
+  `hosted-mcp`.
+
+### Practical guidance
+
+- If Ollama is down and you want to continue via Codex, Claude Code, Cursor, or
+  another MCP host, disable the project-local Ollama provider and restart
+  `agent007 serve`.
+- Treat hosted-MCP and standalone/local runtime as separate operating modes for
+  now.
+- A future improvement should detect unreachable Ollama and automatically
+  fallback to hosted-MCP when a host client is available.
