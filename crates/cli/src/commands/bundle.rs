@@ -25,9 +25,10 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             let dest = output.unwrap_or_else(|| "agent007-bundle.a7bundle".to_string());
             std::fs::write(&dest, &json)?;
             println!(
-                "✓ Exported {} skill(s) and {} workflow(s) to {dest}",
+                "✓ Exported {} skill(s), {} workflow(s), and {} tool file(s) to {dest}",
                 bundle.skills.len(),
-                bundle.workflows.len()
+                bundle.workflows.len(),
+                bundle.tools.len()
             );
             Ok(())
         }
@@ -43,9 +44,10 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
                 Bundle::from_json(&content).map_err(|e| anyhow::anyhow!("invalid bundle: {e}"))?;
 
             println!(
-                "Bundle contains {} skill(s) and {} workflow(s)",
+                "Bundle contains {} skill(s), {} workflow(s), and {} tool file(s)",
                 bundle.skills.len(),
-                bundle.workflows.len()
+                bundle.workflows.len(),
+                bundle.tools.len()
             );
 
             let target = if global {

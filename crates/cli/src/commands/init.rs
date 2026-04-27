@@ -25,6 +25,85 @@ fn section(msg: &str) {
     println!("\n{BOLD}{msg}{RESET}");
 }
 
+fn command_slug(value: &str) -> String {
+    value
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn configured_asset_homes_for_init(home: &Path, global: bool) -> Vec<PathBuf> {
+    let mut homes = Vec::new();
+    if !global {
+        homes.push(home.to_path_buf());
+    }
+    let global_home = super::run::agent007_global_home();
+    if !homes.iter().any(|path| path == &global_home) {
+        homes.push(global_home);
+    }
+    homes
+}
+
+fn available_skill_command_specs(home: &Path, global: bool) -> Vec<(String, String, String)> {
+    let mut specs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for agent_home in configured_asset_homes_for_init(home, global) {
+        let skills_dir = agent_home.join("skills");
+        if !skills_dir.exists() {
+            continue;
+        }
+        let loader = agent007_skills::SkillLoader::new(&skills_dir);
+        let Ok(skills) = loader.load_all() else {
+            continue;
+        };
+        for skill in skills {
+            let trigger = skill.trigger().to_string();
+            if !seen.insert(trigger.clone()) {
+                continue;
+            }
+            let slug = command_slug(&trigger);
+            specs.push((slug, skill.frontmatter.description.clone(), trigger));
+        }
+    }
+
+    specs
+}
+
+fn available_workflow_command_specs(home: &Path, global: bool) -> Vec<(String, String)> {
+    let mut specs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for agent_home in configured_asset_homes_for_init(home, global) {
+        let workflows_dir = agent_home.join("workflows");
+        if !workflows_dir.exists() {
+            continue;
+        }
+        let loader = agent007_workflows::WorkflowLoader::new(workflows_dir);
+        let Ok(names) = loader.list_names() else {
+            continue;
+        };
+        for name in names {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Ok(def) = loader.load_named(&name) {
+                specs.push((name, def.description.unwrap_or_default()));
+            }
+        }
+    }
+
+    specs
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DashboardMode {
     ServedByMcpProcess,
@@ -405,124 +484,136 @@ pub async fn execute(
 
     // ── 3b. Seed built-in skills ─────────────────────────────────────────────
     section("3b. Seeding built-in skills");
-    let skills_dir_seed = home.join("skills");
-    let mut built_in_skill_count = 0usize;
-    for (filename, content) in crate::built_in_skills::ALL_SKILLS {
-        if write_file(
-            &skills_dir_seed.join(filename),
-            content,
-            &format!("skills/{filename}"),
-            force,
-        )? {
-            built_in_skill_count += 1;
+    if global {
+        let skills_dir_seed = home.join("skills");
+        let mut built_in_skill_count = 0usize;
+        for (filename, content) in crate::built_in_skills::ALL_SKILLS {
+            if write_file(
+                &skills_dir_seed.join(filename),
+                content,
+                &format!("skills/{filename}"),
+                force,
+            )? {
+                built_in_skill_count += 1;
+            }
         }
-    }
-    if built_in_skill_count > 0 {
-        ok(&format!("{built_in_skill_count} built-in skills seeded"));
+        if built_in_skill_count > 0 {
+            ok(&format!("{built_in_skill_count} built-in skills seeded"));
+        }
+    } else {
+        info("Skipping project-local built-in skills; project .agent007/ is reserved for overrides and custom skills");
     }
 
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
-    let wf_dir = home.join("workflows");
-    write_file(
-        &wf_dir.join("log-analysis.yaml"),
-        WORKFLOW_LOG_ANALYSIS,
-        "workflows/log-analysis.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("code-review.yaml"),
-        WORKFLOW_CODE_REVIEW,
-        "workflows/code-review.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("security-audit.yaml"),
-        WORKFLOW_SECURITY_AUDIT,
-        "workflows/security-audit.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("sparc.yaml"),
-        WORKFLOW_SPARC,
-        "workflows/sparc.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("tdd.yaml"),
-        WORKFLOW_TDD,
-        "workflows/tdd.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("ideation.yaml"),
-        WORKFLOW_IDEATION,
-        "workflows/ideation.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("feature.yaml"),
-        WORKFLOW_FEATURE,
-        "workflows/feature.yaml",
-        force,
-    )?;
-    write_file(
-        &wf_dir.join("brainstorm.yaml"),
-        WORKFLOW_BRAINSTORM,
-        "workflows/brainstorm.yaml",
-        force,
-    )?;
+    if global {
+        let wf_dir = home.join("workflows");
+        write_file(
+            &wf_dir.join("log-analysis.yaml"),
+            WORKFLOW_LOG_ANALYSIS,
+            "workflows/log-analysis.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("code-review.yaml"),
+            WORKFLOW_CODE_REVIEW,
+            "workflows/code-review.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("security-audit.yaml"),
+            WORKFLOW_SECURITY_AUDIT,
+            "workflows/security-audit.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("sparc.yaml"),
+            WORKFLOW_SPARC,
+            "workflows/sparc.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("tdd.yaml"),
+            WORKFLOW_TDD,
+            "workflows/tdd.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("ideation.yaml"),
+            WORKFLOW_IDEATION,
+            "workflows/ideation.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("feature.yaml"),
+            WORKFLOW_FEATURE,
+            "workflows/feature.yaml",
+            force,
+        )?;
+        write_file(
+            &wf_dir.join("brainstorm.yaml"),
+            WORKFLOW_BRAINSTORM,
+            "workflows/brainstorm.yaml",
+            force,
+        )?;
+    } else {
+        info("Skipping project-local built-in workflows; project .agent007/ is reserved for overrides and custom workflows");
+    }
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
-    let personas_dir = home.join("personas");
-    let registry = agent007_personas::PersonaRegistry::built_in();
-    let personas = {
-        use agent007_core::PersonaProvider;
-        registry.list()
-    };
-    let mut persona_count = 0usize;
-    for spec in &personas {
-        let filename = spec
-            .name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>()
-            .to_lowercase();
-        let path = personas_dir.join(format!("{filename}.toml"));
-        let tools_str = spec
-            .allowed_tools
-            .iter()
-            .map(|t| format!("\"{}\"", t))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let content = format!(
-            "name            = \"{}\"\n\
-             description     = \"{}\"\n\
-             preferred_model = \"{}\"\n\
-             allowed_tools   = [{}]\n\
-             \n\
-             system_prompt   = \"\"\"\n\
-             {}\n\
-             \"\"\"\n",
-            spec.name,
-            spec.description.replace('"', "\\\""),
-            spec.preferred_model,
-            tools_str,
-            spec.system_prompt,
-        );
-        if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
-            persona_count += 1;
+    if global {
+        let personas_dir = home.join("personas");
+        let registry = agent007_personas::PersonaRegistry::built_in();
+        let personas = {
+            use agent007_core::PersonaProvider;
+            registry.list()
+        };
+        let mut persona_count = 0usize;
+        for spec in &personas {
+            let filename = spec
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+                .to_lowercase();
+            let path = personas_dir.join(format!("{filename}.toml"));
+            let tools_str = spec
+                .allowed_tools
+                .iter()
+                .map(|t| format!("\"{}\"", t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let content = format!(
+                "name            = \"{}\"\n\
+                 description     = \"{}\"\n\
+                 preferred_model = \"{}\"\n\
+                 allowed_tools   = [{}]\n\
+                 \n\
+                 system_prompt   = \"\"\"\n\
+                 {}\n\
+                 \"\"\"\n",
+                spec.name,
+                spec.description.replace('"', "\\\""),
+                spec.preferred_model,
+                tools_str,
+                spec.system_prompt,
+            );
+            if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
+                persona_count += 1;
+            }
         }
-    }
-    if persona_count > 0 {
-        ok(&format!("{persona_count} persona files seeded"));
+        if persona_count > 0 {
+            ok(&format!("{persona_count} persona files seeded"));
+        }
+    } else {
+        info("Skipping project-local built-in personas; project .agent007/ is reserved for persona overrides");
     }
 
     // ── 5b. Bootstrap global ~/.agent007/ if this is a project-local init ───
@@ -551,39 +642,20 @@ pub async fn execute(
             ok("commands/ created");
         }
 
-        let skills_dir = home.join("skills");
         let mut installed = 0usize;
-        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                    continue;
-                }
-                let stem = path.file_stem().unwrap().to_string_lossy();
-                let cmd_file = commands_dir.join(format!("agent007-{stem}.md"));
-                if !cmd_file.exists() || force {
-                    let content = std::fs::read_to_string(&path).unwrap_or_default();
-                    let description = content
-                        .lines()
-                        .find(|l| l.starts_with("description:"))
-                        .map(|l| l.trim_start_matches("description:").trim().to_string())
-                        .unwrap_or_else(|| format!("Run /{stem} skill"));
-                    let trigger = content
-                        .lines()
-                        .find(|l| l.starts_with("trigger:"))
-                        .map(|l| l.trim_start_matches("trigger:").trim().to_string())
-                        .unwrap_or_else(|| format!("/{stem}"));
-                    let cmd_content = format!(
-                        "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
-                    );
-                    if write_file(
-                        &cmd_file,
-                        &cmd_content,
-                        &format!("commands/agent007-{stem}.md"),
-                        force,
-                    )? {
-                        installed += 1;
-                    }
+        for (slug, description, trigger) in available_skill_command_specs(&home, global) {
+            let cmd_file = commands_dir.join(format!("agent007-{slug}.md"));
+            if !cmd_file.exists() || force {
+                let cmd_content = format!(
+                    "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
+                );
+                if write_file(
+                    &cmd_file,
+                    &cmd_content,
+                    &format!("commands/agent007-{slug}.md"),
+                    force,
+                )? {
+                    installed += 1;
                 }
             }
         }
@@ -594,44 +666,26 @@ pub async fn execute(
         }
 
         // Install workflow slash commands alongside skill commands
-        let workflows_dir = home.join("workflows");
         let mut wf_installed = 0usize;
-        if let Ok(entries) = std::fs::read_dir(&workflows_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let ext = path.extension().and_then(|e| e.to_str());
-                if ext != Some("yaml") && ext != Some("yml") {
-                    continue;
-                }
-                let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-                let cmd_file = commands_dir.join(format!("agent007-workflow-{stem}.md"));
-                if !cmd_file.exists() || force {
-                    // Read description from the YAML if present
-                    let description = std::fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|c| {
-                            c.lines()
-                                .find(|l| l.trim_start_matches(' ').starts_with("description:"))
-                                .map(|l| {
-                                    l.trim_start_matches("description:")
-                                        .trim()
-                                        .trim_matches('>')
-                                        .trim()
-                                        .to_string()
-                                })
-                        })
-                        .unwrap_or_else(|| format!("Run the {stem} workflow"));
-                    let cmd_content = format!(
-                        "{description}\n\nUse the mcp__agent007__agent007_workflow_run tool with name=\"{stem}\" and task=\"$ARGUMENTS\".\n"
-                    );
-                    if write_file(
-                        &cmd_file,
-                        &cmd_content,
-                        &format!("commands/agent007-workflow-{stem}.md"),
-                        force,
-                    )? {
-                        wf_installed += 1;
-                    }
+        for (name, description) in available_workflow_command_specs(&home, global) {
+            let cmd_file = commands_dir.join(format!("agent007-workflow-{name}.md"));
+            if !cmd_file.exists() || force {
+                let cmd_content = format!(
+                    "{}\n\nUse the mcp__agent007__agent007_workflow_run tool with name=\"{}\" and task=\"$ARGUMENTS\".\n",
+                    if description.is_empty() {
+                        format!("Run the {name} workflow")
+                    } else {
+                        description
+                    },
+                    name,
+                );
+                if write_file(
+                    &cmd_file,
+                    &cmd_content,
+                    &format!("commands/agent007-workflow-{name}.md"),
+                    force,
+                )? {
+                    wf_installed += 1;
                 }
             }
         }
@@ -785,13 +839,24 @@ pub async fn execute(
     step += 1;
 
     // ── 10. Summary ────────────────────────────────────────────────────────
-    let skill_count = std::fs::read_dir(&home.join("skills"))
-        .map(|d| {
-            d.flatten()
-                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-                .count()
-        })
-        .unwrap_or(0);
+    let skill_count = available_skill_command_specs(&home, global).len();
+    let persona_count = {
+        let mut dirs = Vec::new();
+        if !global {
+            dirs.push(home.join("personas"));
+        }
+        let global_dir = super::run::agent007_global_home().join("personas");
+        if !dirs.iter().any(|dir| dir == &global_dir) {
+            dirs.push(global_dir);
+        }
+        let registry = agent007_personas::PersonaRegistry::load_from_dirs(
+            dirs.iter().map(|dir| dir.as_path()),
+        )
+        .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+        use agent007_core::PersonaProvider;
+        registry.list().len()
+    };
+    let workflow_count = available_workflow_command_specs(&home, global).len();
 
     println!();
     section(&format!("{step}. Summary"));
@@ -800,9 +865,9 @@ pub async fn execute(
     println!("{BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
     println!();
     println!("  Home:        {DIM}{}{RESET}", home.display());
-    println!("  Personas:    {GREEN}{}{RESET} available", personas.len());
+    println!("  Personas:    {GREEN}{}{RESET} available", persona_count);
     println!("  Skills:      {GREEN}{skill_count}{RESET} loaded");
-    println!("  Workflows:   {GREEN}8{RESET} built-in (log-analysis, code-review, security-audit, sparc, tdd, ideation, feature, brainstorm)");
+    println!("  Workflows:   {GREEN}{workflow_count}{RESET} available");
     println!("  MCP server:  {GREEN}agent007 serve{RESET}");
     println!("  Dashboard:   {CYAN}http://localhost:8007{RESET} (served by `agent007 serve` when the dashboard is enabled)");
     println!("  IDE:         {GREEN}{ide_label}{RESET}");
@@ -840,17 +905,50 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
         .as_object_mut()
         .unwrap();
 
-    if servers.contains_key("agent007") && !force {
-        ok(&format!(
-            "agent007 already registered in {}",
-            settings_path.display()
-        ));
+    let desired_entry = serde_json::json!({
+        "command": cmd,
+        "args": ["serve"]
+    });
+    if let Some(existing) = servers.get("agent007").cloned() {
+        if force {
+            servers.insert("agent007".to_string(), desired_entry);
+        } else {
+            let existing_command = existing
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let existing_args: Vec<String> = existing
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|value| value.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let has_no_dashboard_flag = existing_args.iter().any(|arg| arg == "--no-dashboard");
+            if has_no_dashboard_flag || existing_args != vec!["serve".to_string()] {
+                let command_to_keep = if existing_command.is_empty() {
+                    cmd.to_string()
+                } else {
+                    existing_command
+                };
+                let migrated = serde_json::json!({
+                    "command": command_to_keep,
+                    "args": ["serve"]
+                });
+                servers.insert("agent007".to_string(), migrated);
+                ok("Updated existing Claude MCP entry to `agent007 serve` (dashboard-enabled)");
+            } else {
+                ok(&format!(
+                    "agent007 already registered in {}",
+                    settings_path.display()
+                ));
+            }
+        }
     } else {
-        let entry = serde_json::json!({
-            "command": cmd,
-            "args": ["serve"]
-        });
-        servers.insert("agent007".to_string(), entry);
+        servers.insert("agent007".to_string(), desired_entry);
     }
 
     // Wire the statusLine so Claude Code shows live agent007 stats below the prompt.
@@ -1319,6 +1417,30 @@ fn dirs_home() -> PathBuf {
 /// directories are missing or empty. Called during project-local `init` so
 /// every new project gets the globals even without `agent007 init --global`.
 fn seed_global_if_missing(global_home: &Path) -> Result<()> {
+    let skills_dir = global_home.join("skills");
+    let skills_missing = !skills_dir.exists()
+        || std::fs::read_dir(&skills_dir)
+            .map(|d| d.flatten().count() == 0)
+            .unwrap_or(true);
+    if skills_missing {
+        std::fs::create_dir_all(&skills_dir)?;
+        let mut count = 0usize;
+        for (filename, content) in crate::built_in_skills::ALL_SKILLS {
+            if write_if_missing(
+                &skills_dir.join(filename),
+                content,
+                &format!("~/.agent007/skills/{filename}"),
+            )? {
+                count += 1;
+            }
+        }
+        if count > 0 {
+            ok(&format!(
+                "{count} built-in skills seeded to ~/.agent007/skills/"
+            ));
+        }
+    }
+
     let wf_dir = global_home.join("workflows");
     let wf_missing = !wf_dir.exists()
         || std::fs::read_dir(&wf_dir)
@@ -2755,6 +2877,7 @@ const CODEX_INSTRUCTIONS: &str = r#"# agent007 — AI Orchestration Agents
 
 You have access to the **agent007** MCP server. Use `mcp__agent007__*` tools for complex,
 multi-step, or analytical tasks. Always prefer agent007 tools over ad-hoc generation.
+For any non-trivial coding task, route through `agent007_dispatch` first.
 
 ## Simple Command Mode (Recommended in Codex)
 
@@ -2833,6 +2956,7 @@ const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
 
 You have access to the **agent007** MCP server via `context_servers.agent007`.
 Always prefer agent007 tools over ad-hoc code generation for complex tasks.
+For non-trivial work, route through `agent007_dispatch` before free-form generation.
 Runtime mode in editor integrations is typically **hosted-mcp**: the host LLM executes
 steps, `agent007` tracks the run, and memory improves over time.
 

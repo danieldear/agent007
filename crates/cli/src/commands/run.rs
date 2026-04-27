@@ -56,6 +56,19 @@ pub struct Stack {
     pub tracker: TaskTracker,
 }
 
+fn configured_persona_registry() -> PersonaRegistry {
+    let mut dirs = Vec::new();
+    if let Some(project_home) = agent007_project_home() {
+        dirs.push(project_home.join("personas"));
+    }
+    let global_dir = agent007_global_home().join("personas");
+    if !dirs.iter().any(|dir| dir == &global_dir) {
+        dirs.push(global_dir);
+    }
+    PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
+        .unwrap_or_else(|_| PersonaRegistry::built_in())
+}
+
 struct ResilientEmbeddingProvider {
     primary: Arc<dyn EmbeddingProvider>,
     primary_name: String,
@@ -415,15 +428,7 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     let skill_executor = Arc::new(skill_executor);
 
     // 11. PersonaRegistry — load built-ins + user overrides from ~/.agent007/personas/
-    let personas_dir = home.join("personas");
-    let persona_registry = Arc::new(PersonaRegistry::load(&personas_dir).unwrap_or_else(|e| {
-        tracing::warn!(
-            "failed to load persona overrides from {}: {}",
-            personas_dir.display(),
-            e
-        );
-        PersonaRegistry::built_in()
-    }));
+    let persona_registry = Arc::new(configured_persona_registry());
 
     // 12. Zones — load config from [zones] section and build ZoneChecker
     let zone_config = ZoneConfig {

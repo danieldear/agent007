@@ -105,7 +105,7 @@ The exact Tera variable name (`skill_dir`, `asset_path`, etc.) is a design decis
 
 ## Shared Tools Folder (optional, deferred)
 
-A separate but related idea: a `~/.agent007/tools/` directory for scripts that are **shared across multiple skills** rather than bundled per-skill. Skills would declare dependencies via frontmatter:
+A separate but related idea: a `~/.agent007/tools/` directory for tools that are **shared across multiple skills and workflows** rather than bundled per-skill. Skills would declare dependencies via frontmatter:
 
 ```yaml
 requires_tools:
@@ -113,7 +113,15 @@ requires_tools:
   - format-diff
 ```
 
-This is intentionally deferred. It introduces tool versioning and cross-skill dependency questions that are out of scope for this feature. The per-skill `scripts/` folder in the folder format covers the immediate need. If shared tools become a clear pattern in practice, they can be added later without changing the format.
+This is intentionally deferred. It introduces tool discovery, invocation, safety, versioning, and cross-skill dependency questions that are out of scope for this feature. The per-skill `scripts/` folder in the folder format covers the immediate need.
+
+The shared-tools idea is now tracked separately as a deferred next-plan item in:
+
+```text
+docs/features/tool-registry.md
+```
+
+That future work should be implemented as a structured tool registry, not as a loose shared scripts folder.
 
 ---
 
@@ -121,7 +129,7 @@ This is intentionally deferred. It introduces tool versioning and cross-skill de
 
 - Changing anything about how flat `.md` skills are loaded, stored, or invoked.
 - Any versioning or lock-file mechanism for skill assets.
-- Implementing the shared `~/.agent007/tools/` pool (deferred).
+- Implementing the shared `~/.agent007/tools/` pool here (deferred to the tool registry plan).
 - Changing the Tera templating engine or frontmatter schema.
 
 ---

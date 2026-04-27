@@ -1,11 +1,14 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// A single skill or workflow packed into a bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleAsset {
+    /// Relative path inside the target skills/ or workflows/ directory.
+    /// For backward compatibility this field keeps the historical name `filename`.
     pub filename: String,
     pub content: String,
     pub sha256: String,
@@ -34,15 +37,22 @@ pub struct Bundle {
     pub created_at: String,
     pub skills: Vec<BundleAsset>,
     pub workflows: Vec<BundleAsset>,
+    #[serde(default)]
+    pub tools: Vec<BundleAsset>,
 }
 
 impl Bundle {
-    pub fn new(skills: Vec<BundleAsset>, workflows: Vec<BundleAsset>) -> Self {
+    pub fn new(
+        skills: Vec<BundleAsset>,
+        workflows: Vec<BundleAsset>,
+        tools: Vec<BundleAsset>,
+    ) -> Self {
         Self {
             version: "1".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             skills,
             workflows,
+            tools,
         }
     }
 
@@ -59,55 +69,148 @@ impl Bundle {
 pub struct BundleBuilder {
     skills_dir: PathBuf,
     workflows_dir: PathBuf,
+    tools_dir: PathBuf,
 }
 
 impl BundleBuilder {
     pub fn new(skills_dir: impl Into<PathBuf>, workflows_dir: impl Into<PathBuf>) -> Self {
+        let skills_dir = skills_dir.into();
+        let workflows_dir = workflows_dir.into();
+        let home = skills_dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
         Self {
-            skills_dir: skills_dir.into(),
-            workflows_dir: workflows_dir.into(),
+            skills_dir,
+            workflows_dir,
+            tools_dir: home.join("tools"),
         }
     }
 
     /// Build a bundle containing the specified skills (by trigger) and workflows (by name).
     /// Pass empty slices to include all.
     pub fn build(&self, skill_triggers: &[&str], workflow_names: &[&str]) -> Result<Bundle> {
-        let skills = self.collect_assets(&self.skills_dir, &["md"], skill_triggers)?;
-        let workflows =
-            self.collect_assets(&self.workflows_dir, &["yaml", "yml"], workflow_names)?;
-        Ok(Bundle::new(skills, workflows))
+        let skills = self.collect_skill_assets(skill_triggers)?;
+        let workflows = self.collect_workflow_assets(workflow_names)?;
+        let tools = self.collect_tools_assets()?;
+        Ok(Bundle::new(skills, workflows, tools))
     }
 
-    fn collect_assets(
-        &self,
-        dir: &Path,
-        exts: &[&str],
-        filter: &[&str],
-    ) -> Result<Vec<BundleAsset>> {
-        if !dir.exists() {
-            return Ok(vec![]);
+    fn collect_skill_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
+        if !self.skills_dir.exists() {
+            return Ok(Vec::new());
         }
-        let mut assets = Vec::new();
-        for entry in std::fs::read_dir(dir)?.flatten() {
+        let normalized_filter = normalize_skill_filter(filter);
+        let mut assets: Vec<BundleAsset> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        for entry in std::fs::read_dir(&self.skills_dir)?.flatten() {
             let path = entry.path();
-            let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !exts.contains(&file_ext) {
-                continue;
-            }
-            let Some(filename) = path.file_name().map(|f| f.to_string_lossy().to_string()) else {
-                continue;
-            };
-            if !filter.is_empty() {
-                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-                if !filter.iter().any(|f| {
-                    stem.trim_start_matches('/') == f.trim_start_matches('/') || *f == stem.as_ref()
-                }) {
+            if path.is_file() {
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
                     continue;
                 }
+                let content = std::fs::read_to_string(&path)?;
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let trigger =
+                    parse_frontmatter_value(&content, "trigger").map(|v| normalize_trigger_key(&v));
+                if !filter_matches_skill(&normalized_filter, &stem, trigger.as_deref()) {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(&self.skills_dir)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or_default()
+                    .replace('\\', "/");
+                if !rel.is_empty() && seen.insert(rel.clone()) {
+                    assets.push(BundleAsset::new(rel, content));
+                }
+                continue;
+            }
+
+            if !path.is_dir() {
+                continue;
+            }
+            let manifest = path.join("SKILL.md");
+            if !manifest.is_file() {
+                continue;
+            }
+            let manifest_content = std::fs::read_to_string(&manifest)?;
+            let package_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let trigger = parse_frontmatter_value(&manifest_content, "trigger")
+                .map(|v| normalize_trigger_key(&v));
+            if !filter_matches_skill(&normalized_filter, &package_name, trigger.as_deref()) {
+                continue;
+            }
+            collect_files_recursive(&path, &self.skills_dir, &mut assets, &mut seen)?;
+        }
+        Ok(assets)
+    }
+
+    fn collect_workflow_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
+        if !self.workflows_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let normalized_filter: HashSet<String> = filter
+            .iter()
+            .map(|s| s.trim().trim_start_matches('/').to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut assets: Vec<BundleAsset> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for entry in std::fs::read_dir(&self.workflows_dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            if ext != "yaml" && ext != "yml" {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !normalized_filter.is_empty() && !normalized_filter.contains(&stem) {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(&self.workflows_dir)
+                .ok()
+                .and_then(|p| p.to_str())
+                .unwrap_or_default()
+                .replace('\\', "/");
+            if rel.is_empty() {
+                continue;
             }
             let content = std::fs::read_to_string(&path)?;
-            assets.push(BundleAsset::new(filename, content));
+            if seen.insert(rel.clone()) {
+                assets.push(BundleAsset::new(rel, content));
+            }
         }
+        Ok(assets)
+    }
+
+    fn collect_tools_assets(&self) -> Result<Vec<BundleAsset>> {
+        if !self.tools_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut assets = Vec::new();
+        let mut seen = HashSet::new();
+        collect_files_recursive(&self.tools_dir, &self.tools_dir, &mut assets, &mut seen)?;
         Ok(assets)
     }
 }
@@ -131,19 +234,32 @@ pub enum ImportAction {
 pub struct BundleImporter {
     skills_dir: PathBuf,
     workflows_dir: PathBuf,
+    tools_dir: PathBuf,
 }
 
 impl BundleImporter {
     pub fn new(skills_dir: impl Into<PathBuf>, workflows_dir: impl Into<PathBuf>) -> Self {
+        let skills_dir = skills_dir.into();
+        let workflows_dir = workflows_dir.into();
+        let home = skills_dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
         Self {
-            skills_dir: skills_dir.into(),
-            workflows_dir: workflows_dir.into(),
+            skills_dir,
+            workflows_dir,
+            tools_dir: home.join("tools"),
         }
     }
 
     pub fn import(&self, bundle: &Bundle, overwrite: bool) -> Result<Vec<ImportResult>> {
         // verify all hashes first
-        for asset in bundle.skills.iter().chain(bundle.workflows.iter()) {
+        for asset in bundle
+            .skills
+            .iter()
+            .chain(bundle.workflows.iter())
+            .chain(bundle.tools.iter())
+        {
             if !asset.verify() {
                 bail!(
                     "hash mismatch for {}: bundle may be corrupted",
@@ -155,6 +271,7 @@ impl BundleImporter {
         let mut results = Vec::new();
         results.extend(self.write_assets(&bundle.skills, &self.skills_dir, overwrite)?);
         results.extend(self.write_assets(&bundle.workflows, &self.workflows_dir, overwrite)?);
+        results.extend(self.write_assets(&bundle.tools, &self.tools_dir, overwrite)?);
         Ok(results)
     }
 
@@ -167,18 +284,11 @@ impl BundleImporter {
         let _ = std::fs::create_dir_all(dir);
         let mut results = Vec::new();
         for asset in assets {
-            let safe_name: String = asset
-                .filename
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect();
+            let safe_name = sanitize_relative_asset_path(&asset.filename)?;
             let dest = dir.join(&safe_name);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             let action = if dest.exists() && !overwrite {
                 ImportAction::Skipped
             } else if dest.exists() {
@@ -189,12 +299,132 @@ impl BundleImporter {
                 ImportAction::Imported
             };
             results.push(ImportResult {
-                filename: safe_name,
+                filename: safe_name.to_string_lossy().to_string(),
                 action,
             });
         }
         Ok(results)
     }
+}
+
+fn normalize_trigger_key(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_start_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn normalize_skill_filter(filter: &[&str]) -> HashSet<String> {
+    filter
+        .iter()
+        .map(|item| item.trim().to_ascii_lowercase())
+        .flat_map(|item| {
+            let stripped = item.trim_start_matches('/').to_string();
+            if stripped != item {
+                vec![item, stripped]
+            } else {
+                vec![item]
+            }
+        })
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn filter_matches_skill(
+    filter: &HashSet<String>,
+    file_stem_or_dir: &str,
+    trigger_key: Option<&str>,
+) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let stem_key = file_stem_or_dir.trim().to_ascii_lowercase();
+    if filter.contains(&stem_key) {
+        return true;
+    }
+    if let Some(trigger_key) = trigger_key {
+        return filter.contains(trigger_key);
+    }
+    false
+}
+
+fn parse_frontmatter_value(content: &str, key: &str) -> Option<String> {
+    let body = content.strip_prefix("---")?;
+    let end = body.find("\n---")?;
+    let yaml = &body[..end];
+    for line in yaml.lines() {
+        let mut split = line.splitn(2, ':');
+        let left = split.next()?.trim();
+        if left != key {
+            continue;
+        }
+        return split.next().map(|right| right.trim().to_string());
+    }
+    None
+}
+
+fn collect_files_recursive(
+    root: &Path,
+    base_dir: &Path,
+    out: &mut Vec<BundleAsset>,
+    seen: &mut HashSet<String>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(root)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, base_dir, out, seen)?;
+            continue;
+        }
+        let rel = path
+            .strip_prefix(base_dir)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if rel.is_empty() || !seen.insert(rel.clone()) {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)?;
+        out.push(BundleAsset::new(rel, content));
+    }
+    Ok(())
+}
+
+fn sanitize_relative_asset_path(raw: &str) -> Result<PathBuf> {
+    let normalized = raw.replace('\\', "/");
+    if normalized.starts_with('/') {
+        bail!("asset path must be relative: {}", raw);
+    }
+    let mut out = PathBuf::new();
+    for segment in normalized.split('/') {
+        let seg = segment.trim();
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            bail!("asset path contains parent traversal: {}", raw);
+        }
+        let safe: String = seg
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        if safe.is_empty() {
+            continue;
+        }
+        out.push(safe);
+    }
+    if out.as_os_str().is_empty() {
+        bail!("asset path is empty after sanitization: {}", raw);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -444,6 +674,7 @@ mod tests {
                 "---\ntrigger: /test\n---\nhello",
             )],
             vec![],
+            vec![],
         );
         let json = bundle.to_json().unwrap();
         let back = Bundle::from_json(&json).unwrap();
@@ -459,10 +690,66 @@ mod tests {
         let asset = BundleAsset::new("existing.md", "original");
         std::fs::write(skills_dir.join("existing.md"), "original").unwrap();
 
-        let bundle = Bundle::new(vec![asset], vec![]);
+        let bundle = Bundle::new(vec![asset], vec![], vec![]);
         let importer = BundleImporter::new(&skills_dir, dir.path().join("workflows"));
         let results = importer.import(&bundle, false).unwrap();
         assert_eq!(results[0].action, ImportAction::Skipped);
+    }
+
+    #[test]
+    fn importer_preserves_nested_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = Bundle::new(
+            vec![
+                BundleAsset::new(
+                    "review-skill/SKILL.md",
+                    "---\nname: review\ndescription: test\ntrigger: /review\n---\nbody",
+                ),
+                BundleAsset::new(
+                    "review-skill/tools/analyze.sh",
+                    "#!/usr/bin/env bash\necho ok",
+                ),
+            ],
+            vec![],
+            vec![],
+        );
+        let importer = BundleImporter::new(dir.path().join("skills"), dir.path().join("workflows"));
+        let results = importer.import(&bundle, true).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("review-skill")
+            .join("SKILL.md")
+            .exists());
+        assert!(dir
+            .path()
+            .join("skills")
+            .join("review-skill")
+            .join("tools")
+            .join("analyze.sh")
+            .exists());
+    }
+
+    #[test]
+    fn importer_restores_project_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = Bundle::new(
+            vec![],
+            vec![],
+            vec![BundleAsset::new(
+                "adb/flash.sh",
+                "#!/usr/bin/env bash\necho flash",
+            )],
+        );
+        let importer = BundleImporter::new(dir.path().join("skills"), dir.path().join("workflows"));
+        importer.import(&bundle, true).unwrap();
+        assert!(dir
+            .path()
+            .join("tools")
+            .join("adb")
+            .join("flash.sh")
+            .exists());
     }
 
     #[test]

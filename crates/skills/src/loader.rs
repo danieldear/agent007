@@ -1,5 +1,6 @@
 use crate::error::SkillError;
 use crate::types::{Skill, SkillFrontmatter};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct SkillLoader {
@@ -14,24 +15,31 @@ impl SkillLoader {
     }
 
     pub fn load_all(&self) -> Result<Vec<Skill>, SkillError> {
-        let mut skills = Vec::new();
+        let mut skills_by_trigger: BTreeMap<String, Skill> = BTreeMap::new();
 
-        let entries = std::fs::read_dir(&self.skills_dir).map_err(|e| SkillError::Io {
-            path: self.skills_dir.clone(),
-            source: e,
-        })?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| SkillError::Io {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&self.skills_dir)
+            .map_err(|e| SkillError::Io {
                 path: self.skills_dir.clone(),
                 source: e,
-            })?;
-            if let Some(skill) = self.load_entry(&entry.path())? {
-                skills.push(skill);
+            })?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .collect();
+        entries.sort();
+
+        for entry in entries {
+            if let Some(skill) = self.load_entry(&entry)? {
+                let trigger = skill.trigger().to_string();
+                let replace = match skills_by_trigger.get(&trigger) {
+                    Some(existing) => should_replace(existing, &skill),
+                    None => true,
+                };
+                if replace {
+                    skills_by_trigger.insert(trigger, skill);
+                }
             }
         }
 
-        Ok(skills)
+        Ok(skills_by_trigger.into_values().collect())
     }
 
     fn load_entry(&self, entry_path: &Path) -> Result<Option<Skill>, SkillError> {
@@ -92,6 +100,30 @@ impl SkillLoader {
             skill_dir: skill_dir.to_path_buf(),
         })
     }
+}
+
+fn should_replace(existing: &Skill, candidate: &Skill) -> bool {
+    let existing_v = parse_version_triplet(existing.version());
+    let candidate_v = parse_version_triplet(candidate.version());
+    if candidate_v != existing_v {
+        return candidate_v > existing_v;
+    }
+    if candidate.is_package() != existing.is_package() {
+        return candidate.is_package();
+    }
+    candidate.manifest_path() < existing.manifest_path()
+}
+
+fn parse_version_triplet(raw: &str) -> (u64, u64, u64) {
+    let mut out = [0_u64; 3];
+    for (idx, part) in raw.split('.').take(3).enumerate() {
+        let numeric: String = part.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if numeric.is_empty() {
+            continue;
+        }
+        out[idx] = numeric.parse::<u64>().unwrap_or(0);
+    }
+    (out[0], out[1], out[2])
 }
 
 #[cfg(test)]
@@ -177,5 +209,26 @@ mod tests {
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].trigger(), "/flat");
+    }
+
+    #[test]
+    fn keeps_highest_version_when_trigger_clashes() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("older.md"),
+            "---\nname: old\ndescription: d\ntrigger: /dup\nversion: 1.0.0\nmodel: claude\n---\nold\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("newer.md"),
+            "---\nname: new\ndescription: d\ntrigger: /dup\nversion: 2.0.0\nmodel: claude\n---\nnew\n",
+        )
+        .unwrap();
+
+        let loader = SkillLoader::new(dir.path());
+        let skills = loader.load_all().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].version(), "2.0.0");
+        assert_eq!(skills[0].template(), "new");
     }
 }

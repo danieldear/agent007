@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -111,7 +112,7 @@ impl PortRegistry {
     ///    (it's ours — the old process may have just died)
     /// 3. If not registered → find a free port not used by any other project
     async fn resolve_port(&self, cwd: &std::path::Path, preferred: u16) -> u16 {
-        let key = cwd.to_string_lossy().to_string();
+        let key = project_registry_key(cwd);
         let used_ports: std::collections::HashSet<u16> = self.entries.values().copied().collect();
 
         if let Some(&registered) = self.entries.get(&key) {
@@ -136,15 +137,35 @@ impl PortRegistry {
     /// Write (or update) the registry entry for this project.
     fn register(cwd: &std::path::Path, port: u16) {
         let mut reg = Self::load();
-        reg.entries.insert(cwd.to_string_lossy().to_string(), port);
+        reg.entries.insert(project_registry_key(cwd), port);
         Self::save(&reg.entries);
     }
 
     /// Remove the registry entry when the dashboard exits.
     fn unregister(cwd: &std::path::Path) {
         let mut reg = Self::load();
-        reg.entries.remove(&cwd.to_string_lossy().to_string());
+        reg.entries.remove(&project_registry_key(cwd));
         Self::save(&reg.entries);
+    }
+}
+
+fn project_registry_key(cwd: &Path) -> String {
+    let canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    discover_project_root(&canonical)
+        .unwrap_or(canonical)
+        .to_string_lossy()
+        .to_string()
+}
+
+fn discover_project_root(from: &Path) -> Option<PathBuf> {
+    let mut dir = from.to_path_buf();
+    loop {
+        if dir.join(".agent007").is_dir() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
     }
 }
 
@@ -165,9 +186,22 @@ mod tests {
         };
         registry
             .entries
-            .insert(dir.path().to_string_lossy().to_string(), 9001);
+            .insert(project_registry_key(dir.path()), 9001);
         let port = registry.resolve_port(dir.path(), 8007).await;
         assert_eq!(port, 9001);
+    }
+
+    #[test]
+    fn project_registry_key_collapses_nested_paths_to_project_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".agent007")).unwrap();
+        let nested = root.path().join("src").join("module");
+        std::fs::create_dir_all(&nested).unwrap();
+        let expected = root.path().canonicalize().unwrap();
+        assert_eq!(
+            project_registry_key(&nested),
+            expected.to_string_lossy().to_string()
+        );
     }
 
     #[tokio::test]

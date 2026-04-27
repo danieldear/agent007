@@ -4,6 +4,7 @@ use anyhow::Result;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -118,12 +119,8 @@ pub async fn run_skill(
     args: &str,
     executor: &agent007_skills::SkillExecutor,
 ) -> Result<String> {
-    // Load skills from the default directory and find matching trigger
-    let skills_dir = default_skills_dir();
-    let loader = agent007_skills::SkillLoader::new(&skills_dir);
-    let skills = loader
-        .load_all()
-        .map_err(|e| anyhow::anyhow!("failed to load skills: {}", e))?;
+    // Load skills with project-over-global precedence and find matching trigger
+    let skills = load_skills_with_precedence()?;
 
     let skill = skills
         .into_iter()
@@ -143,7 +140,15 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
     let skills_dir = default_skills_dir();
     match action {
         SkillAction::List => {
-            let summaries = list_skills(&skills_dir).await?;
+            let summaries: Vec<SkillSummary> = load_skills_with_precedence()?
+                .into_iter()
+                .map(|skill| SkillSummary {
+                    name: skill.name().to_string(),
+                    description: skill.frontmatter.description.clone(),
+                    trigger: skill.trigger().to_string(),
+                    version: skill.version().to_string(),
+                })
+                .collect();
             for s in &summaries {
                 println!(
                     "[v{}] {:20} {:40} {}",
@@ -207,7 +212,40 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
 }
 
 fn default_skills_dir() -> PathBuf {
-    crate::commands::run::agent007_home().join("skills")
+    crate::commands::run::agent007_write_home().join("skills")
+}
+
+fn configured_skill_dirs() -> Vec<PathBuf> {
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![PathBuf::from(home).join("skills")];
+    }
+
+    let mut dirs = Vec::new();
+    if let Some(project_home) = crate::commands::run::agent007_project_home() {
+        dirs.push(project_home.join("skills"));
+    }
+    let global_dir = crate::commands::run::agent007_global_home().join("skills");
+    if !dirs.iter().any(|dir| dir == &global_dir) {
+        dirs.push(global_dir);
+    }
+    dirs
+}
+
+fn load_skills_with_precedence() -> Result<Vec<agent007_skills::Skill>> {
+    let mut skills: BTreeMap<String, agent007_skills::Skill> = BTreeMap::new();
+    for dir in configured_skill_dirs() {
+        if !dir.exists() {
+            continue;
+        }
+        let loader = agent007_skills::SkillLoader::new(&dir);
+        for skill in loader
+            .load_all()
+            .map_err(|e| anyhow::anyhow!("failed to load skills from {}: {}", dir.display(), e))?
+        {
+            skills.entry(skill.trigger().to_string()).or_insert(skill);
+        }
+    }
+    Ok(skills.into_values().collect())
 }
 
 /// Install a skill from a GitHub path or HTTPS URL.

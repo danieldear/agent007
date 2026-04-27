@@ -168,7 +168,7 @@ impl DashboardMetrics {
         match event {
             AgentEvent::TaskAssigned { agent_id, task } => {
                 self.running_tasks += 1;
-                self.active_agents = self.active_agents.max(1);
+                self.active_agents = self.running_tasks;
                 let entry = TaskLogEntry {
                     id: format!("{}", agent_id),
                     task: task.description.chars().take(120).collect(),
@@ -186,6 +186,7 @@ impl DashboardMetrics {
             }
             AgentEvent::TaskCompleted { agent_id, .. } => {
                 self.running_tasks = self.running_tasks.saturating_sub(1);
+                self.active_agents = self.running_tasks;
                 self.completed_tasks += 1;
                 let aid = format!("{}", agent_id);
                 if let Some(entry) = self
@@ -368,7 +369,7 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
         metrics.avg_latency_ms = total_latency_ms / latency_count as f64;
     }
 
-    metrics.active_agents = metrics.running_tasks.max(metrics.active_agents);
+    metrics.active_agents = metrics.running_tasks;
     metrics.estimated_usd = metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
 }
 
@@ -549,6 +550,7 @@ mod tests {
             task: task.clone(),
         });
         assert_eq!(m.running_tasks, 1);
+        assert_eq!(m.active_agents, 1);
         assert_eq!(m.recent_tasks.len(), 1);
 
         m.process_agent_event(&AgentEvent::TaskCompleted {
@@ -558,6 +560,7 @@ mod tests {
             model: None,
         });
         assert_eq!(m.running_tasks, 0);
+        assert_eq!(m.active_agents, 0);
         assert_eq!(m.completed_tasks, 1);
     }
 

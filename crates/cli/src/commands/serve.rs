@@ -1172,9 +1172,7 @@ impl ServerHandler for Agent007Server {
                 }
             }
             "agent007_persona_list" => {
-                let personas_dir = agent007_home().join("personas");
-                let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-                    .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+                let registry = configured_persona_registry();
                 use agent007_core::PersonaProvider;
                 let personas = registry.list();
                 let text = if personas.is_empty() {
@@ -1192,9 +1190,7 @@ impl ServerHandler for Agent007Server {
             }
             "agent007_persona_show" => {
                 let name = extract_string(request.arguments.as_ref(), "name")?;
-                let personas_dir = agent007_home().join("personas");
-                let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-                    .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+                let registry = configured_persona_registry();
                 use agent007_core::PersonaProvider;
                 match registry.get(&name) {
                     Some(spec) => {
@@ -1289,14 +1285,21 @@ impl ServerHandler for Agent007Server {
                     .map(|s| s.to_string());
                 match record_actual_tokens(&run_id, tokens, &model, output.as_deref()) {
                     Ok(message) => {
-                        // If the host passes back the skill output, persist it to project memory
-                        if let Some(ref out) = output {
-                            let store = memory_store();
-                            let key = format!("skill_{}", &run_id[..8.min(run_id.len())]);
-                            let _ = store.scoped("project").write(&key, out);
-                        }
+                        let skill_hint =
+                            load_run_store().load_run(&run_id).ok().and_then(|detail| {
+                                if detail.metadata.kind == "skill" {
+                                    detail
+                                        .metadata
+                                        .task
+                                        .split_whitespace()
+                                        .next()
+                                        .map(|value| value.to_string())
+                                } else {
+                                    None
+                                }
+                            });
                         // Passively record feedback in the learning store
-                        record_feedback_entry(&model, output.as_deref());
+                        record_feedback_entry(&model, skill_hint.as_deref());
                         Ok(CallToolResult::success(vec![Content::text(message)]))
                     }
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1471,9 +1474,7 @@ impl ServerHandler for Agent007Server {
             "agent007_persona_switch" => {
                 let name = extract_string(request.arguments.as_ref(), "name")?;
                 // Validate the persona exists
-                let personas_dir = agent007_home().join("personas");
-                let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-                    .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+                let registry = configured_persona_registry();
                 use agent007_core::PersonaProvider;
                 if registry.get(&name).is_none() {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -2081,6 +2082,19 @@ fn configured_workflow_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+fn configured_persona_dirs() -> Vec<PathBuf> {
+    configured_agent007_homes()
+        .into_iter()
+        .map(|home| home.join("personas"))
+        .collect()
+}
+
+fn configured_persona_registry() -> agent007_personas::PersonaRegistry {
+    let dirs = configured_persona_dirs();
+    agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
+        .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in())
+}
+
 fn sanitize_tool_component(value: &str) -> String {
     let mut out = String::new();
     let mut previous_was_separator = false;
@@ -2468,6 +2482,43 @@ fn create_delegate_run(kind: &str, task: &str) -> Result<String> {
     Ok(run.id)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct HostedDelegateState {
+    awaiting_host_report: bool,
+}
+
+const HOSTED_DELEGATE_ARTIFACT: &str = "hosted-delegate.json";
+
+fn hosted_delegate_state(
+    store: &agent007_core::RunStore,
+    run_id: &str,
+) -> Option<HostedDelegateState> {
+    store
+        .read_json_artifact_optional::<HostedDelegateState>(run_id, HOSTED_DELEGATE_ARTIFACT)
+        .ok()
+        .flatten()
+}
+
+fn mark_delegate_run_handed_off(run_id: &str, preview: &str, handoff_output: &str) -> Result<()> {
+    let store = load_run_store();
+    store
+        .write_text_artifact(run_id, "hosted-handoff.txt", handoff_output)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    store
+        .write_json_artifact(
+            run_id,
+            HOSTED_DELEGATE_ARTIFACT,
+            &HostedDelegateState {
+                awaiting_host_report: true,
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    store
+        .finish_run(run_id, true, preview)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(())
+}
+
 /// Appends an exact ModelRequest event with the actual token count reported by the host LLM,
 /// updates RunMetadata.provider with the real model name so the dashboard shows it correctly,
 /// then finishes the run so it transitions from "Running" → "completed" in the dashboard.
@@ -2483,12 +2534,17 @@ fn record_actual_tokens(
         .load_run(run_id)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     let metadata = detail.metadata;
+    let delegate_state = hosted_delegate_state(&store, run_id);
+    let awaiting_host_report = delegate_state
+        .as_ref()
+        .map(|state| state.awaiting_host_report)
+        .unwrap_or(false);
     let stale_restart_failure = metadata.finished_at.is_some()
         && matches!(metadata.status, agent007_core::run_store::RunStatus::Failed)
         && metadata.output_preview.as_deref() == Some("terminated: server restarted");
 
     // Runs finalized for real errors should not be rewritten by a late host retry.
-    if metadata.finished_at.is_some() && !stale_restart_failure {
+    if metadata.finished_at.is_some() && !stale_restart_failure && !awaiting_host_report {
         let status = match metadata.status {
             agent007_core::run_store::RunStatus::Running => "running",
             agent007_core::run_store::RunStatus::AwaitingApproval => "awaiting-approval",
@@ -2503,7 +2559,10 @@ fn record_actual_tokens(
 
     // If this was auto-failed by stale-run cleanup, append an explicit hosted result
     // event with exact tokens so the event stream shows the recovered completion.
-    if stale_restart_failure || !store.has_model_request_event(run_id).unwrap_or(false) {
+    if stale_restart_failure
+        || awaiting_host_report
+        || !store.has_model_request_event(run_id).unwrap_or(false)
+    {
         store
             .append_event(
                 run_id,
@@ -2531,6 +2590,31 @@ fn record_actual_tokens(
             },
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    if let Some(output) = output {
+        store
+            .write_text_artifact(run_id, "output.txt", output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
+
+    if awaiting_host_report {
+        let memory_key = match metadata.kind.as_str() {
+            "skill" => format!("skill_{}", &run_id[..8.min(run_id.len())]),
+            "workflow" => format!("workflow_{}", &run_id[..8.min(run_id.len())]),
+            "task" => format!("task_{}", &run_id[..8.min(run_id.len())]),
+            other => format!("{}_{}", other, &run_id[..8.min(run_id.len())]),
+        };
+        if let Some(output) = output {
+            let _ = memory_store().scoped("project").write(&memory_key, output);
+        }
+        let _ = store.write_json_artifact(
+            run_id,
+            HOSTED_DELEGATE_ARTIFACT,
+            &HostedDelegateState {
+                awaiting_host_report: false,
+            },
+        );
+    }
 
     // Transition the run from Running → Succeeded now that the host LLM has finished.
     let preview = output.unwrap_or("completed");
@@ -2788,15 +2872,24 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
         }
     } else {
         let run_id = create_delegate_run("task", &task)?;
+        let mem_ctx = build_memory_context(&task);
         let task_escaped = task.replace('"', "\\\"");
         let output = format!(
             "{{\"mode\":\"hosted-mcp\",\"task\":\"{task_escaped}\",\"run_id\":\"{run_id}\",\"instructions\":\
              \"No standalone provider is configured inside agent007. Execute this task directly using your host LLM capabilities. \
+             Treat the agent007-provided memory fields as the authoritative project memory/context for this task, and do not prefer external client memory when it conflicts with agent007 memory. \
              Use agent007_memory_write to persist results, agent007_workflow_plan to decompose \
              complex tasks into multi-agent workflows. \
              IMPORTANT: After you finish, call agent007_record_tokens with run_id={run_id}, \
-             the actual total tokens you used (input+output), and your model name — this records real token counts in the dashboard.\"}}"
+             the actual total tokens you used (input+output), your model name, and the output field set to your full final response text — this records real token counts in the dashboard and persists the result back into agent007 memory.\",\
+             \"memory\":{{\"project\":{project:?},\"user\":{user:?},\"global\":{global:?},\"repo_brain\":{repo_brain:?},\"rag_context\":{rag:?}}}}}",
+            project = mem_ctx.project,
+            user = mem_ctx.user,
+            global = mem_ctx.global,
+            repo_brain = mem_ctx.repo_brain,
+            rag = mem_ctx.rag,
         );
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", &output)?;
         Ok(output)
     }
 }
@@ -2838,6 +2931,9 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
             "[HOSTED MCP MODE — execute the following as the host LLM]\n\n\
              Skill: {} ({})\n\
              Run ID: {}\n\n\
+             Use the agent007-provided prompt context below as the authoritative project memory \
+             for this skill rather than relying on external client memory. If external client \
+             memory conflicts with the agent007 context below, prefer agent007.\n\n\
              ---\n\n\
              {}\n\n\
              ---\n\
@@ -2851,6 +2947,7 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
             rendered,
             run_id,
         );
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", &output)?;
         // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
         // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
         Ok(output)
@@ -2911,15 +3008,31 @@ impl MemoryContext {
 /// Load and rank memory from all scopes.  `task_or_args` is used as the RAG
 /// query for keyword matching against stored entries.
 fn build_memory_context(task_or_args: &str) -> MemoryContext {
-    let mem_store = memory_store();
-    let project_scoped = mem_store.scoped("project");
+    let project_store = memory_store();
+    let project_scoped = project_store.scoped("project");
     let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
-    let memory_user = mem_store.scoped("user").read_top_n(10).unwrap_or_default();
+    let include_shared_memory = std::env::var("AGENT007_INCLUDE_SHARED_MEMORY")
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let user_store = memory_store_for_scope("user");
+    let user_scoped = user_store.scoped("user");
+    let memory_user = if include_shared_memory {
+        user_scoped.read_top_n(10).unwrap_or_default()
+    } else {
+        String::new()
+    };
     let global_store = memory_store_for_scope("global");
-    let memory_global = global_store
-        .scoped("user")
-        .read_top_n(10)
-        .unwrap_or_default();
+    let global_scoped = global_store.scoped("global");
+    let memory_global = if include_shared_memory {
+        global_scoped.read_top_n(10).unwrap_or_default()
+    } else {
+        String::new()
+    };
     let memory_repo_brain = project_scoped
         .read("repo_brain")
         .ok()
@@ -2933,8 +3046,15 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
             .map(|w| w.to_lowercase())
             .collect();
         let mut hits: Vec<String> = Vec::new();
-        for ns in &["user", "project", "skills"] {
-            let scoped = mem_store.scoped(ns);
+        let mut scoped_sources = vec![
+            ("project", project_store.scoped("project")),
+            ("skills", project_store.scoped("skills")),
+        ];
+        if include_shared_memory {
+            scoped_sources.push(("user", user_scoped));
+            scoped_sources.push(("global", global_scoped));
+        }
+        for (ns, scoped) in scoped_sources {
             if let Ok(keys) = scoped.list_keys() {
                 for key in keys {
                     if let Ok(Some((val, meta))) = scoped.read_with_meta(&key) {
@@ -3023,9 +3143,14 @@ async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String>
         let output = format!(
             "{plan}\n\n\
              [HOSTED-MCP] Workflow run_id: {run_id}\n\
+             Treat the embedded workflow prompts and memory context from agent007 as the \
+             authoritative project memory for this run. If external client memory conflicts with \
+             the agent007 workflow context, prefer agent007.\n\
              After completing all workflow steps, call agent007_record_tokens with \
-             run_id={run_id}, actual total tokens used (input+output), and your model name."
+             run_id={run_id}, actual total tokens used (input+output), your model name, \
+             and the output field set to your full final workflow result."
         );
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", &output)?;
         // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
         // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
         return Ok(output);
@@ -3150,9 +3275,7 @@ fn inject_memory_into_def(
 }
 
 fn workflow_persona_provider() -> Arc<dyn agent007_core::PersonaProvider> {
-    let personas_dir = agent007_home().join("personas");
-    let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-        .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+    let registry = configured_persona_registry();
     let provider: Arc<dyn agent007_core::PersonaProvider> = Arc::new(registry);
     provider
 }
@@ -4025,16 +4148,15 @@ fn health_check(config: &Config) -> String {
     let home = agent007_home();
 
     let memory_dir = home.join("memory");
-    let skills_dir = home.join("skills");
-    let personas_dir = home.join("personas");
 
     let memory_ok = memory_dir.exists();
 
-    let skills_count = count_files_with_ext(&skills_dir, "md");
+    let skills_count = load_available_skills()
+        .map(|skills| skills.len())
+        .unwrap_or(0);
     let personas_count = {
         // Built-in count + user overrides
-        let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-            .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+        let registry = configured_persona_registry();
         use agent007_core::PersonaProvider;
         registry.list().len()
     };
@@ -4103,32 +4225,8 @@ fn health_check(config: &Config) -> String {
 // ── workflow plan (hosted MCP mode) ────────────────────────────────────────
 
 async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<String> {
-    let workflows_dir = agent007_home().join("workflows");
-
-    let path = {
-        let yaml_path = workflows_dir.join(format!("{}.yaml", name));
-        let yml_path = workflows_dir.join(format!("{}.yml", name));
-        if yaml_path.exists() {
-            yaml_path
-        } else if yml_path.exists() {
-            yml_path
-        } else {
-            return Err(anyhow::anyhow!(
-                "Workflow '{}' not found in {}",
-                name,
-                workflows_dir.display()
-            ));
-        }
-    };
-
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| anyhow::anyhow!("failed to read workflow: {}", e))?;
-    let def: agent007_workflows::types::WorkflowDef = serde_yaml::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("failed to parse workflow YAML: {}", e))?;
-
-    let personas_dir = agent007_home().join("personas");
-    let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-        .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+    let def = load_workflow_def(name)?;
+    let registry = configured_persona_registry();
 
     // Load ranked memory context for template variable injection.
     let mem_ctx = build_memory_context(task);
@@ -4188,9 +4286,7 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
 // ── agent wizard helpers ──────────────────────────────────────────────────
 
 fn agent_catalog() -> String {
-    let personas_dir = agent007_home().join("personas");
-    let registry = agent007_personas::PersonaRegistry::load(&personas_dir)
-        .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+    let registry = configured_persona_registry();
 
     use agent007_core::PersonaProvider;
     let personas = registry.list();
@@ -4347,20 +4443,6 @@ fn skill_templates() -> String {
     serde_json::to_string_pretty(&templates).unwrap_or_default()
 }
 
-fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
-    if !dir.exists() {
-        return 0;
-    }
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some(ext))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
 /// Entry point: start MCP stdio server + web dashboard (unless `--no-dashboard`).
 pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: bool) -> Result<()> {
     // On every server start, close out any runs left open by a previous crash.
@@ -4461,6 +4543,9 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
             );
         } // end else already_running
     } else {
+        if let Err(error) = ensure_dashboard_sidecar(dashboard_port).await {
+            tracing::warn!("failed to ensure dashboard sidecar: {error}");
+        }
         tracing::info!("agent007 MCP server starting (stdio transport, dashboard disabled)");
     }
 
@@ -4527,6 +4612,12 @@ async fn ensure_dashboard_sidecar(preferred_port: u16) -> Result<Option<u16>> {
             return Ok(Some(port));
         }
     }
+    if let Some(port) = read_registered_dashboard_port_for_current_project() {
+        if dashboard_port_is_live(port).await {
+            persist_dashboard_port(port);
+            return Ok(Some(port));
+        }
+    }
 
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
@@ -4559,6 +4650,31 @@ fn read_dashboard_port() -> Option<u16> {
     raw.trim().parse().ok()
 }
 
+fn current_project_registry_key() -> Option<String> {
+    let write_home = agent007_write_home();
+    let project_root = write_home.parent()?;
+    let canonical = project_root.canonicalize().ok();
+    Some(
+        canonical
+            .unwrap_or_else(|| project_root.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn read_registered_dashboard_port_for_current_project() -> Option<u16> {
+    let key = current_project_registry_key()?;
+    let path = agent007_global_home().join("ports.toml");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value = raw.parse::<toml::Value>().ok()?;
+    value
+        .get("projects")
+        .and_then(|v| v.as_table())
+        .and_then(|t| t.get(&key))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u16::try_from(v).ok())
+}
+
 async fn dashboard_port_is_live(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tokio::time::timeout(
@@ -4572,8 +4688,8 @@ async fn dashboard_port_is_live(port: u16) -> bool {
 
 /// Check if the dashboard on `port` is serving the same project as the current process.
 /// Issues a raw HTTP GET /api/stats and looks for the project_path in the JSON body.
-/// Returns true (treat as same project) on any network/parse error to avoid spurious
-/// double-starts when the API is temporarily unavailable.
+/// Returns false on network/parse errors so callers can safely start a new dashboard
+/// instead of silently skipping startup.
 async fn dashboard_port_is_same_project(port: u16) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -4585,25 +4701,25 @@ async fn dashboard_port_is_same_project(port: u16) -> bool {
 
     let connect = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"));
     let Ok(Ok(mut stream)) = tokio::time::timeout(Duration::from_millis(400), connect).await else {
-        return true;
+        return false;
     };
 
     let req = b"GET /api/stats HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     if stream.write_all(req).await.is_err() {
-        return true;
+        return false;
     }
 
     let mut buf = Vec::new();
     let read = tokio::time::timeout(Duration::from_millis(400), stream.read_to_end(&mut buf));
     if read.await.is_err() {
-        return true;
+        return false;
     }
 
     let body = String::from_utf8_lossy(&buf);
     // JSON body starts after the blank line separating headers from body
     let json_str = body.split("\r\n\r\n").nth(1).unwrap_or("");
     let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) else {
-        return true;
+        return false;
     };
 
     let running_project = json
@@ -4909,6 +5025,82 @@ output = "notes"
             .unwrap();
         assert_eq!(summary.tokens, 2800);
         assert_eq!(summary.requests, 1);
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn record_actual_tokens_updates_completed_delegate_run() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("skill", "finish hosted skill").unwrap();
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
+
+        let handed_off = load_run_store().load_run(&run_id).unwrap();
+        assert!(matches!(
+            handed_off.metadata.status,
+            agent007_core::run_store::RunStatus::Succeeded
+        ));
+        assert_eq!(
+            handed_off.metadata.output_preview.as_deref(),
+            Some("delegated to host LLM")
+        );
+
+        let message =
+            record_actual_tokens(&run_id, 512, "host-llm", Some("final hosted output")).unwrap();
+        assert!(message.contains("Recorded 512 tokens"));
+
+        let detail = load_run_store().load_run(&run_id).unwrap();
+        assert!(matches!(
+            detail.metadata.status,
+            agent007_core::run_store::RunStatus::Succeeded
+        ));
+        assert_eq!(detail.metadata.provider.as_deref(), Some("host-llm"));
+        assert_eq!(
+            detail.metadata.output_preview.as_deref(),
+            Some("final hosted output")
+        );
+
+        let stored_output = load_run_store()
+            .read_text_artifact_optional(&run_id, "output.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored_output, "final hosted output");
+
+        let delegate_state = hosted_delegate_state(&load_run_store(), &run_id).unwrap();
+        assert!(!delegate_state.awaiting_host_report);
+
+        let key = format!("skill_{}", &run_id[..8.min(run_id.len())]);
+        let memory = memory_store()
+            .scoped("project")
+            .read(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(memory, "final hosted output");
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn record_actual_tokens_uses_kind_specific_memory_keys_for_delegate_runs() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("workflow", "finish hosted workflow").unwrap();
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
+
+        record_actual_tokens(&run_id, 42, "host-llm", Some("workflow final output")).unwrap();
+
+        let workflow_key = format!("workflow_{}", &run_id[..8.min(run_id.len())]);
+        let stored = memory_store()
+            .scoped("project")
+            .read(&workflow_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, "workflow final output");
 
         std::env::remove_var("AGENT007_HOME");
     }
@@ -5281,6 +5473,69 @@ requires_approval = true
         assert_eq!(payload["memory_key"], "project/repo_brain");
         let stored = memory_read("project", "repo_brain").unwrap();
         assert!(stored.as_deref().unwrap_or("").contains("Repo Brain"));
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn build_memory_context_reads_project_user_and_global_scopes_from_correct_homes() {
+        let _guard = env_lock();
+        let project_home = tempfile::tempdir().unwrap();
+        let global_home = tempfile::tempdir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+
+        std::env::set_var("AGENT007_HOME", project_home.path());
+        std::env::set_var("HOME", global_home.path());
+        std::env::set_var("AGENT007_INCLUDE_SHARED_MEMORY", "1");
+
+        memory_write("project", "project_note", "project-local memory").unwrap();
+        memory_write("project", "repo_brain", "repo brain summary").unwrap();
+        memory_write("user", "user_note", "user-shared memory").unwrap();
+        memory_write("global", "global_note", "global-shared memory").unwrap();
+
+        let context = build_memory_context("project user global");
+
+        assert!(context.project.contains("project-local memory"));
+        assert!(context.repo_brain.contains("repo brain summary"));
+        assert!(context.user.contains("user-shared memory"));
+        assert!(context.global.contains("global-shared memory"));
+        assert!(context.rag.contains("[project/project_note]"));
+        assert!(context.rag.contains("[user/user_note]"));
+        assert!(context.rag.contains("[global/global_note]"));
+
+        std::env::remove_var("AGENT007_HOME");
+        std::env::remove_var("AGENT007_INCLUDE_SHARED_MEMORY");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn hosted_task_run_is_closed_immediately_and_waits_for_host_report() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let response = run_task(&Config::default(), "ship hosted task".to_string())
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let run_id = payload["run_id"].as_str().unwrap();
+
+        let detail = load_run_store().load_run(run_id).unwrap();
+        assert_eq!(
+            detail.metadata.status,
+            agent007_core::run_store::RunStatus::Succeeded
+        );
+        assert_eq!(
+            detail.metadata.output_preview.as_deref(),
+            Some("delegated to host LLM")
+        );
+        let delegate_state =
+            hosted_delegate_state(&load_run_store(), run_id).expect("delegate state should exist");
+        assert!(delegate_state.awaiting_host_report);
+
         std::env::remove_var("AGENT007_HOME");
     }
 

@@ -13,11 +13,22 @@ impl PersonaRegistry {
     /// Load built-in personas plus any user overrides found in user_dir (e.g. ~/.agent007/personas/).
     /// If user_dir does not exist, only built-ins are returned.
     pub fn load(user_dir: &Path) -> Result<Self, PersonaError> {
+        Self::load_from_dirs(std::iter::once(user_dir))
+    }
+
+    /// Load built-in personas plus overrides from multiple directories.
+    /// Later directories win over earlier ones for the same persona name.
+    pub fn load_from_dirs<'a, I>(dirs: I) -> Result<Self, PersonaError>
+    where
+        I: IntoIterator<Item = &'a Path>,
+    {
         let mut registry = Self::built_in();
-        if user_dir.exists() {
-            let overrides = load_user_overrides(user_dir)?;
-            for spec in overrides {
-                registry.personas.insert(spec.name.clone(), spec);
+        for dir in dirs {
+            if dir.exists() {
+                let overrides = load_user_overrides(dir)?;
+                for spec in overrides {
+                    registry.personas.insert(spec.name.clone(), spec);
+                }
             }
         }
         Ok(registry)
@@ -463,5 +474,41 @@ allowed_tools = []
         let registry = PersonaRegistry::load(dir.path()).unwrap();
         assert_eq!(registry.list().len(), 16); // 15 built-in + 1 custom
         assert!(registry.get("CustomSpecialist").is_some());
+    }
+
+    #[test]
+    fn load_from_dirs_applies_later_overrides_last() {
+        let global = tempfile::TempDir::new().unwrap();
+        let project = tempfile::TempDir::new().unwrap();
+
+        std::fs::write(
+            global.path().join("coder.toml"),
+            r#"
+name = "Coder"
+description = "global coder"
+system_prompt = "Global coder."
+preferred_model = "claude"
+allowed_tools = ["bash"]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            project.path().join("coder.toml"),
+            r#"
+name = "Coder"
+description = "project coder"
+system_prompt = "Project coder."
+preferred_model = "codex"
+allowed_tools = ["bash", "file_edit"]
+"#,
+        )
+        .unwrap();
+
+        let registry = PersonaRegistry::load_from_dirs([global.path(), project.path()]).unwrap();
+        let coder = registry.get("Coder").unwrap();
+        assert_eq!(coder.description, "project coder");
+        assert_eq!(coder.preferred_model, "codex");
+        assert_eq!(coder.allowed_tools, vec!["bash", "file_edit"]);
     }
 }
