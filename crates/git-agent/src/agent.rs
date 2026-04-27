@@ -166,6 +166,14 @@ mod tests {
 
     fn init_repo(dir: &Path) -> git2::Repository {
         let repo = git2::Repository::init(dir).expect("failed to init repo");
+        // Ensure tests do not depend on global git identity in CI runners.
+        {
+            let mut cfg = repo.config().expect("failed to open repo config");
+            cfg.set_str("user.name", "agent007-tests")
+                .expect("failed to set user.name");
+            cfg.set_str("user.email", "agent007-tests@example.com")
+                .expect("failed to set user.email");
+        }
         // git2 requires at least one commit before branching
         let sig = git2::Signature::now("Test", "test@example.com").unwrap();
         let tree_id = {
