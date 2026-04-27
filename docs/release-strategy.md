@@ -92,6 +92,12 @@ Release operations are automated with GitHub Actions:
   - Produces per-asset checksums and consolidated `SHA256SUMS`.
   - Publishes release artifacts and generated release notes.
 
+Current runner matrix:
+
+- CI (`ci.yml`): Linux runners only.
+- Release (`release.yml`): Linux artifact builds only.
+- macOS: source install path until prebuilt artifacts are reintroduced.
+
 ## Versioning
 
 Public releases should use semantic versioning:

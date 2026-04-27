@@ -495,7 +495,6 @@ mod tests {
     async fn index_updated_after_insight_write() {
         let dir = TempDir::new().unwrap();
         let (store, ms) = make_setup(&dir);
-        let project_scope = ms.scoped("project");
 
         for _ in 0..5 {
             store

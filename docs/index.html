@@ -758,7 +758,7 @@ footer {
     </p>
 
     <div class="hero-actions">
-      <a class="btn-primary" href="#install">Install with Cargo</a>
+      <a class="btn-primary" href="#install">Install (Linux)</a>
       <a class="btn-secondary" href="https://github.com/danieldear/agent007" target="_blank">View on GitHub</a>
     </div>
   </div>
@@ -920,22 +920,24 @@ footer {
 <section id="install" class="install-section">
   <div class="section-inner">
     <p class="section-tag reveal">Get started</p>
-    <h2 class="section-title reveal">Up and running<br/>in three commands.</h2>
-    <p class="section-sub reveal">Built in Rust — single binary, no runtime dependencies. Registers with all your editors at once.</p>
+    <h2 class="section-title reveal">Install paths,<br/>clearly defined.</h2>
+    <p class="section-sub reveal">Linux x86_64 ships as a prebuilt release artifact via curl installer. macOS currently installs from source.</p>
 
     <div class="install-grid">
       <div class="reveal">
         <div class="code-block">
           <div class="code-header">
             <span class="code-lang">Install</span>
-            <button class="code-copy" onclick="copyCode(this, 'cargo install --path crates/cli')">copy</button>
+            <button class="code-copy" onclick="copyCode(this, 'curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash')">copy</button>
           </div>
-          <pre><span class="cm"># From source (recommended)</span>
-<span class="kw">cargo</span> install --path crates/cli
+          <pre><span class="cm"># Linux x86_64 (prebuilt release artifact)</span>
+<span class="kw">curl</span> -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | <span class="kw">bash</span>
 
-<span class="cm"># Or build the binary</span>
-<span class="kw">cargo</span> build --release
-<span class="cm"># → target/release/agent007</span></pre>
+<span class="cm"># macOS (source install)</span>
+<span class="kw">cargo</span> install --git https://github.com/danieldear/agent007.git agent007
+
+<span class="cm"># Local development install</span>
+<span class="kw">cargo</span> install --path crates/cli</pre>
         </div>
       </div>
 
@@ -957,6 +959,11 @@ footer {
         </div>
       </div>
     </div>
+
+    <p class="section-sub reveal" style="margin-top:1.75rem; max-width:880px;">
+      Current release automation publishes Linux artifacts only to keep pipeline time low.
+      CI and release runners are Linux-based for now; macOS uses source install until prebuilt artifacts are reintroduced.
+    </p>
 
     <div class="reveal">
       <div class="code-block">

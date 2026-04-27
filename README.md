@@ -48,6 +48,8 @@ macOS users can install from source:
 cargo install --git https://github.com/danieldear/agent007.git agent007
 ```
 
+Release automation currently publishes Linux artifacts only; macOS is source-install for now.
+
 Or build from source:
 
 ```bash
