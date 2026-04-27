@@ -22,7 +22,7 @@ This is the intentionally simple path for now.
 We are still shipping major features quickly. The current priority is:
 
 1. Keep release operations simple.
-2. Make installation work on macOS and Linux with minimal friction.
+2. Keep release pipeline latency low while preserving one reliable install path.
 3. Avoid maintaining multiple package ecosystems too early.
 4. Preserve a clean user-facing release story while milestones are still moving fast.
 
@@ -39,8 +39,6 @@ Each release must include:
 3. Release notes written for humans.
 4. Prebuilt binaries for supported targets named as:
    - `agent007-x86_64-unknown-linux-gnu.tar.gz`
-   - `agent007-x86_64-apple-darwin.tar.gz`
-   - `agent007-aarch64-apple-darwin.tar.gz`
 5. `SHA256SUMS`.
 6. A curl-installable shell script (`install.sh`).
 
@@ -72,6 +70,8 @@ The installer should:
 5. Print next-step PATH guidance when needed.
 
 Manual binary download from GitHub Releases remains the fallback path.
+On macOS, when no prebuilt artifact is published, installer output should direct
+users to source install.
 
 Specific version install:
 
@@ -88,7 +88,7 @@ Release operations are automated with GitHub Actions:
   - Frontend dependency install + production build validation.
 - `.github/workflows/release.yml`
   - Triggered by pushing a `v*` tag.
-  - Builds release binaries for supported targets.
+  - Builds release binaries for Linux (`x86_64-unknown-linux-gnu`).
   - Produces per-asset checksums and consolidated `SHA256SUMS`.
   - Publishes release artifacts and generated release notes.
 
@@ -150,7 +150,7 @@ Before publishing a release:
 4. Version tag is created.
 5. GitHub Release artifacts are attached by `.github/workflows/release.yml`.
 6. `SHA256SUMS` is present and validated against uploaded archives.
-7. Curl installer is tested on at least one macOS and one Linux environment.
+7. Curl installer is tested on Linux for release assets.
 
 ## Current Decision
 

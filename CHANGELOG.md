@@ -18,6 +18,7 @@ for public releases.
 
 - README and release strategy docs aligned with the GitHub Releases + curl installer path.
 - Regression test fixture in `crates/testing/src/regression.rs` updated for deterministic baseline threshold behavior.
+- GitHub release workflow now builds Linux release artifacts only to reduce CI runtime; installer prints source-install guidance when macOS artifacts are unavailable.
 
 ## [0.1.0] - 2026-04-27
 

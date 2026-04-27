@@ -114,7 +114,19 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Installing agent007 ${TAG} (${TARGET}) from ${REPO} ..."
 
-curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"
+if ! curl -fL "${BASE_URL}/${ASSET}" -o "${TMP_DIR}/${ASSET}"; then
+  if [[ "$OS" == "Darwin" ]]; then
+    cat >&2 <<EOF
+No prebuilt macOS artifact is published for ${TAG} right now.
+Use source install instead:
+  cargo install --git https://github.com/${REPO}.git agent007
+EOF
+  else
+    echo "Failed to download ${ASSET} from ${BASE_URL}" >&2
+  fi
+  exit 1
+fi
+
 curl -fL "${BASE_URL}/SHA256SUMS" -o "${TMP_DIR}/SHA256SUMS"
 
 checksum_line="$(grep " ${ASSET}$" "${TMP_DIR}/SHA256SUMS" || true)"

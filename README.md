@@ -24,7 +24,7 @@ Current release strategy: GitHub Releases plus a curl-based installer. Homebrew,
 `apt`, and other package-manager distribution are intentionally deferred while
 the project is still moving quickly. See [docs/release-strategy.md](docs/release-strategy.md).
 
-Install the latest release (macOS/Linux):
+Install the latest prebuilt release (Linux x86_64):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash
@@ -40,6 +40,12 @@ Direct install alternatives:
 
 ```bash
 cargo install --path crates/cli
+```
+
+macOS users can install from source:
+
+```bash
+cargo install --git https://github.com/danieldear/agent007.git agent007
 ```
 
 Or build from source:
