@@ -32,14 +32,17 @@ We are still shipping major features quickly. The current priority is:
 
 GitHub Releases are the source of truth for installs.
 
-Each release should eventually include:
+Each release must include:
 
 1. A git tag.
 2. A GitHub Release entry.
 3. Release notes written for humans.
-4. Prebuilt binaries for supported targets.
+4. Prebuilt binaries for supported targets named as:
+   - `agent007-x86_64-unknown-linux-gnu.tar.gz`
+   - `agent007-x86_64-apple-darwin.tar.gz`
+   - `agent007-aarch64-apple-darwin.tar.gz`
 5. `SHA256SUMS`.
-6. A curl-installable shell script.
+6. A curl-installable shell script (`install.sh`).
 
 ### Deferred For Now
 
@@ -57,7 +60,7 @@ These can be added later if user demand justifies the maintenance cost.
 The primary install story should be:
 
 ```bash
-curl -fsSL <release-install-script-url> | sh
+curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash
 ```
 
 The installer should:
@@ -69,6 +72,25 @@ The installer should:
 5. Print next-step PATH guidance when needed.
 
 Manual binary download from GitHub Releases remains the fallback path.
+
+Specific version install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash -s -- --version v0.1.0
+```
+
+## Automation
+
+Release operations are automated with GitHub Actions:
+
+- `.github/workflows/ci.yml`
+  - Rust formatting and test checks.
+  - Frontend dependency install + production build validation.
+- `.github/workflows/release.yml`
+  - Triggered by pushing a `v*` tag.
+  - Builds release binaries for supported targets.
+  - Produces per-asset checksums and consolidated `SHA256SUMS`.
+  - Publishes release artifacts and generated release notes.
 
 ## Versioning
 
@@ -122,16 +144,17 @@ Use when:
 
 Before publishing a release:
 
-1. Required tests/checks pass.
+1. CI pipeline (`.github/workflows/ci.yml`) passes.
 2. Release notes are written.
 3. Known issues are updated.
 4. Version tag is created.
-5. GitHub Release artifacts are attached.
-6. Curl installer is tested on at least one macOS and one Linux environment.
+5. GitHub Release artifacts are attached by `.github/workflows/release.yml`.
+6. `SHA256SUMS` is present and validated against uploaded archives.
+7. Curl installer is tested on at least one macOS and one Linux environment.
 
 ## Current Decision
 
-As of `v0.3.1-m3.3`, the project will stay on:
+The project stays on:
 
 ```text
 Model A

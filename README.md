@@ -24,6 +24,20 @@ Current release strategy: GitHub Releases plus a curl-based installer. Homebrew,
 `apt`, and other package-manager distribution are intentionally deferred while
 the project is still moving quickly. See [docs/release-strategy.md](docs/release-strategy.md).
 
+Install the latest release (macOS/Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | bash -s -- --version v0.1.0
+```
+
+Direct install alternatives:
+
 ```bash
 cargo install --path crates/cli
 ```
@@ -397,3 +411,16 @@ See [docs/architecture.md](docs/architecture.md) for the crate map and data flow
 - [docs/skills.md](docs/skills.md) — skills system deep-dive
 - [docs/workflows.md](docs/workflows.md) — workflow reference
 - [docs/configuration.md](docs/configuration.md) — config.toml + hooks.toml schema
+- [docs/release-strategy.md](docs/release-strategy.md) — release policy and channels
+- [docs/known-issues.md](docs/known-issues.md) — tracked product gaps
+
+---
+
+## Governance
+
+- [LICENSE](LICENSE)
+- [SECURITY.md](SECURITY.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SUPPORT.md](SUPPORT.md)
+- [CHANGELOG.md](CHANGELOG.md)

@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn compare_scorecard_to_baseline_reports_expected_deltas() {
-        let current = sample_scorecard(true, 2, 0.7, 4000);
+        let current = sample_scorecard(true, 2, 0.7, 40_000);
         let baseline = ScorecardSummary {
             sample_size: 4,
             completed_runs: 4,
