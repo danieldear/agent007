@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::Path as AxumPath,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Router,
@@ -13,7 +15,7 @@ use agent007_models::ModelRouter;
 use agent007_workflows::WorkflowRunner;
 
 use crate::api;
-use crate::dashboard::DASHBOARD_HTML;
+use crate::dashboard::{load_dist_file, load_dist_index_html, DASHBOARD_HTML};
 use crate::error::WebError;
 use crate::metrics::{self, MetricsState};
 use crate::ws;
@@ -195,11 +197,7 @@ impl WebServer {
             )
             .route("/api/bundle/export", get(api::bundle_export_handler))
             .route("/api/bundle/import", post(api::bundle_import_handler))
-            .nest_service("/assets", {
-                let dist_dir =
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static/dist/assets");
-                tower_http::services::ServeDir::new(dist_dir)
-            })
+            .route("/assets/{*path}", get(asset_handler))
             .with_state(self.state)
     }
 
@@ -272,13 +270,7 @@ impl WebServer {
 }
 
 async fn dashboard_handler() -> impl IntoResponse {
-    let dist_index =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("static/dist/index.html");
-    let html = if dist_index.exists() {
-        std::fs::read_to_string(&dist_index).unwrap_or_else(|_| DASHBOARD_HTML.to_string())
-    } else {
-        DASHBOARD_HTML.to_string()
-    };
+    let html = load_dist_index_html().unwrap_or_else(|| DASHBOARD_HTML.to_string());
     (
         [
             ("cache-control", "no-cache, no-store, must-revalidate"),
@@ -286,6 +278,25 @@ async fn dashboard_handler() -> impl IntoResponse {
         ],
         Html(html),
     )
+}
+
+async fn asset_handler(AxumPath(path): AxumPath<String>) -> impl IntoResponse {
+    let rel_path = format!("assets/{path}");
+    let Some(bytes) = load_dist_file(&rel_path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mut headers = HeaderMap::new();
+    let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    let content_type = HeaderValue::from_str(mime.as_ref())
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    headers.insert(header::CONTENT_TYPE, content_type);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+
+    (headers, bytes).into_response()
 }
 
 async fn health_handler() -> impl IntoResponse {
