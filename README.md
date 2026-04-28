@@ -42,6 +42,8 @@ Direct install alternatives:
 cargo install --path crates/cli
 ```
 
+`cargo install --git ...` and local cargo builds now trigger frontend asset build automatically for `agent007-web` when `static/dist` is missing or stale.
+
 macOS users can install from source:
 
 ```bash

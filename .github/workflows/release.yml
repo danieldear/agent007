@@ -21,6 +21,7 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
+      AGENT007_SKIP_FRONTEND_BUILD: "1"
 
     steps:
       - name: Checkout
