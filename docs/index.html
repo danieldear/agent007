@@ -754,7 +754,7 @@ footer {
     </h1>
 
     <p class="hero-sub">
-      agent007 is a multi-agent orchestration layer that plugs into Claude Code, Cursor, Codex, Copilot, and Zed via MCP — adding skills, workflows, memory, personas, and a live dashboard.
+      agent007 is a multi-agent orchestration layer that plugs into Claude Code, Cursor, Codex, Copilot, and Zed via MCP — adding skills, workflows, memory, personas, eval gates, reliability controls, adaptive routing, and a live dashboard.
     </p>
 
     <div class="hero-actions">
@@ -861,13 +861,13 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">🧠</div>
         <div class="feature-title">Memory</div>
-        <div class="feature-desc">Scoped key-value store with LanceDB vector search. The AI remembers your project decisions, user preferences, and past runs across sessions.</div>
+        <div class="feature-desc">Scoped key-value store with LanceDB vector search. Bounded RAG warmup indexing at startup loads project context automatically. Per-run retrieval telemetry artifacts track hit rate and fallback paths.</div>
         <span class="feature-tag">RAG-powered</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🎭</div>
         <div class="feature-title">Personas</div>
-        <div class="feature-desc">Swap agent identities on the fly. Each persona has its own system prompt, preferred model, and allowed tools. Build specialist agents for security, architecture, or testing.</div>
+        <div class="feature-desc">Swap agent identities on the fly. Each persona has its own system prompt, preferred model, and allowed-tools list. MCP tool-policy enforcement blocks or warns when an out-of-policy tool is called.</div>
         <span class="feature-tag">Unlimited</span>
       </div>
       <div class="feature-card">
@@ -899,6 +899,24 @@ footer {
         <div class="feature-title">Reliability Engine</div>
         <div class="feature-desc">Four additive controls per workflow step: budget governor with graceful degradation, guardrails hook for risky ops, confidence-driven human escalation, and bounded retry transitions. All opt-in — existing workflows unaffected.</div>
         <span class="feature-tag">Opt-in · backward-compatible</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔀</div>
+        <div class="feature-title">Adaptive Shadow</div>
+        <div class="feature-desc">The router silently records which model it <em>would</em> recommend for every step based on historical performance — without changing actual execution. Shadow recommendations accumulate in run records and surface in the dashboard for human review.</div>
+        <span class="feature-tag">Zero-risk</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <div class="feature-title">Sharing &amp; Bundles</div>
+        <div class="feature-desc">Pack skills and workflows into SHA-256-verified bundles for export, import, or team distribution. Promote project-local assets to global with one command. Bundle the web dashboard into the binary at install time.</div>
+        <span class="feature-tag">SHA-256 verified</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <div class="feature-title">P2P Collaboration</div>
+        <div class="feature-desc">Optional local peer sync via signed envelopes and mDNS discovery. Artifact policy filters control what can be shared. Tamper and replay rejection enforced at ingest. Raw prompts and outputs excluded by default.</div>
+        <span class="feature-tag">Preview · opt-in</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🔀</div>
@@ -1080,12 +1098,18 @@ footer {
 
       <div class="arch-arrow">↕ MCP stdio · 45+ tools</div>
 
-      <div class="arch-label">agent007 MCP Server (Rust)</div>
+      <div class="arch-label">agent007 MCP Server (Rust · 21 crates)</div>
       <div class="arch-row">
         <div class="arch-box">Skill Engine</div>
         <div class="arch-box">Workflow Engine</div>
         <div class="arch-box">ModelRouter</div>
         <div class="arch-box">Hook Runner</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box highlight">Eval Gates</div>
+        <div class="arch-box highlight">Reliability Engine</div>
+        <div class="arch-box highlight">Adaptive Shadow</div>
+        <div class="arch-box">Hosted Engine</div>
       </div>
       <div class="arch-row">
         <div class="arch-box">Memory / RAG</div>
@@ -1102,6 +1126,12 @@ footer {
         <div class="arch-box">LanceDB (vectors)</div>
         <div class="arch-box">Web Dashboard :8007</div>
         <div class="arch-box">Downstream MCP</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box highlight">Sharing / Bundles</div>
+        <div class="arch-box highlight">P2P Sync (mDNS)</div>
+        <div class="arch-box">LSP Client</div>
+        <div class="arch-box">Zones / ACL</div>
       </div>
     </div>
   </div>
@@ -1187,6 +1217,9 @@ function copyCode(btn, text) {
     'Skills · Workflows · Memory',
     'Claude Code · Cursor · Copilot · Codex',
     '45+ MCP tools · Built in Rust',
+    'Eval Gates · Reliability Engine · Adaptive Shadow',
+    'Sharing · P2P Collaboration · RAG Warmup',
+    '21 crates · 7 workflows · 15 built-in skills',
   ];
   const badge = document.querySelector('.hero-badge');
   const badgeText = badge ? badge.querySelector('.badge-text') : null;
