@@ -109,8 +109,10 @@ export function useApi() {
     // Sharing — bundle export (returns raw Response so caller can stream blob)
     exportBundle: (skills, workflows) => {
       const params = new URLSearchParams()
-      if (skills?.length) params.set('skills', skills.join(','))
-      if (workflows?.length) params.set('workflows', workflows.join(','))
+      // Always include both params so explicit empty selection is preserved.
+      // Backend treats missing params as "include all" for backward compatibility.
+      params.set('skills', Array.isArray(skills) ? skills.join(',') : '')
+      params.set('workflows', Array.isArray(workflows) ? workflows.join(',') : '')
       return fetch(BASE + `/api/bundle/export?${params}`)
     },
 

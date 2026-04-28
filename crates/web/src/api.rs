@@ -2851,16 +2851,8 @@ pub async fn bundle_export_handler(
     let skills_dir = agent007_write_home().join("skills");
     let workflows_dir = agent007_write_home().join("workflows");
 
-    let skill_filters: Vec<&str> = params
-        .skills
-        .as_deref()
-        .map(|s| s.split(',').collect())
-        .unwrap_or_default();
-    let wf_filters: Vec<&str> = params
-        .workflows
-        .as_deref()
-        .map(|s| s.split(',').collect())
-        .unwrap_or_default();
+    let skill_filters: Vec<&str> = parse_bundle_selection(params.skills.as_deref());
+    let wf_filters: Vec<&str> = parse_bundle_selection(params.workflows.as_deref());
 
     let builder = agent007_sharing::BundleBuilder::new(&skills_dir, &workflows_dir);
     match builder.build(&skill_filters, &wf_filters) {
@@ -2888,6 +2880,26 @@ pub async fn bundle_export_handler(
             Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+fn parse_bundle_selection(selection: Option<&str>) -> Vec<&str> {
+    match selection {
+        None => Vec::new(), // missing query param => include all (backward-compatible)
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                // Explicit empty selection means include none.
+                // Use an impossible sentinel because BundleBuilder interprets an empty slice as "include all".
+                vec!["__none__"]
+            } else {
+                trimmed
+                    .split(',')
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .collect()
+            }
+        }
     }
 }
 
@@ -3506,7 +3518,7 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
 
 #[cfg(test)]
 mod tests {
-    use super::EXTERNAL_WORKFLOW_CONTROL_ERROR;
+    use super::{parse_bundle_selection, EXTERNAL_WORKFLOW_CONTROL_ERROR};
     use crate::server::WebServer;
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -3517,6 +3529,18 @@ mod tests {
     }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn parse_bundle_selection_preserves_explicit_empty_as_none_sentinel() {
+        let items = parse_bundle_selection(Some(""));
+        assert_eq!(items, vec!["__none__"]);
+    }
+
+    #[test]
+    fn parse_bundle_selection_missing_means_all() {
+        let items = parse_bundle_selection(None);
+        assert!(items.is_empty());
+    }
 
     #[tokio::test]
     async fn api_run_accepts_task() {

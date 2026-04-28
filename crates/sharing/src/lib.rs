@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A single skill or workflow packed into a bundle.
@@ -92,7 +92,7 @@ impl BundleBuilder {
     pub fn build(&self, skill_triggers: &[&str], workflow_names: &[&str]) -> Result<Bundle> {
         let skills = self.collect_skill_assets(skill_triggers)?;
         let workflows = self.collect_workflow_assets(workflow_names)?;
-        let tools = self.collect_tools_assets()?;
+        let tools = self.collect_tools_assets(&skills, &workflows)?;
         Ok(Bundle::new(skills, workflows, tools))
     }
 
@@ -204,14 +204,122 @@ impl BundleBuilder {
         Ok(assets)
     }
 
-    fn collect_tools_assets(&self) -> Result<Vec<BundleAsset>> {
+    fn collect_tools_assets(
+        &self,
+        skills: &[BundleAsset],
+        workflows: &[BundleAsset],
+    ) -> Result<Vec<BundleAsset>> {
         if !self.tools_dir.exists() {
             return Ok(Vec::new());
         }
+
+        let mut direct_tool_refs: HashSet<String> = HashSet::new();
+        let mut selected_skill_triggers: HashSet<String> = HashSet::new();
+        let mut workflow_skill_refs: HashSet<String> = HashSet::new();
+
+        for skill in skills {
+            collect_tool_refs_from_text(&skill.content, &mut direct_tool_refs);
+            if let Some(trigger) = parse_frontmatter_value(&skill.content, "trigger") {
+                let key = normalize_trigger_key(&trigger);
+                if !key.is_empty() {
+                    selected_skill_triggers.insert(key);
+                }
+            }
+        }
+
+        for workflow in workflows {
+            collect_tool_refs_from_text(&workflow.content, &mut direct_tool_refs);
+            collect_workflow_skill_refs(&workflow.content, &mut workflow_skill_refs);
+        }
+
+        if direct_tool_refs.is_empty()
+            && workflow_skill_refs.is_empty()
+            && selected_skill_triggers.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+
+        let skill_tool_index = self.build_skill_tool_ref_index()?;
+        for trigger in selected_skill_triggers
+            .iter()
+            .chain(workflow_skill_refs.iter())
+        {
+            if let Some(refs) = skill_tool_index.get(trigger) {
+                for tool in refs {
+                    direct_tool_refs.insert(tool.clone());
+                }
+            }
+        }
+
         let mut assets = Vec::new();
         let mut seen = HashSet::new();
-        collect_files_recursive(&self.tools_dir, &self.tools_dir, &mut assets, &mut seen)?;
+        for rel in direct_tool_refs {
+            let safe_rel = sanitize_relative_reference(&rel)?;
+            let path = self.tools_dir.join(&safe_rel);
+            if !path.is_file() {
+                continue;
+            }
+            let rel_norm = safe_rel.to_string_lossy().replace('\\', "/");
+            if !seen.insert(rel_norm.clone()) {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)?;
+            assets.push(BundleAsset::new(rel_norm, content));
+        }
+        assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
+    }
+
+    fn build_skill_tool_ref_index(&self) -> Result<HashMap<String, HashSet<String>>> {
+        let mut index: HashMap<String, HashSet<String>> = HashMap::new();
+        if !self.skills_dir.exists() {
+            return Ok(index);
+        }
+
+        for entry in std::fs::read_dir(&self.skills_dir)?.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                let content = std::fs::read_to_string(&path)?;
+                let Some(trigger) = parse_frontmatter_value(&content, "trigger") else {
+                    continue;
+                };
+                let key = normalize_trigger_key(&trigger);
+                if key.is_empty() {
+                    continue;
+                }
+                let refs = index.entry(key).or_default();
+                collect_tool_refs_from_text(&content, refs);
+                continue;
+            }
+
+            if !path.is_dir() {
+                continue;
+            }
+            let manifest = path.join("SKILL.md");
+            if !manifest.is_file() {
+                continue;
+            }
+            let manifest_content = std::fs::read_to_string(&manifest)?;
+            let Some(trigger) = parse_frontmatter_value(&manifest_content, "trigger") else {
+                continue;
+            };
+            let key = normalize_trigger_key(&trigger);
+            if key.is_empty() {
+                continue;
+            }
+            let refs = index.entry(key).or_default();
+            collect_tool_refs_from_text(&manifest_content, refs);
+            let mut package_files = Vec::new();
+            collect_files_recursive_paths(&path, &path, &mut package_files)?;
+            for rel in package_files {
+                collect_tool_refs_from_text(&rel, refs);
+            }
+        }
+
+        Ok(index)
     }
 }
 
@@ -390,6 +498,126 @@ fn collect_files_recursive(
         out.push(BundleAsset::new(rel, content));
     }
     Ok(())
+}
+
+fn collect_files_recursive_paths(
+    root: &Path,
+    base_dir: &Path,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(root)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive_paths(&path, base_dir, out)?;
+            continue;
+        }
+        let rel = path
+            .strip_prefix(base_dir)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if !rel.is_empty() {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_reference_token(raw: &str) -> String {
+    let trimmed = raw.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+        )
+    });
+    let without_query = trimmed.split('?').next().unwrap_or(trimmed);
+    let without_fragment = without_query.split('#').next().unwrap_or(without_query);
+    without_fragment
+        .trim_end_matches('.')
+        .trim()
+        .replace('\\', "/")
+}
+
+fn collect_tool_ref_from_token(token: &str, out: &mut HashSet<String>) {
+    let normalized = token.trim().trim_start_matches("./");
+    if normalized.is_empty() {
+        return;
+    }
+
+    if let Some(idx) = normalized.find(".agent007/") {
+        let nested = &normalized[idx + ".agent007/".len()..];
+        collect_tool_ref_from_token(nested, out);
+    }
+
+    if let Some(idx) = normalized.find("tools/") {
+        let rel = &normalized[idx + "tools/".len()..];
+        let rel = rel.trim_start_matches('/');
+        if !rel.is_empty() {
+            out.insert(rel.to_string());
+        }
+    }
+
+    if let Some(idx) = normalized.find("scripts/") {
+        let rel = &normalized[idx..];
+        let rel = rel.trim_start_matches('/');
+        if !rel.is_empty() {
+            out.insert(rel.to_string());
+        }
+    }
+}
+
+fn collect_tool_refs_from_text(text: &str, out: &mut HashSet<String>) {
+    for raw in text.split_whitespace() {
+        let token = normalize_reference_token(raw);
+        if token.is_empty() || token.starts_with("http://") || token.starts_with("https://") {
+            continue;
+        }
+        collect_tool_ref_from_token(&token, out);
+    }
+}
+
+fn collect_workflow_skill_refs(content: &str, out: &mut HashSet<String>) {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("skill:") {
+            continue;
+        }
+        let value = trimmed
+            .trim_start_matches("skill:")
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'');
+        let key = normalize_trigger_key(value);
+        if !key.is_empty() {
+            out.insert(key);
+        }
+    }
+}
+
+fn sanitize_relative_reference(raw: &str) -> Result<PathBuf> {
+    let normalized = raw.replace('\\', "/");
+    if normalized.starts_with('/') {
+        bail!("tool reference must be relative: {}", raw);
+    }
+
+    let mut out = PathBuf::new();
+    for segment in normalized.split('/') {
+        let seg = segment.trim();
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            bail!("tool reference contains parent traversal: {}", raw);
+        }
+        out.push(seg);
+    }
+
+    if out.as_os_str().is_empty() {
+        bail!("tool reference is empty after sanitization: {}", raw);
+    }
+
+    Ok(out)
 }
 
 fn sanitize_relative_asset_path(raw: &str) -> Result<PathBuf> {
@@ -750,6 +978,94 @@ mod tests {
             .join("adb")
             .join("flash.sh")
             .exists());
+    }
+
+    #[test]
+    fn builder_selected_skill_exports_only_that_skill_and_associated_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("ml")).unwrap();
+        std::fs::create_dir_all(tools_dir.join("scripts")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("ml-skill.md"),
+            "---\nname: ml\ndescription: d\ntrigger: /ml-skill\nmodel: codex\n---\nRun tools/ml/infer.py and scripts/train.py on {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("unselected.yaml"),
+            "name: unselected\nsteps:\n  - id: one\n    agent: Coder\n    prompt: hi\n",
+        )
+        .unwrap();
+        std::fs::write(tools_dir.join("ml").join("infer.py"), "print('ok')\n").unwrap();
+        std::fs::write(
+            tools_dir.join("scripts").join("train.py"),
+            "print('train')\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new(&skills_dir, &workflows_dir);
+        let bundle = builder.build(&["ml-skill"], &["__none__"]).unwrap();
+
+        assert_eq!(bundle.skills.len(), 1, "expected only selected skill");
+        assert!(
+            bundle.workflows.is_empty(),
+            "expected no workflows when explicit none selected"
+        );
+        assert_eq!(
+            bundle.tools.len(),
+            2,
+            "expected associated tools/scripts to be exported"
+        );
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("ml/infer.py"));
+        assert!(filenames.contains("scripts/train.py"));
+    }
+
+    #[test]
+    fn builder_selected_workflow_pulls_tools_from_referenced_skill() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("ml")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("ml-skill.md"),
+            "---\nname: ml\ndescription: d\ntrigger: /ml-skill\nmodel: codex\n---\nUse tools/ml/predict.py for inference\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("train.yaml"),
+            "name: train\ndescription: run ml\nsteps:\n  - id: infer\n    agent: Coder\n    skill: /ml-skill\n    output: out\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("ml").join("predict.py"),
+            "print('predict')\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new(&skills_dir, &workflows_dir);
+        let bundle = builder.build(&["__none__"], &["train"]).unwrap();
+
+        assert!(
+            bundle.skills.is_empty(),
+            "did not select any skills directly"
+        );
+        assert_eq!(bundle.workflows.len(), 1, "expected selected workflow only");
+        assert_eq!(bundle.tools.len(), 1, "expected tool from referenced skill");
+        assert_eq!(bundle.tools[0].filename, "ml/predict.py");
     }
 
     #[test]
