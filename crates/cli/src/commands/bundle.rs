@@ -1,7 +1,7 @@
 use crate::commands::slash_commands::sync_claude_slash_commands_for_home;
 use crate::config::Config;
 use crate::BundleAction;
-use agent007_core::paths::{agent007_global_home, agent007_write_home};
+use agent007_core::paths::{agent007_global_home, agent007_write_home, skills_search_dirs, workflow_search_dirs};
 use agent007_sharing::{Bundle, BundleBuilder, BundleImporter};
 use anyhow::Result;
 use std::sync::Arc;
@@ -13,10 +13,7 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             skills,
             workflows,
         } => {
-            let home = agent007_write_home();
-            let skills_dir = home.join("skills");
-            let workflows_dir = home.join("workflows");
-            let builder = BundleBuilder::new(&skills_dir, &workflows_dir);
+            let builder = BundleBuilder::new(skills_search_dirs(), workflow_search_dirs());
 
             let skill_refs: Vec<&str> = skills.iter().map(String::as_str).collect();
             let wf_refs: Vec<&str> = workflows.iter().map(String::as_str).collect();

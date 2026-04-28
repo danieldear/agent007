@@ -34,6 +34,33 @@ pub fn agent007_home() -> PathBuf {
     agent007_project_home().unwrap_or_else(agent007_global_home)
 }
 
+/// Return the ordered list of directories to search for skills (project-local first, then global).
+/// Matches the listing behaviour of the web dashboard and the CLI skill commands.
+pub fn skills_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![agent007_write_home().join("skills")];
+    let global = agent007_global_home().join("skills");
+    if !dirs.iter().any(|d| d == &global) {
+        dirs.push(global);
+    }
+    dirs
+}
+
+/// Return the ordered list of directories to search for workflows (project-local first, then global).
+pub fn workflow_search_dirs() -> Vec<PathBuf> {
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![PathBuf::from(home).join("workflows")];
+    }
+    let mut dirs = Vec::new();
+    if let Some(project) = agent007_project_home() {
+        dirs.push(project.join("workflows"));
+    }
+    let global = agent007_global_home().join("workflows");
+    if !dirs.iter().any(|d| d == &global) {
+        dirs.push(global);
+    }
+    dirs
+}
+
 /// Return the directory where new assets (skills, workflows, memory) should be written.
 ///
 /// Preference order:

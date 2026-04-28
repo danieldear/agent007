@@ -12,7 +12,10 @@ use serde_json::Value;
 use std::path::{Path as FsPath, PathBuf};
 use ts_rs::TS;
 
-use agent007_core::paths::{agent007_global_home, agent007_project_home, agent007_write_home};
+use agent007_core::paths::{
+    agent007_global_home, agent007_project_home, agent007_write_home, skills_search_dirs,
+    workflow_search_dirs,
+};
 use agent007_sharing;
 use agent007_testing::{evaluate_kpi_regression, summarize_scorecards, RegressionThresholds};
 use agent007_workflows::{
@@ -34,14 +37,7 @@ fn run_store_for_web() -> agent007_core::RunStore {
     agent007_core::RunStore::new(agent007_write_home().join("sessions"))
 }
 
-fn skills_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![agent007_write_home().join("skills")];
-    let global = agent007_global_home().join("skills");
-    if !dirs.iter().any(|dir| dir == &global) {
-        dirs.push(global);
-    }
-    dirs
-}
+
 
 // ── request/response shapes ───────────────────────────────────────────────────
 
@@ -1346,28 +1342,10 @@ pub async fn persona_delete_handler(
 /// Returns all directories to search for workflow YAML files, in priority order:
 /// `AGENT007_HOME/workflows/` if explicitly set, otherwise project-local
 /// `.agent007/workflows/` first, then global `~/.agent007/workflows/`.
-/// Mirrors `configured_workflow_dirs()` in the MCP server so the dashboard always
-/// shows the same set of workflows that the MCP tool `agent007_workflow_list` returns.
-fn workflow_dirs() -> Vec<std::path::PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![std::path::PathBuf::from(home).join("workflows")];
-    }
-
-    let mut dirs = Vec::new();
-    if let Some(project) = agent007_project_home() {
-        dirs.push(project.join("workflows"));
-    }
-    let global = agent007_global_home().join("workflows");
-    if !dirs.iter().any(|d| d == &global) {
-        dirs.push(global);
-    }
-    dirs
-}
-
 fn load_workflow_from_dashboard_dirs(
     name: &str,
 ) -> Result<agent007_workflows::WorkflowDef, String> {
-    for workflows_dir in workflow_dirs() {
+    for workflows_dir in workflow_search_dirs() {
         let loader = WorkflowLoader::new(workflows_dir.clone());
         match loader.load_named(name) {
             Ok(def) => return Ok(def),
@@ -1384,7 +1362,7 @@ fn load_workflow_from_dashboard_dirs(
         }
     }
 
-    let searched = workflow_dirs()
+    let searched = workflow_search_dirs()
         .into_iter()
         .map(|dir| dir.display().to_string())
         .collect::<Vec<_>>()
@@ -1424,7 +1402,7 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
     let mut index_by_name: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut result: Vec<Value> = Vec::new();
-    for wf_dir in workflow_dirs() {
+    for wf_dir in workflow_search_dirs() {
         let is_global = wf_dir == global;
         if let Ok(entries) = std::fs::read_dir(&wf_dir) {
             for entry in entries.flatten() {
@@ -1502,7 +1480,7 @@ pub async fn workflow_get_handler(
             .into_response();
     }
 
-    let path = workflow_dirs()
+    let path = workflow_search_dirs()
         .into_iter()
         .flat_map(|dir| {
             [
@@ -3093,7 +3071,7 @@ pub async fn bundle_export_handler(
 
     // Use the same multi-dir search order as the listing APIs so that both
     // project-local and global skills/workflows are found during export.
-    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_dirs());
+    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs());
     match builder.build(&skill_filters, &wf_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (
