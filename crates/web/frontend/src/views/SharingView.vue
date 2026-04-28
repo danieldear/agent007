@@ -33,7 +33,7 @@ function toggleAllWorkflows() {
 // ─── import state ────────────────────────────────────────────────────────────
 const fileInput = ref(null)
 const bundleData = ref(null)
-const bundlePreview = ref(null)   // { skillCount, workflowCount }
+const bundlePreview = ref(null)   // { skillCount, workflowCount, toolsCount }
 const parseError = ref(null)
 const overwrite = ref(false)
 const importStatus = ref(null)
@@ -51,6 +51,26 @@ onMounted(async () => {
     selectedWorkflows.value = wf.map(w => w.name)
   }
 })
+
+function assocTools(item) {
+  return item?.associations?.tools || []
+}
+
+function assocScripts(item) {
+  return item?.associations?.scripts || []
+}
+
+function previewAssociations(values, limit = 2) {
+  return values.slice(0, limit)
+}
+
+function compactRef(value) {
+  if (!value) return ''
+  const normalized = String(value).replace(/^\.?\/*/, '')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 2) return normalized
+  return `${parts[0]}/…/${parts[parts.length - 1]}`
+}
 
 // ─── export ──────────────────────────────────────────────────────────────────
 async function exportBundle() {
@@ -106,9 +126,10 @@ async function handleFileChange(e) {
     // Strict shape check — bundle schema: { skills: [], workflows: [] }
     const skillCount = Array.isArray(parsed.skills) ? parsed.skills.length : null
     const workflowCount = Array.isArray(parsed.workflows) ? parsed.workflows.length : null
+    const toolsCount = Array.isArray(parsed.tools) ? parsed.tools.length : null
 
-    if (skillCount === null && workflowCount === null) {
-      parseError.value = 'File does not look like an agent007 bundle (missing skills/workflows arrays)'
+    if (skillCount === null && workflowCount === null && toolsCount === null) {
+      parseError.value = 'File does not look like an agent007 bundle (missing skills/workflows/tools arrays)'
       return
     }
 
@@ -116,6 +137,7 @@ async function handleFileChange(e) {
     bundlePreview.value = {
       skillCount: skillCount ?? 0,
       workflowCount: workflowCount ?? 0,
+      toolsCount: toolsCount ?? 0,
     }
   } catch (err) {
     parseError.value = `Could not parse bundle: ${err.message}`
@@ -162,10 +184,10 @@ async function importBundle() {
     </div>
 
     <div class="flex-1 overflow-auto">
-      <div class="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-5xl">
+      <div class="p-5 lg:p-6 grid grid-cols-1 xl:grid-cols-12 gap-6 w-full">
 
         <!-- ── Export Card ─────────────────────────────────────────────────── -->
-        <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card bg-base-200 border border-base-300 shadow-sm xl:col-span-7">
           <div class="card-body p-5">
             <!-- Card header -->
             <div class="flex items-center gap-2.5 mb-1">
@@ -182,7 +204,7 @@ async function importBundle() {
               file for sharing or backup on any agent007 instance.
             </p>
 
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 2xl:grid-cols-2 gap-4">
               <!-- Skills picker -->
               <div>
                 <div class="flex items-center justify-between mb-2">
@@ -194,18 +216,39 @@ async function importBundle() {
                   </label>
                 </div>
                 <div v-if="!skills.length" class="text-[11px] text-base-content/30 italic py-2">No skills installed</div>
-                <div class="space-y-px max-h-44 overflow-y-auto pr-1">
+                <div class="space-y-1 max-h-56 overflow-y-auto pr-1">
                   <label v-for="s in skills" :key="s.trigger"
-                    class="flex items-center gap-2 cursor-pointer hover:bg-base-300/60 rounded px-1.5 py-1">
-                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary shrink-0"
+                    class="flex items-start gap-2 cursor-pointer hover:bg-base-300/60 rounded px-1.5 py-1.5">
+                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary shrink-0 mt-0.5"
                       :value="s.trigger.replace(/^\//, '')" v-model="selectedSkills" />
-                    <span class="text-[11px] font-mono truncate flex-1">{{ s.trigger }}</span>
-                    <span class="badge badge-xs shrink-0 font-mono"
-                      :class="s.source === 'global'
-                        ? 'badge-ghost text-base-content/35'
-                        : 'badge-warning text-warning-content'">
-                      {{ s.source === 'global' ? 'Global' : 'Proj' }}
-                    </span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-[11px] font-mono truncate">{{ s.trigger }}</span>
+                        <span class="badge badge-xs shrink-0 font-mono"
+                          :class="s.source === 'global'
+                            ? 'badge-ghost text-base-content/35'
+                            : 'badge-warning text-warning-content'">
+                          {{ s.source === 'global' ? 'Global' : 'Proj' }}
+                        </span>
+                      </div>
+                      <div v-if="s.description" class="text-[10px] text-base-content/40 leading-relaxed mt-0.5">
+                        {{ s.description }}
+                      </div>
+                      <div v-if="assocTools(s).length || assocScripts(s).length" class="mt-1 flex items-center gap-1 flex-wrap">
+                        <span
+                          v-for="tool in previewAssociations(assocTools(s), 2)"
+                          :key="`${s.trigger}-tool-${tool}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-info/25 text-info/80 bg-info/5"
+                          :title="tool"
+                        >{{ compactRef(tool) }}</span>
+                        <span
+                          v-for="script in previewAssociations(assocScripts(s), 2)"
+                          :key="`${s.trigger}-script-${script}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-accent/25 text-accent/80 bg-accent/5"
+                          :title="script"
+                        >{{ compactRef(script) }}</span>
+                      </div>
+                    </div>
                   </label>
                 </div>
               </div>
@@ -221,18 +264,49 @@ async function importBundle() {
                   </label>
                 </div>
                 <div v-if="!workflows.length" class="text-[11px] text-base-content/30 italic py-2">No workflows saved</div>
-                <div class="space-y-px max-h-44 overflow-y-auto pr-1">
+                <div class="space-y-1 max-h-56 overflow-y-auto pr-1">
                   <label v-for="w in workflows" :key="w.name"
-                    class="flex items-center gap-2 cursor-pointer hover:bg-base-300/60 rounded px-1.5 py-1">
-                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary shrink-0"
+                    class="flex items-start gap-2 cursor-pointer hover:bg-base-300/60 rounded px-1.5 py-1.5">
+                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary shrink-0 mt-0.5"
                       :value="w.name" v-model="selectedWorkflows" />
-                    <span class="text-[11px] font-mono truncate flex-1">{{ w.name }}</span>
-                    <span class="badge badge-xs shrink-0 font-mono"
-                      :class="w.source === 'global'
-                        ? 'badge-ghost text-base-content/35'
-                        : 'badge-warning text-warning-content'">
-                      {{ w.source === 'global' ? 'Global' : 'Proj' }}
-                    </span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-[11px] font-mono truncate">{{ w.name }}</span>
+                        <span class="badge badge-xs shrink-0 font-mono"
+                          :class="w.source === 'global'
+                            ? 'badge-ghost text-base-content/35'
+                            : 'badge-warning text-warning-content'">
+                          {{ w.source === 'global' ? 'Global' : 'Proj' }}
+                        </span>
+                        <span v-if="w.steps" class="text-[9px] font-mono text-base-content/35">
+                          {{ w.steps }} steps
+                        </span>
+                      </div>
+                      <div v-if="w.description" class="text-[10px] text-base-content/40 leading-relaxed mt-0.5">
+                        {{ w.description }}
+                      </div>
+                      <div v-if="(w.skill_refs && w.skill_refs.length) || assocTools(w).length || assocScripts(w).length"
+                        class="mt-1 flex items-center gap-1 flex-wrap">
+                        <span
+                          v-for="skill in previewAssociations(w.skill_refs || [], 2)"
+                          :key="`${w.name}-skill-${skill}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-secondary/25 text-secondary/80 bg-secondary/5"
+                          :title="skill"
+                        >{{ skill }}</span>
+                        <span
+                          v-for="tool in previewAssociations(assocTools(w), 2)"
+                          :key="`${w.name}-tool-${tool}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-info/25 text-info/80 bg-info/5"
+                          :title="tool"
+                        >{{ compactRef(tool) }}</span>
+                        <span
+                          v-for="script in previewAssociations(assocScripts(w), 2)"
+                          :key="`${w.name}-script-${script}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-accent/25 text-accent/80 bg-accent/5"
+                          :title="script"
+                        >{{ compactRef(script) }}</span>
+                      </div>
+                    </div>
                   </label>
                 </div>
               </div>
@@ -274,7 +348,7 @@ async function importBundle() {
         </div>
 
         <!-- ── Import Card ─────────────────────────────────────────────────── -->
-        <div class="card bg-base-200 border border-base-300 shadow-sm">
+        <div class="card bg-base-200 border border-base-300 shadow-sm xl:col-span-5">
           <div class="card-body p-5">
             <!-- Card header -->
             <div class="flex items-center gap-2.5 mb-1">
@@ -323,6 +397,10 @@ async function importBundle() {
                   <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Workflows</div>
                   <div class="stat-value text-2xl text-secondary">{{ bundlePreview.workflowCount }}</div>
                 </div>
+                <div class="stat py-3 px-5">
+                  <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Tools</div>
+                  <div class="stat-value text-2xl text-info">{{ bundlePreview.toolsCount }}</div>
+                </div>
               </div>
 
               <div class="flex items-center justify-between flex-wrap gap-3">
@@ -354,12 +432,12 @@ async function importBundle() {
         </div>
 
         <!-- ── Format Reference ────────────────────────────────────────────── -->
-        <div class="card bg-base-200 border border-base-300 lg:col-span-2">
+        <div class="card bg-base-200 border border-base-300 xl:col-span-12">
           <div class="card-body p-5">
             <h3 class="font-bold font-mono text-[10px] uppercase tracking-widest text-base-content/40 mb-4">
               Bundle Format Reference
             </h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
               <div class="flex items-start gap-3">
                 <span class="text-primary opacity-60 mt-0.5">⚡</span>
                 <div>
@@ -377,6 +455,16 @@ async function importBundle() {
                   <p class="text-xs text-base-content/45 leading-relaxed">
                     YAML pipelines with named persona steps, optional <code class="bg-base-300 px-0.5 rounded">depends_on</code>,
                     and special node types (evaluator, router, approval, orchestrator).
+                  </p>
+                </div>
+              </div>
+              <div class="flex items-start gap-3">
+                <span class="text-info opacity-60 mt-0.5">🛠</span>
+                <div>
+                  <p class="text-xs font-mono font-semibold text-base-content/70 mb-1">Tools / Scripts</p>
+                  <p class="text-xs text-base-content/45 leading-relaxed">
+                    Bundle can include <code class="bg-base-300 px-0.5 rounded">tools/</code> assets (shell scripts,
+                    helpers, project automation) so imported skills/workflows keep their dependencies.
                   </p>
                 </div>
               </div>

@@ -25,6 +25,7 @@ use super::run::{
     standalone_mode_available,
 };
 use super::skill::SkillSummary;
+use super::slash_commands::sync_claude_slash_commands_for_home;
 use crate::config::Config;
 
 use agent007_core::dispatcher::LocalDispatcher;
@@ -3813,14 +3814,25 @@ fn skill_create(
         })
         .collect::<String>();
     let path = skills_dir.join(format!("{}.md", filename));
+    let trigger_trimmed = trigger.trim();
+    let normalized_trigger = if trigger_trimmed.trim_start_matches('/').is_empty() {
+        "/custom-skill".to_string()
+    } else if trigger_trimmed.starts_with('/') {
+        trigger_trimmed.to_string()
+    } else {
+        format!("/{trigger_trimmed}")
+    };
 
     let content = format!(
         "---\nname: {}\ntrigger: {}\ndescription: {}\nmodel: {}\n---\n{}\n",
-        name, trigger, description, model, template
+        name, normalized_trigger, description, model, template
     );
 
     std::fs::write(&path, &content)
         .map_err(|e| anyhow::anyhow!("failed to write skill file: {}", e))?;
+
+    let write_home = agent007_write_home();
+    let _ = sync_claude_slash_commands_for_home(&write_home);
 
     Ok(path.display().to_string())
 }
@@ -3861,6 +3873,9 @@ fn workflow_create(name: &str, yaml: &str, overwrite: bool) -> Result<String> {
 
     std::fs::write(&path, yaml)
         .map_err(|e| anyhow::anyhow!("failed to write workflow file: {}", e))?;
+
+    let write_home = agent007_write_home();
+    let _ = sync_claude_slash_commands_for_home(&write_home);
 
     Ok(path.display().to_string())
 }

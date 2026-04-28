@@ -59,7 +59,8 @@ mod tests {
     #[test]
     fn dist_asset_referenced_by_index_is_available() {
         let index = load_dist_index_html().expect("dist index should be available");
-        let asset = first_asset_path(&index).expect("index should reference at least one /assets file");
+        let asset =
+            first_asset_path(&index).expect("index should reference at least one /assets file");
         assert!(
             load_dist_file(&asset).is_some(),
             "referenced asset '{asset}' should be available"

@@ -291,8 +291,8 @@ const promptVars = [
                 <p class="text-xs text-base-content/50 mt-1">
                   Go to <strong class="font-mono text-base-content/70">Skills → + New</strong>, set a trigger like
                   <code class="bg-base-300 px-1 rounded">/my-skill</code>, write your prompt template using
-                  <code class="bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code>, and save. Run <code class="bg-base-300 px-1 rounded">agent007 init</code>
-                  again to register the slash command.
+                  <code class="bg-base-300 px-1 rounded">&#123;&#123;args&#125;&#125;</code>, and save. agent007 now auto-syncs
+                  Claude slash commands when skills/workflows are created or imported.
                 </p>
               </div>
             </li>

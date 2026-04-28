@@ -58,6 +58,11 @@ agent007 skill create
 agent007_skill_wizard action="save" name="..." trigger="..." description="..." template="..."
 ```
 
+When a skill/workflow is created or imported (CLI, MCP, or web dashboard), agent007
+automatically refreshes Claude slash-command files in `.claude/commands` (project scope)
+or `~/.claude/commands` (global scope). You no longer need to rerun `agent007 init`
+just to register a new skill/workflow trigger.
+
 ## Listing skills
 
 ```bash

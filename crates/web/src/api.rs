@@ -1217,6 +1217,7 @@ fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
 
 pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let global = agent007_global_home().join("workflows");
+    let skill_associations = build_skill_association_index();
 
     let mut seen = std::collections::HashSet::new();
     let mut result: Vec<Value> = Vec::new();
@@ -1230,10 +1231,12 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         if seen.insert(stem.to_string()) {
                             let source = if is_global { "global" } else { "project" };
-                            result.push(serde_json::json!({
-                                "name": stem,
-                                "source": source,
-                            }));
+                            result.push(workflow_list_item(
+                                &path,
+                                stem,
+                                source,
+                                &skill_associations,
+                            ));
                         }
                     }
                 }
@@ -1687,12 +1690,18 @@ pub async fn workflow_save_handler(
     let path = wf_dir.join(format!("{name}.yaml"));
     match serde_yaml::to_string(&payload) {
         Ok(yaml) => match std::fs::write(&path, &yaml) {
-            Ok(()) => Json(serde_json::json!({
-                "ok": true,
-                "name": name,
-                "path": path.display().to_string()
-            }))
-            .into_response(),
+            Ok(()) => {
+                let write_home = agent007_write_home();
+                let sync = sync_claude_slash_commands_for_write_home(&write_home);
+                Json(serde_json::json!({
+                    "ok": true,
+                    "name": name,
+                    "path": path.display().to_string(),
+                    "slash_commands": sync.as_ref().ok(),
+                    "slash_command_warning": sync.err(),
+                }))
+                .into_response()
+            }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
@@ -1821,8 +1830,8 @@ pub async fn skill_save_handler(
     }
 
     // Use trigger-derived filename so the file is discoverable by trigger lookup.
-    let trigger_slug: String = payload
-        .trigger
+    let normalized_trigger = normalize_skill_trigger(&payload.trigger);
+    let trigger_slug: String = normalized_trigger
         .trim_start_matches('/')
         .chars()
         .map(|c| {
@@ -1844,7 +1853,7 @@ pub async fn skill_save_handler(
 
     let mut frontmatter_yaml = match serde_yaml::to_string(&SkillFrontmatter {
         name: &payload.name,
-        trigger: &payload.trigger,
+        trigger: &normalized_trigger,
         description: &payload.description,
         model,
         category,
@@ -1868,8 +1877,17 @@ pub async fn skill_save_handler(
     );
 
     match std::fs::write(&path, &content) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() }))
-            .into_response(),
+        Ok(()) => {
+            let write_home = agent007_write_home();
+            let sync = sync_claude_slash_commands_for_write_home(&write_home);
+            Json(serde_json::json!({
+                "ok": true,
+                "path": path.display().to_string(),
+                "slash_commands": sync.as_ref().ok(),
+                "slash_command_warning": sync.err(),
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -2913,6 +2931,8 @@ pub async fn bundle_import_handler(
 
     match importer.import(&bundle, payload.overwrite) {
         Ok(results) => {
+            let write_home = agent007_write_home();
+            let slash_sync = sync_claude_slash_commands_for_write_home(&write_home);
             let imported = results
                 .iter()
                 .filter(|r| r.action == agent007_sharing::ImportAction::Imported)
@@ -2932,6 +2952,8 @@ pub async fn bundle_import_handler(
                 "skipped": skipped,
                 "overwritten": overwritten,
                 "tools": bundle.tools.len(),
+                "slash_commands": slash_sync.as_ref().ok(),
+                "slash_command_warning": slash_sync.err(),
             }))
             .into_response()
         }
@@ -2951,6 +2973,204 @@ fn load_skills_from_dir(dir: &FsPath) -> Vec<agent007_skills::Skill> {
     }
     let loader = agent007_skills::SkillLoader::new(dir);
     loader.load_all().unwrap_or_default()
+}
+
+#[derive(Debug, Serialize)]
+struct SlashCommandSyncInfo {
+    commands_dir: String,
+    written: usize,
+    removed: usize,
+    skill_commands: usize,
+    workflow_commands: usize,
+}
+
+fn sync_claude_slash_commands_for_write_home(
+    write_home: &FsPath,
+) -> Result<SlashCommandSyncInfo, String> {
+    let commands_dir = claude_commands_dir_for_write_home(write_home);
+    std::fs::create_dir_all(&commands_dir)
+        .map_err(|e| format!("failed to create {}: {e}", commands_dir.display()))?;
+
+    let skill_specs = collect_skill_command_specs(write_home);
+    let workflow_specs = collect_workflow_command_specs(write_home);
+
+    let mut desired: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (slug, description, trigger) in &skill_specs {
+        let content = format!(
+            "{description}\n\nUse the mcp__agent007__agent007_skill_run tool with trigger \"{trigger}\" and args \"$ARGUMENTS\".\n"
+        );
+        desired.insert(format!("agent007-{slug}.md"), content);
+    }
+    for (name, description) in &workflow_specs {
+        let content = format!(
+            "{}\n\nUse the mcp__agent007__agent007_workflow_run tool with name=\"{}\" and task=\"$ARGUMENTS\".\n",
+            if description.is_empty() {
+                format!("Run the {name} workflow")
+            } else {
+                description.to_string()
+            },
+            name,
+        );
+        desired.insert(format!("agent007-workflow-{name}.md"), content);
+    }
+
+    let mut written = 0usize;
+    for (name, content) in &desired {
+        let path = commands_dir.join(name);
+        let existing = std::fs::read_to_string(&path).ok();
+        if existing.as_deref() != Some(content.as_str()) {
+            std::fs::write(&path, content)
+                .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+            written += 1;
+        }
+    }
+
+    let mut removed = 0usize;
+    let entries = std::fs::read_dir(&commands_dir)
+        .map_err(|e| format!("failed to read {}: {e}", commands_dir.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".md") || !name.starts_with("agent007-") {
+            continue;
+        }
+        if desired.contains_key(name) {
+            continue;
+        }
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("failed to remove {}: {e}", path.display()))?;
+        removed += 1;
+    }
+
+    Ok(SlashCommandSyncInfo {
+        commands_dir: commands_dir.display().to_string(),
+        written,
+        removed,
+        skill_commands: skill_specs.len(),
+        workflow_commands: workflow_specs.len(),
+    })
+}
+
+fn collect_skill_command_specs(write_home: &FsPath) -> Vec<(String, String, String)> {
+    let mut specs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for home in command_asset_homes(write_home) {
+        let skills_dir = home.join("skills");
+        if !skills_dir.exists() {
+            continue;
+        }
+        let loader = agent007_skills::SkillLoader::new(&skills_dir);
+        let Ok(skills) = loader.load_all() else {
+            continue;
+        };
+        for skill in skills {
+            let trigger = normalize_skill_trigger(skill.trigger());
+            let key = trigger.to_ascii_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            specs.push((
+                command_slug(&trigger),
+                skill.frontmatter.description.clone(),
+                trigger,
+            ));
+        }
+    }
+    specs
+}
+
+fn collect_workflow_command_specs(write_home: &FsPath) -> Vec<(String, String)> {
+    let mut specs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for home in command_asset_homes(write_home) {
+        let workflows_dir = home.join("workflows");
+        if !workflows_dir.exists() {
+            continue;
+        }
+        let loader = WorkflowLoader::new(workflows_dir);
+        let Ok(names) = loader.list_names() else {
+            continue;
+        };
+        for name in names {
+            let key = name.to_ascii_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            if let Ok(def) = loader.load_named(&name) {
+                specs.push((name, def.description.unwrap_or_default()));
+            }
+        }
+    }
+    specs
+}
+
+fn command_asset_homes(write_home: &FsPath) -> Vec<PathBuf> {
+    let mut homes = vec![write_home.to_path_buf()];
+    let global_home = agent007_global_home();
+    if !paths_equal(write_home, &global_home) {
+        homes.push(global_home);
+    }
+    homes
+}
+
+fn claude_commands_dir_for_write_home(write_home: &FsPath) -> PathBuf {
+    let global_home = agent007_global_home();
+    if paths_equal(write_home, &global_home) {
+        return std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".claude")
+            .join("commands");
+    }
+    let project_root = write_home
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    project_root.join(".claude").join("commands")
+}
+
+fn paths_equal(left: &FsPath, right: &FsPath) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn command_slug(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('/')
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn normalize_skill_trigger(trigger: &str) -> String {
+    let trimmed = trigger.trim();
+    let bare = trimmed.trim_start_matches('/');
+    if bare.is_empty() {
+        return "/custom-skill".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
 }
 
 fn list_package_files(package_dir: &FsPath) -> Vec<String> {
@@ -2977,7 +3197,226 @@ fn list_package_files(package_dir: &FsPath) -> Vec<String> {
     files
 }
 
+#[derive(Debug, Default, Clone)]
+struct AssociatedAssets {
+    tools: std::collections::BTreeSet<String>,
+    scripts: std::collections::BTreeSet<String>,
+}
+
+impl AssociatedAssets {
+    fn add_tool(&mut self, value: &str) {
+        let normalized = value.trim().trim_start_matches("./").replace('\\', "/");
+        if !normalized.is_empty() {
+            self.tools.insert(normalized);
+        }
+    }
+
+    fn add_script(&mut self, value: &str) {
+        let normalized = value.trim().trim_start_matches("./").replace('\\', "/");
+        if !normalized.is_empty() {
+            self.scripts.insert(normalized);
+        }
+    }
+
+    fn merge(&mut self, other: &AssociatedAssets) {
+        self.tools.extend(other.tools.iter().cloned());
+        self.scripts.extend(other.scripts.iter().cloned());
+    }
+
+    fn to_json(&self) -> Value {
+        serde_json::json!({
+            "tools": self.tools.iter().cloned().collect::<Vec<_>>(),
+            "scripts": self.scripts.iter().cloned().collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn is_script_file(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.ends_with(".sh")
+        || lower.ends_with(".bash")
+        || lower.ends_with(".zsh")
+        || lower.ends_with(".ps1")
+        || lower.ends_with(".bat")
+        || lower.ends_with(".cmd")
+        || lower.ends_with(".py")
+        || lower.ends_with(".rb")
+        || lower.ends_with(".pl")
+        || lower.ends_with(".js")
+        || lower.ends_with(".mjs")
+        || lower.ends_with(".cjs")
+        || lower.ends_with(".ts")
+}
+
+fn normalize_reference_token(raw: &str) -> String {
+    let trimmed = raw.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+        )
+    });
+    let without_url_prefix = trimmed.trim_start_matches("file://");
+    let without_query = without_url_prefix
+        .split('?')
+        .next()
+        .unwrap_or(without_url_prefix);
+    let without_fragment = without_query.split('#').next().unwrap_or(without_query);
+    without_fragment
+        .trim_end_matches('.')
+        .trim()
+        .replace('\\', "/")
+}
+
+fn collect_association_from_ref(reference: &str, assets: &mut AssociatedAssets) {
+    let normalized = reference.trim().trim_start_matches("./");
+    if normalized.is_empty() {
+        return;
+    }
+
+    if let Some(idx) = normalized.find(".agent007/") {
+        let nested = &normalized[idx + ".agent007/".len()..];
+        collect_association_from_ref(nested, assets);
+    }
+
+    if let Some(idx) = normalized.find("tools/") {
+        let tool = &normalized[idx..];
+        assets.add_tool(tool);
+        if is_script_file(tool) {
+            assets.add_script(tool);
+        }
+    }
+
+    if let Some(idx) = normalized.find("scripts/") {
+        let script = &normalized[idx..];
+        assets.add_script(script);
+    }
+
+    if is_script_file(normalized) {
+        assets.add_script(normalized);
+    }
+}
+
+fn extract_associations_from_text(text: &str, assets: &mut AssociatedAssets) {
+    for raw in text.split_whitespace() {
+        let token = normalize_reference_token(raw);
+        if token.is_empty() || token.starts_with("http://") || token.starts_with("https://") {
+            continue;
+        }
+        if token.contains("{{") || token.contains("}}") {
+            continue;
+        }
+        collect_association_from_ref(&token, assets);
+    }
+}
+
+fn skill_associations(skill: &agent007_skills::Skill) -> AssociatedAssets {
+    let mut assets = AssociatedAssets::default();
+    extract_associations_from_text(skill.template(), &mut assets);
+    if skill.is_package() {
+        for file in list_package_files(skill.entry_path()) {
+            collect_association_from_ref(&file, &mut assets);
+        }
+    }
+    assets
+}
+
+fn normalize_skill_key(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn parse_workflow_def_from_path(
+    _path: &FsPath,
+    raw: &str,
+) -> Option<agent007_workflows::WorkflowDef> {
+    serde_yaml::from_str::<agent007_workflows::WorkflowDef>(raw).ok()
+}
+
+fn build_skill_association_index() -> std::collections::HashMap<String, AssociatedAssets> {
+    let mut index: std::collections::HashMap<String, AssociatedAssets> =
+        std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let project_dir = agent007_project_home().map(|p| p.join("skills"));
+    let global_dir = agent007_global_home().join("skills");
+    let mut dirs = Vec::new();
+    if let Some(dir) = project_dir {
+        dirs.push(dir);
+    }
+    dirs.push(global_dir);
+
+    for dir in dirs {
+        for skill in load_skills_from_dir(&dir) {
+            let key = normalize_skill_key(skill.trigger());
+            if key.is_empty() || !seen.insert(key.clone()) {
+                continue;
+            }
+            index.insert(key, skill_associations(&skill));
+        }
+    }
+
+    index
+}
+
+fn workflow_list_item(
+    path: &FsPath,
+    name: &str,
+    source: &str,
+    skill_associations: &std::collections::HashMap<String, AssociatedAssets>,
+) -> Value {
+    let mut description = String::new();
+    let mut steps_count = 0usize;
+    let mut skill_refs: Vec<String> = Vec::new();
+    let mut associations = AssociatedAssets::default();
+
+    if let Ok(raw) = std::fs::read_to_string(path) {
+        extract_associations_from_text(&raw, &mut associations);
+
+        if let Some(def) = parse_workflow_def_from_path(path, &raw) {
+            description = def.description.unwrap_or_default();
+            steps_count = def.steps.len();
+            for step in &def.steps {
+                if let Some(prompt) = &step.prompt {
+                    extract_associations_from_text(prompt, &mut associations);
+                }
+                if let Some(skill_ref) = &step.skill {
+                    extract_associations_from_text(skill_ref, &mut associations);
+                    let normalized = normalize_skill_key(skill_ref);
+                    if !normalized.is_empty() {
+                        skill_refs.push(normalized.clone());
+                        if let Some(nested) = skill_associations.get(&normalized) {
+                            associations.merge(nested);
+                        }
+                    }
+                }
+                if let Some(sub_workflow) = &step.workflow {
+                    extract_associations_from_text(sub_workflow, &mut associations);
+                }
+            }
+        }
+    }
+
+    skill_refs.sort();
+    skill_refs.dedup();
+
+    serde_json::json!({
+        "name": name,
+        "source": source,
+        "description": description,
+        "steps": steps_count,
+        "skill_refs": skill_refs,
+        "associations": associations.to_json(),
+    })
+}
+
 fn skill_json(skill: &agent007_skills::Skill, source: &str) -> Value {
+    let associations = skill_associations(skill);
     serde_json::json!({
         "trigger": skill.trigger(),
         "name": skill.name(),
@@ -2989,6 +3428,7 @@ fn skill_json(skill: &agent007_skills::Skill, source: &str) -> Value {
         "source": source,
         "format": if skill.is_package() { "package" } else { "flat" },
         "path": skill.entry_path().display().to_string(),
+        "associations": associations.to_json(),
     })
 }
 

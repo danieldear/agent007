@@ -1,3 +1,4 @@
+use crate::commands::slash_commands::sync_claude_slash_commands_for_home;
 use crate::config::Config;
 use crate::BundleAction;
 use agent007_core::paths::{agent007_global_home, agent007_write_home};
@@ -89,6 +90,21 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
                 skipped.len(),
                 overwritten.len()
             );
+            match sync_claude_slash_commands_for_home(&target) {
+                Ok(summary) => {
+                    println!(
+                        "✓ Synced Claude slash commands ({} skill, {} workflow) at {}",
+                        summary.skill_commands,
+                        summary.workflow_commands,
+                        summary.commands_dir.display()
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "⚠ Imported bundle but could not sync Claude slash commands: {error}"
+                    );
+                }
+            }
             Ok(())
         }
 
@@ -109,6 +125,21 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             }
             if let Some(name) = workflow {
                 promote_workflow(&src_home, &target_home, &name)?;
+            }
+            match sync_claude_slash_commands_for_home(&target_home) {
+                Ok(summary) => {
+                    println!(
+                        "✓ Synced Claude slash commands ({} skill, {} workflow) at {}",
+                        summary.skill_commands,
+                        summary.workflow_commands,
+                        summary.commands_dir.display()
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "⚠ Promotion completed but could not sync Claude slash commands: {error}"
+                    );
+                }
             }
             Ok(())
         }

@@ -154,6 +154,30 @@ const filteredRegistry = computed(() => {
 
 const installedTriggers = computed(() => new Set(skills.value.map(s => s.trigger)))
 
+function assocTools(item) {
+  return item?.associations?.tools || []
+}
+
+function assocScripts(item) {
+  return item?.associations?.scripts || []
+}
+
+function hasAssociations(item) {
+  return assocTools(item).length > 0 || assocScripts(item).length > 0
+}
+
+function previewAssociations(values, limit = 3) {
+  return values.slice(0, limit)
+}
+
+function compactRef(value) {
+  if (!value) return ''
+  const normalized = String(value).replace(/^\.?\/*/, '')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 2) return normalized
+  return `${parts[0]}/…/${parts[parts.length - 1]}`
+}
+
 const categoryPrefixes = {
   dev: 'dev',
   code: 'code',
@@ -294,7 +318,7 @@ async function importFromUrl() {
       </button>
     </div>
 
-    <div class="flex-1 overflow-auto p-4">
+    <div class="flex-1 overflow-auto p-5 lg:p-6">
 
       <!-- Tab: Installed -->
       <div v-if="activeTab === 'installed'" class="space-y-6">
@@ -315,11 +339,11 @@ async function importFromUrl() {
               <span class="text-[10px] font-mono text-base-content/20">({{ grouped[cat].length }})</span>
               <div class="flex-1 h-px bg-base-content/8"></div>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
               <div
                 v-for="s in grouped[cat]"
                 :key="s.trigger"
-                class="bg-base-200 border border-base-300 rounded-lg p-4 hover:border-primary/40 transition-colors cursor-pointer group border-l-2"
+                class="bg-base-200 border border-base-300 rounded-lg p-4 hover:border-primary/40 transition-colors cursor-pointer group border-l-2 h-full"
                 :class="{
                   'border-l-blue-400/50': cat === 'dev',
                   'border-l-green-400/50': cat === 'code',
@@ -330,7 +354,7 @@ async function importFromUrl() {
                 @click="openEdit(s)"
                 :title="'Click to view / edit prompt'"
               >
-                <div class="flex items-start gap-3">
+                <div class="flex items-start gap-3 h-full">
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                       <div class="font-mono text-sm font-semibold">{{ s.name }}</div>
@@ -346,6 +370,32 @@ async function importFromUrl() {
                       >proj</span>
                     </div>
                     <div class="text-[11px] font-mono text-base-content/45 mt-1.5 leading-relaxed">{{ s.description }}</div>
+                    <div v-if="hasAssociations(s)" class="mt-2.5 space-y-1.5">
+                      <div v-if="assocTools(s).length" class="flex items-center gap-1 flex-wrap">
+                        <span class="text-[9px] font-mono uppercase tracking-wider text-base-content/35">tools</span>
+                        <span
+                          v-for="tool in previewAssociations(assocTools(s), 3)"
+                          :key="`${s.trigger}-tool-${tool}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-info/25 text-info/80 bg-info/5"
+                          :title="tool"
+                        >{{ compactRef(tool) }}</span>
+                        <span v-if="assocTools(s).length > 3" class="text-[9px] font-mono text-base-content/35">
+                          +{{ assocTools(s).length - 3 }}
+                        </span>
+                      </div>
+                      <div v-if="assocScripts(s).length" class="flex items-center gap-1 flex-wrap">
+                        <span class="text-[9px] font-mono uppercase tracking-wider text-base-content/35">scripts</span>
+                        <span
+                          v-for="script in previewAssociations(assocScripts(s), 3)"
+                          :key="`${s.trigger}-script-${script}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-accent/25 text-accent/80 bg-accent/5"
+                          :title="script"
+                        >{{ compactRef(script) }}</span>
+                        <span v-if="assocScripts(s).length > 3" class="text-[9px] font-mono text-base-content/35">
+                          +{{ assocScripts(s).length - 3 }}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                   <div class="flex flex-col items-end gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
@@ -394,7 +444,7 @@ async function importFromUrl() {
           <p class="text-xs font-mono text-base-content/25 mt-1">use the import tab to add skills from any URL</p>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
           <div
             v-for="item in filteredRegistry"
             :key="item.trigger || item.name"

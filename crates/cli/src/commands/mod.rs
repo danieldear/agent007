@@ -11,5 +11,6 @@ pub mod serve_lsp;
 pub mod serve_web;
 pub mod simulate;
 pub mod skill;
+pub mod slash_commands;
 pub mod test_pipeline;
 pub mod workflow;
