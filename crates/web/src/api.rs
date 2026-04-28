@@ -3088,13 +3088,12 @@ pub async fn bundle_export_handler(
     State(_state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<BundleExportQuery>,
 ) -> impl IntoResponse {
-    let skills_dir = agent007_write_home().join("skills");
-    let workflows_dir = agent007_write_home().join("workflows");
-
     let skill_filters: Vec<&str> = parse_bundle_selection(params.skills.as_deref());
     let wf_filters: Vec<&str> = parse_bundle_selection(params.workflows.as_deref());
 
-    let builder = agent007_sharing::BundleBuilder::new(&skills_dir, &workflows_dir);
+    // Use the same multi-dir search order as the listing APIs so that both
+    // project-local and global skills/workflows are found during export.
+    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_dirs());
     match builder.build(&skill_filters, &wf_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (

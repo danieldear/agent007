@@ -66,24 +66,32 @@ impl Bundle {
 }
 
 /// Builds a bundle from files on disk.
+/// Accepts multiple skills and workflows directories so that project-local
+/// and global agent007 homes can both be searched (matching the listing APIs).
 pub struct BundleBuilder {
-    skills_dir: PathBuf,
-    workflows_dir: PathBuf,
-    tools_dir: PathBuf,
+    skills_dirs: Vec<PathBuf>,
+    workflows_dirs: Vec<PathBuf>,
+    tools_dirs: Vec<PathBuf>,
 }
 
 impl BundleBuilder {
-    pub fn new(skills_dir: impl Into<PathBuf>, workflows_dir: impl Into<PathBuf>) -> Self {
-        let skills_dir = skills_dir.into();
-        let workflows_dir = workflows_dir.into();
-        let home = skills_dir
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+    pub fn new(
+        skills_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+        workflows_dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Self {
+        let skills_dirs: Vec<PathBuf> = skills_dirs.into_iter().map(|p| p.into()).collect();
+        let workflows_dirs: Vec<PathBuf> = workflows_dirs.into_iter().map(|p| p.into()).collect();
+        // Derive tools dirs from the parent of each skills dir, deduplicated.
+        let mut seen_tools: HashSet<PathBuf> = HashSet::new();
+        let tools_dirs: Vec<PathBuf> = skills_dirs
+            .iter()
+            .filter_map(|p| p.parent().map(|parent| parent.join("tools")))
+            .filter(|p| seen_tools.insert(p.clone()))
+            .collect();
         Self {
-            skills_dir,
-            workflows_dir,
-            tools_dir: home.join("tools"),
+            skills_dirs,
+            workflows_dirs,
+            tools_dirs,
         }
     }
 
@@ -97,69 +105,68 @@ impl BundleBuilder {
     }
 
     fn collect_skill_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
-        if !self.skills_dir.exists() {
-            return Ok(Vec::new());
-        }
         let normalized_filter = normalize_skill_filter(filter);
         let mut assets: Vec<BundleAsset> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
 
-        for entry in std::fs::read_dir(&self.skills_dir)?.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+        for skills_dir in &self.skills_dirs {
+            if !skills_dir.exists() {
+                continue;
+            }
+            for entry in std::fs::read_dir(skills_dir)?.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let trigger = parse_frontmatter_value(&content, "trigger")
+                        .map(|v| normalize_trigger_key(&v));
+                    if !filter_matches_skill(&normalized_filter, &stem, trigger.as_deref()) {
+                        continue;
+                    }
+                    let rel = path
+                        .strip_prefix(skills_dir)
+                        .ok()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or_default()
+                        .replace('\\', "/");
+                    if !rel.is_empty() && seen.insert(rel.clone()) {
+                        assets.push(BundleAsset::new(rel, content));
+                    }
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
-                let stem = path
-                    .file_stem()
+
+                if !path.is_dir() {
+                    continue;
+                }
+                let manifest = path.join("SKILL.md");
+                if !manifest.is_file() {
+                    continue;
+                }
+                let manifest_content = std::fs::read_to_string(&manifest)?;
+                let package_name = path
+                    .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or_default()
                     .to_string();
-                let trigger =
-                    parse_frontmatter_value(&content, "trigger").map(|v| normalize_trigger_key(&v));
-                if !filter_matches_skill(&normalized_filter, &stem, trigger.as_deref()) {
+                let trigger = parse_frontmatter_value(&manifest_content, "trigger")
+                    .map(|v| normalize_trigger_key(&v));
+                if !filter_matches_skill(&normalized_filter, &package_name, trigger.as_deref()) {
                     continue;
                 }
-                let rel = path
-                    .strip_prefix(&self.skills_dir)
-                    .ok()
-                    .and_then(|p| p.to_str())
-                    .unwrap_or_default()
-                    .replace('\\', "/");
-                if !rel.is_empty() && seen.insert(rel.clone()) {
-                    assets.push(BundleAsset::new(rel, content));
-                }
-                continue;
+                collect_files_recursive(&path, skills_dir, &mut assets, &mut seen)?;
             }
-
-            if !path.is_dir() {
-                continue;
-            }
-            let manifest = path.join("SKILL.md");
-            if !manifest.is_file() {
-                continue;
-            }
-            let manifest_content = std::fs::read_to_string(&manifest)?;
-            let package_name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string();
-            let trigger = parse_frontmatter_value(&manifest_content, "trigger")
-                .map(|v| normalize_trigger_key(&v));
-            if !filter_matches_skill(&normalized_filter, &package_name, trigger.as_deref()) {
-                continue;
-            }
-            collect_files_recursive(&path, &self.skills_dir, &mut assets, &mut seen)?;
         }
         Ok(assets)
     }
 
     fn collect_workflow_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
-        if !self.workflows_dir.exists() {
-            return Ok(Vec::new());
-        }
         let normalized_filter: HashSet<String> = filter
             .iter()
             .map(|s| s.trim().trim_start_matches('/').to_ascii_lowercase())
@@ -167,38 +174,44 @@ impl BundleBuilder {
             .collect();
         let mut assets: Vec<BundleAsset> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        for entry in std::fs::read_dir(&self.workflows_dir)?.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
+
+        for workflows_dir in &self.workflows_dirs {
+            if !workflows_dir.exists() {
                 continue;
             }
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_default();
-            if ext != "yaml" && ext != "yml" {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if !normalized_filter.is_empty() && !normalized_filter.contains(&stem) {
-                continue;
-            }
-            let rel = path
-                .strip_prefix(&self.workflows_dir)
-                .ok()
-                .and_then(|p| p.to_str())
-                .unwrap_or_default()
-                .replace('\\', "/");
-            if rel.is_empty() {
-                continue;
-            }
-            let content = std::fs::read_to_string(&path)?;
-            if seen.insert(rel.clone()) {
-                assets.push(BundleAsset::new(rel, content));
+            for entry in std::fs::read_dir(workflows_dir)?.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
+                if ext != "yaml" && ext != "yml" {
+                    continue;
+                }
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if !normalized_filter.is_empty() && !normalized_filter.contains(&stem) {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(workflows_dir)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or_default()
+                    .replace('\\', "/");
+                if rel.is_empty() {
+                    continue;
+                }
+                let content = std::fs::read_to_string(&path)?;
+                if seen.insert(rel.clone()) {
+                    assets.push(BundleAsset::new(rel, content));
+                }
             }
         }
         Ok(assets)
@@ -209,7 +222,7 @@ impl BundleBuilder {
         skills: &[BundleAsset],
         workflows: &[BundleAsset],
     ) -> Result<Vec<BundleAsset>> {
-        if !self.tools_dir.exists() {
+        if !self.tools_dirs.iter().any(|d| d.exists()) {
             return Ok(Vec::new());
         }
 
@@ -255,16 +268,21 @@ impl BundleBuilder {
         let mut seen = HashSet::new();
         for rel in direct_tool_refs {
             let safe_rel = sanitize_relative_reference(&rel)?;
-            let path = self.tools_dir.join(&safe_rel);
-            if !path.is_file() {
-                continue;
-            }
             let rel_norm = safe_rel.to_string_lossy().replace('\\', "/");
-            if !seen.insert(rel_norm.clone()) {
+            if seen.contains(&rel_norm) {
                 continue;
             }
-            let content = std::fs::read_to_string(&path)?;
-            assets.push(BundleAsset::new(rel_norm, content));
+            // Search all tools dirs in order; use the first match.
+            for tools_dir in &self.tools_dirs {
+                let path = tools_dir.join(&safe_rel);
+                if !path.is_file() {
+                    continue;
+                }
+                let content = std::fs::read_to_string(&path)?;
+                seen.insert(rel_norm.clone());
+                assets.push(BundleAsset::new(rel_norm.clone(), content));
+                break;
+            }
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
@@ -272,18 +290,39 @@ impl BundleBuilder {
 
     fn build_skill_tool_ref_index(&self) -> Result<HashMap<String, HashSet<String>>> {
         let mut index: HashMap<String, HashSet<String>> = HashMap::new();
-        if !self.skills_dir.exists() {
-            return Ok(index);
-        }
 
-        for entry in std::fs::read_dir(&self.skills_dir)?.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+        for skills_dir in &self.skills_dirs {
+            if !skills_dir.exists() {
+                continue;
+            }
+            for entry in std::fs::read_dir(skills_dir)?.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    let Some(trigger) = parse_frontmatter_value(&content, "trigger") else {
+                        continue;
+                    };
+                    let key = normalize_trigger_key(&trigger);
+                    if key.is_empty() {
+                        continue;
+                    }
+                    let refs = index.entry(key).or_default();
+                    collect_tool_refs_from_text(&content, refs);
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
-                let Some(trigger) = parse_frontmatter_value(&content, "trigger") else {
+
+                if !path.is_dir() {
+                    continue;
+                }
+                let manifest = path.join("SKILL.md");
+                if !manifest.is_file() {
+                    continue;
+                }
+                let manifest_content = std::fs::read_to_string(&manifest)?;
+                let Some(trigger) = parse_frontmatter_value(&manifest_content, "trigger") else {
                     continue;
                 };
                 let key = normalize_trigger_key(&trigger);
@@ -291,31 +330,12 @@ impl BundleBuilder {
                     continue;
                 }
                 let refs = index.entry(key).or_default();
-                collect_tool_refs_from_text(&content, refs);
-                continue;
-            }
-
-            if !path.is_dir() {
-                continue;
-            }
-            let manifest = path.join("SKILL.md");
-            if !manifest.is_file() {
-                continue;
-            }
-            let manifest_content = std::fs::read_to_string(&manifest)?;
-            let Some(trigger) = parse_frontmatter_value(&manifest_content, "trigger") else {
-                continue;
-            };
-            let key = normalize_trigger_key(&trigger);
-            if key.is_empty() {
-                continue;
-            }
-            let refs = index.entry(key).or_default();
-            collect_tool_refs_from_text(&manifest_content, refs);
-            let mut package_files = Vec::new();
-            collect_files_recursive_paths(&path, &path, &mut package_files)?;
-            for rel in package_files {
-                collect_tool_refs_from_text(&rel, refs);
+                collect_tool_refs_from_text(&manifest_content, refs);
+                let mut package_files = Vec::new();
+                collect_files_recursive_paths(&path, &path, &mut package_files)?;
+                for rel in package_files {
+                    collect_tool_refs_from_text(&rel, refs);
+                }
             }
         }
 
@@ -1008,7 +1028,7 @@ mod tests {
         )
         .unwrap();
 
-        let builder = BundleBuilder::new(&skills_dir, &workflows_dir);
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
         let bundle = builder.build(&["ml-skill"], &["__none__"]).unwrap();
 
         assert_eq!(bundle.skills.len(), 1, "expected only selected skill");
@@ -1056,7 +1076,7 @@ mod tests {
         )
         .unwrap();
 
-        let builder = BundleBuilder::new(&skills_dir, &workflows_dir);
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
         let bundle = builder.build(&["__none__"], &["train"]).unwrap();
 
         assert!(
