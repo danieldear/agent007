@@ -2147,6 +2147,38 @@ fn load_available_skills() -> Result<Vec<agent007_skills::Skill>> {
     Ok(skills.into_values().collect())
 }
 
+fn catalog_collision_counts() -> (usize, usize) {
+    let mut skill_counts: HashMap<String, usize> = HashMap::new();
+    for skills_dir in configured_skill_dirs() {
+        if !skills_dir.exists() {
+            continue;
+        }
+        let loader = agent007_skills::SkillLoader::new(&skills_dir);
+        if let Ok(skills) = loader.load_all() {
+            for skill in skills {
+                *skill_counts.entry(skill.trigger().to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    let skill_collisions = skill_counts.values().filter(|count| **count > 1).count();
+
+    let mut workflow_counts: HashMap<String, usize> = HashMap::new();
+    for workflows_dir in configured_workflow_dirs() {
+        if !workflows_dir.exists() {
+            continue;
+        }
+        let loader = agent007_workflows::WorkflowLoader::new(workflows_dir.clone());
+        if let Ok(names) = loader.list_names() {
+            for workflow in names {
+                *workflow_counts.entry(workflow).or_insert(0) += 1;
+            }
+        }
+    }
+    let workflow_collisions = workflow_counts.values().filter(|count| **count > 1).count();
+
+    (skill_collisions, workflow_collisions)
+}
+
 fn list_available_skills() -> Result<Vec<SkillSummary>> {
     Ok(load_available_skills()?
         .into_iter()
@@ -2454,7 +2486,7 @@ fn format_skills(skills: &[SkillSummary]) -> String {
 // ── task helpers ─────────────────────────────────────────────────────────────
 
 fn load_run_store() -> agent007_core::RunStore {
-    agent007_core::RunStore::new(agent007_home().join("sessions"))
+    agent007_core::RunStore::new(agent007_write_home().join("sessions"))
 }
 
 async fn create_traced_stack(
@@ -2557,22 +2589,58 @@ fn hosted_delegate_state(
 
 fn mark_delegate_run_handed_off(run_id: &str, preview: &str, handoff_output: &str) -> Result<()> {
     let store = load_run_store();
-    store
-        .write_text_artifact(run_id, "hosted-handoff.txt", handoff_output)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-    store
-        .write_json_artifact(
-            run_id,
-            HOSTED_DELEGATE_ARTIFACT,
-            &HostedDelegateState {
-                awaiting_host_report: true,
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-    store
-        .finish_run(run_id, true, preview)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let result: Result<()> = (|| {
+        store
+            .write_text_artifact(run_id, "hosted-handoff.txt", handoff_output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        store
+            .write_json_artifact(
+                run_id,
+                HOSTED_DELEGATE_ARTIFACT,
+                &HostedDelegateState {
+                    awaiting_host_report: true,
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        store
+            .finish_run(run_id, true, preview)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let summary = format!("hosted handoff failed: {}", error);
+        let _ = store.finish_run(run_id, false, &summary);
+        return Err(anyhow::anyhow!(summary));
+    }
     Ok(())
+}
+
+fn persist_record_tokens_memory_record(
+    run_id: &str,
+    kind: &str,
+    task: &str,
+    model: &str,
+    tokens: usize,
+    output: &str,
+) {
+    let scoped = memory_store().scoped("project");
+    let normalized_kind = sanitize_tool_component(kind);
+    let record = serde_json::json!({
+        "run_id": run_id,
+        "kind": kind,
+        "task": task,
+        "model": model,
+        "tokens": tokens,
+        "output": output,
+        "source": "agent007_record_tokens",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    if let Ok(serialized) = serde_json::to_string(&record) {
+        let _ = scoped.write(&format!("run_records:{run_id}"), &serialized);
+        let _ = scoped.write(&format!("{normalized_kind}_runs:{run_id}"), &serialized);
+        let _ = scoped.write(&format!("{normalized_kind}_last"), &serialized);
+    }
 }
 
 /// Appends an exact ModelRequest event with the actual token count reported by the host LLM,
@@ -2647,10 +2715,29 @@ fn record_actual_tokens(
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
+    let mut final_output = output.map(|value| value.to_string()).or_else(|| {
+        store
+            .read_text_artifact_optional(run_id, "output.txt")
+            .ok()
+            .flatten()
+    });
+
     if let Some(output) = output {
         store
             .write_text_artifact(run_id, "output.txt", output)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
+        final_output = Some(output.to_string());
+    }
+
+    if let Some(ref output) = final_output {
+        persist_record_tokens_memory_record(
+            run_id,
+            &metadata.kind,
+            &metadata.task,
+            model,
+            tokens,
+            output,
+        );
     }
 
     if awaiting_host_report {
@@ -2660,7 +2747,7 @@ fn record_actual_tokens(
             "task" => format!("task_{}", &run_id[..8.min(run_id.len())]),
             other => format!("{}_{}", other, &run_id[..8.min(run_id.len())]),
         };
-        if let Some(output) = output {
+        if let Some(ref output) = final_output {
             let _ = memory_store().scoped("project").write(&memory_key, output);
         }
         let _ = store.write_json_artifact(
@@ -2673,7 +2760,7 @@ fn record_actual_tokens(
     }
 
     // Transition the run from Running → Succeeded now that the host LLM has finished.
-    let preview = output.unwrap_or("completed");
+    let preview = final_output.as_deref().unwrap_or("completed");
     if stale_restart_failure {
         store
             .finish_run_with_status(
@@ -2708,7 +2795,7 @@ const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_002;
 /// Load a HookExecutor by trying the project-local hooks.toml first, then the global one.
 /// Returns None if neither file exists or both fail to parse.
 fn load_hook_executor() -> Option<Arc<HookExecutor>> {
-    let global_hooks = agent007_home().join("hooks").join("hooks.toml");
+    let global_hooks = agent007_global_home().join("hooks").join("hooks.toml");
     let candidates: Vec<std::path::PathBuf> = agent007_project_home()
         .map(|p| {
             vec![
@@ -2779,7 +2866,11 @@ fn write_statusline() {
         .count();
     let running = runs
         .iter()
-        .filter(|r| matches!(r.status, RunStatus::Running | RunStatus::AwaitingApproval))
+        .filter(|r| matches!(r.status, RunStatus::Running))
+        .count();
+    let awaiting_approval = runs
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::AwaitingApproval))
         .count();
 
     // ── Token + model scan (20 most recent runs) ──────────────────────────────
@@ -2887,8 +2978,12 @@ fn write_statusline() {
     };
 
     // ── Running indicator ─────────────────────────────────────────────────────
-    let run_stats = if running > 0 {
-        format!("✓{succeeded} ✗{failed} ↺{running}")
+    let run_stats = if running > 0 || awaiting_approval > 0 {
+        if awaiting_approval > 0 {
+            format!("✓{succeeded} ✗{failed} ↺{running} ⏸{awaiting_approval}")
+        } else {
+            format!("✓{succeeded} ✗{failed} ↺{running}")
+        }
     } else {
         format!("✓{succeeded} ✗{failed}")
     };
@@ -2952,9 +3047,9 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
 
 async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result<String> {
     if standalone_mode_available(config) {
+        let skill = find_skill(&trigger)?;
         let trace_task = format!("skill:{} {}", trigger, args);
         let (stack, run_id) = create_traced_stack(config, "skill", &trace_task).await?;
-        let skill = find_skill(&trigger)?;
         match stack
             .skill_executor
             .execute_with_report(&skill, &args)
@@ -3172,11 +3267,7 @@ fn memory_write(scope: &str, key: &str, value: &str) -> Result<()> {
 
 fn memory_list(scope: &str) -> Result<Vec<String>> {
     let store = memory_store_for_scope(scope);
-    let effective_scope = if scope.is_empty() || scope == "global" {
-        ""
-    } else {
-        scope
-    };
+    let effective_scope = if scope.is_empty() { "" } else { scope };
     store
         .scoped(effective_scope)
         .list_keys()
@@ -3500,8 +3591,8 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
     let mut state = agent007_workflows::WorkflowRunState::new(&def, task);
     let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), run.id.clone());
 
-    match engine.dispatch(&def, &mut state) {
-        Ok(progress) => {
+    let result = match engine.dispatch(&def, &mut state) {
+        Ok(progress) => (|| -> Result<String> {
             store.write_json_artifact(&run.id, "workflow-request.json", &request)?;
             store.write_json_artifact(
                 &run.id,
@@ -3522,7 +3613,12 @@ fn workflow_hosted_start(name: &str, task: &str) -> Result<String> {
             )?;
             sync_hosted_run_metadata(&store, &run.id, &progress)?;
             hosted_workflow_response(&run.id, &request, &progress, &state)
-        }
+        })(),
+        Err(error) => Err(anyhow::anyhow!("{}", error)),
+    };
+
+    match result {
+        Ok(output) => Ok(output),
         Err(error) => {
             let summary = format!("hosted workflow start failed: {}", error);
             let _ = store.finish_run(&run.id, false, &summary);
@@ -3637,6 +3733,7 @@ async fn execute_workflow_session(
     let def = inject_memory_into_def(def, &task);
     let (stack, run_id) =
         create_traced_stack(config, kind, &format!("{}: {}", def.name, task)).await?;
+    let run_store = stack.run_store.clone();
     let runner = match resume_state {
         Some(state) => {
             stack
@@ -3648,11 +3745,15 @@ async fn execute_workflow_session(
             .for_run(stack.run_store.clone(), run_id.clone()),
     };
     if let Some(workflow_ref) = workflow_ref {
-        stack.run_store.write_json_artifact(
+        if let Err(error) = stack.run_store.write_json_artifact(
             &run_id,
             "workflow-source.json",
             &agent007_workflows::WorkflowSourceRef { workflow_ref },
-        )?;
+        ) {
+            let summary = format!("workflow setup failed: {}", error);
+            let _ = run_store.finish_run(&run_id, false, &summary);
+            return Err(anyhow::anyhow!(summary));
+        }
     }
 
     match runner.run(&def, &task).await {
@@ -3955,7 +4056,14 @@ fn config_show(config: &Config) -> String {
 async fn mcp_tools_list(config: &Config) -> Result<String> {
     let (stack, run_id) =
         create_traced_stack(config, "mcp-tools-list", "list downstream MCP tools").await?;
-    let tools = stack.tool_executor.list_mcp_tools().await?;
+    let tools = match stack.tool_executor.list_mcp_tools().await {
+        Ok(tools) => tools,
+        Err(error) => {
+            let summary = format!("mcp tools listing failed: {}", error);
+            let _ = stack.run_store.finish_run(&run_id, false, &summary);
+            return Err(anyhow::anyhow!(summary));
+        }
+    };
     let payload: Vec<serde_json::Value> = tools
         .into_iter()
         .map(|tool| {
@@ -3966,7 +4074,14 @@ async fn mcp_tools_list(config: &Config) -> Result<String> {
             })
         })
         .collect();
-    let output = serde_json::to_string_pretty(&payload)?;
+    let output = match serde_json::to_string_pretty(&payload) {
+        Ok(output) => output,
+        Err(error) => {
+            let summary = format!("mcp tools response serialization failed: {}", error);
+            let _ = stack.run_store.finish_run(&run_id, false, &summary);
+            return Err(anyhow::anyhow!(summary));
+        }
+    };
     let _ = stack.run_store.finish_run(&run_id, true, &output);
     Ok(output)
 }
@@ -4008,7 +4123,14 @@ async fn mcp_tool_call(
         .await
     {
         Ok(result) => {
-            let output = serde_json::to_string_pretty(&result)?;
+            let output = match serde_json::to_string_pretty(&result) {
+                Ok(output) => output,
+                Err(error) => {
+                    let summary = format!("mcp tool response serialization failed: {}", error);
+                    let _ = stack.run_store.finish_run(&run_id, false, &summary);
+                    return Err(anyhow::anyhow!(summary));
+                }
+            };
             let _ = stack.run_store.finish_run(&run_id, true, &output);
             Ok(output)
         }
@@ -4140,22 +4262,30 @@ fn compact_output_tool(
     let level = parse_compact_level(level)?;
     let run_id = create_recorded_utility_run(config, "compact-output", command)?;
     let store = load_run_store();
-    let compact = agent007_core::compact_command_output(command, output, level);
-    store.write_text_artifact(&run_id, "raw-output.txt", output)?;
-    store.write_text_artifact(&run_id, "compact-output.txt", &compact.summary)?;
-    store.write_json_artifact(&run_id, "compact-output.json", &compact)?;
-    let _ = store.finish_run(
-        &run_id,
-        true,
-        format!(
-            "{} saved ~{} tokens via {} compaction",
-            command, compact.tokens_saved, compact.strategy
-        ),
-    );
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "run_id": run_id,
-        "result": compact,
-    }))?)
+    let result: Result<String> = (|| {
+        let compact = agent007_core::compact_command_output(command, output, level);
+        store.write_text_artifact(&run_id, "raw-output.txt", output)?;
+        store.write_text_artifact(&run_id, "compact-output.txt", &compact.summary)?;
+        store.write_json_artifact(&run_id, "compact-output.json", &compact)?;
+        let _ = store.finish_run(
+            &run_id,
+            true,
+            format!(
+                "{} saved ~{} tokens via {} compaction",
+                command, compact.tokens_saved, compact.strategy
+            ),
+        );
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "result": compact,
+        }))?)
+    })();
+    if let Err(error) = result {
+        let summary = format!("compact-output failed: {}", error);
+        let _ = store.finish_run(&run_id, false, &summary);
+        return Err(anyhow::anyhow!(summary));
+    }
+    result
 }
 
 fn context_compile_tool(
@@ -4169,32 +4299,40 @@ fn context_compile_tool(
 ) -> Result<String> {
     let run_id = create_recorded_utility_run(config, "context-compile", task)?;
     let store = load_run_store();
-    let cwd = std::env::current_dir()?;
-    let compiler = agent007_core::ContextCompiler::new(
-        &cwd,
-        agent007_home(),
-        agent007_core::TokenBudget {
-            max_prompt_tokens,
-            reserve_tokens,
-            max_response_tokens,
-        },
-    );
-    let bundle = compiler.compile(task, max_files, max_memory_notes)?;
-    store.write_json_artifact(&run_id, "context-bundle.json", &bundle)?;
-    store.write_text_artifact(&run_id, "compiled-context.txt", &bundle.compiled_context)?;
-    let _ = store.finish_run(
-        &run_id,
-        true,
-        format!(
-            "compiled context at {} level (~{} tokens)",
-            bundle.recommended_level.as_str(),
-            bundle.estimated_tokens
-        ),
-    );
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "run_id": run_id,
-        "bundle": bundle,
-    }))?)
+    let result: Result<String> = (|| {
+        let cwd = std::env::current_dir()?;
+        let compiler = agent007_core::ContextCompiler::new(
+            &cwd,
+            agent007_home(),
+            agent007_core::TokenBudget {
+                max_prompt_tokens,
+                reserve_tokens,
+                max_response_tokens,
+            },
+        );
+        let bundle = compiler.compile(task, max_files, max_memory_notes)?;
+        store.write_json_artifact(&run_id, "context-bundle.json", &bundle)?;
+        store.write_text_artifact(&run_id, "compiled-context.txt", &bundle.compiled_context)?;
+        let _ = store.finish_run(
+            &run_id,
+            true,
+            format!(
+                "compiled context at {} level (~{} tokens)",
+                bundle.recommended_level.as_str(),
+                bundle.estimated_tokens
+            ),
+        );
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "bundle": bundle,
+        }))?)
+    })();
+    if let Err(error) = result {
+        let summary = format!("context-compile failed: {}", error);
+        let _ = store.finish_run(&run_id, false, &summary);
+        return Err(anyhow::anyhow!(summary));
+    }
+    result
 }
 
 fn repo_brain_markdown(brain: &agent007_core::RepoBrain) -> String {
@@ -4255,23 +4393,31 @@ fn repo_brain_markdown(brain: &agent007_core::RepoBrain) -> String {
 fn repo_brain_refresh_tool(config: &Config) -> Result<String> {
     let run_id = create_recorded_utility_run(config, "repo-brain-refresh", "distill repo brain")?;
     let store = load_run_store();
-    let cwd = std::env::current_dir()?;
-    let brain = agent007_core::RepoBrainBuilder::new(&cwd, agent007_home()).build()?;
-    let markdown = repo_brain_markdown(&brain);
-    memory_write("project", "repo_brain", &markdown)?;
-    store.write_json_artifact(&run_id, "repo-brain.json", &brain)?;
-    store.write_text_artifact(&run_id, "repo-brain.md", &markdown)?;
-    let _ = store.finish_run(
-        &run_id,
-        true,
-        format!("refreshed repo brain for {}", brain.project_name),
-    );
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "run_id": run_id,
-        "memory_key": "project/repo_brain",
-        "repo_brain": brain,
-        "markdown": markdown,
-    }))?)
+    let result: Result<String> = (|| {
+        let cwd = std::env::current_dir()?;
+        let brain = agent007_core::RepoBrainBuilder::new(&cwd, agent007_home()).build()?;
+        let markdown = repo_brain_markdown(&brain);
+        memory_write("project", "repo_brain", &markdown)?;
+        store.write_json_artifact(&run_id, "repo-brain.json", &brain)?;
+        store.write_text_artifact(&run_id, "repo-brain.md", &markdown)?;
+        let _ = store.finish_run(
+            &run_id,
+            true,
+            format!("refreshed repo brain for {}", brain.project_name),
+        );
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "memory_key": "project/repo_brain",
+            "repo_brain": brain,
+            "markdown": markdown,
+        }))?)
+    })();
+    if let Err(error) = result {
+        let summary = format!("repo-brain-refresh failed: {}", error);
+        let _ = store.finish_run(&run_id, false, &summary);
+        return Err(anyhow::anyhow!(summary));
+    }
+    result
 }
 
 fn budget_estimate_tool(
@@ -4299,28 +4445,36 @@ fn budget_estimate_tool(
         task.as_deref().unwrap_or("budget estimate"),
     )?;
     let store = load_run_store();
-    store.write_text_artifact(&run_id, "budget-input.txt", &text)?;
-    store.write_json_artifact(&run_id, "budget-report.json", &report)?;
-    let _ = store.finish_run(
-        &run_id,
-        true,
-        format!(
-            "budget recommends {} context (remaining prompt tokens: {})",
-            report.recommended_level.as_str(),
-            report.remaining_prompt_tokens
-        ),
-    );
-    Ok(serde_json::to_string_pretty(&serde_json::json!({
-        "run_id": run_id,
-        "task": task,
-        "report": report,
-    }))?)
+    let result: Result<String> = (|| {
+        store.write_text_artifact(&run_id, "budget-input.txt", &text)?;
+        store.write_json_artifact(&run_id, "budget-report.json", &report)?;
+        let _ = store.finish_run(
+            &run_id,
+            true,
+            format!(
+                "budget recommends {} context (remaining prompt tokens: {})",
+                report.recommended_level.as_str(),
+                report.remaining_prompt_tokens
+            ),
+        );
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "run_id": run_id,
+            "task": task,
+            "report": report,
+        }))?)
+    })();
+    if let Err(error) = result {
+        let summary = format!("budget-estimate failed: {}", error);
+        let _ = store.finish_run(&run_id, false, &summary);
+        return Err(anyhow::anyhow!(summary));
+    }
+    result
 }
 
 // ── health check helper ───────────────────────────────────────────────────────
 
 fn health_check(config: &Config) -> String {
-    let home = agent007_home();
+    let home = agent007_write_home();
 
     let memory_dir = home.join("memory");
 
@@ -4355,7 +4509,7 @@ fn health_check(config: &Config) -> String {
         {
             providers.push("codex");
         }
-        if config.models.ollama.is_some() {
+        if selected_runtime_provider(config).as_deref() == Some("ollama") {
             providers.push("ollama");
         }
         if std::env::var("AGENT007_DRY_RUN").is_ok() {
@@ -4371,6 +4525,7 @@ fn health_check(config: &Config) -> String {
         selected_runtime_provider(config).unwrap_or_else(|| "hosted-mcp".to_string());
     let selected_model = selected_runtime_model(config).unwrap_or_else(|| "host-llm".to_string());
     let runtime_mode = runtime_mode_label(config);
+    let (skill_collisions, workflow_collisions) = catalog_collision_counts();
 
     format!(
         "agent007 health\n\
@@ -4383,7 +4538,8 @@ fn health_check(config: &Config) -> String {
          runtime mode:      {}\n\
          providers:         {}\n\
          selected provider: {}\n\
-         selected model:    {}\n",
+         selected model:    {}\n\
+         collisions:        skills={} workflows={}\n",
         home.display(),
         memory_dir.display(),
         if memory_ok { "exists" } else { "missing" },
@@ -4394,6 +4550,8 @@ fn health_check(config: &Config) -> String {
         available_providers,
         selected_provider,
         selected_model,
+        skill_collisions,
+        workflow_collisions,
     )
 }
 
@@ -4778,6 +4936,7 @@ fn persist_dashboard_port(port: u16) {
     let scoped = store.scoped("project");
     let _ = scoped.write("dashboard_port", &port.to_string());
     let _ = scoped.write("dashboard_url", &format!("http://localhost:{port}"));
+    register_dashboard_port_for_current_project(port);
 }
 
 #[allow(dead_code)]
@@ -4848,6 +5007,35 @@ fn read_registered_dashboard_port_for_current_project() -> Option<u16> {
         .and_then(|t| t.get(&key))
         .and_then(|v| v.as_integer())
         .and_then(|v| u16::try_from(v).ok())
+}
+
+fn register_dashboard_port_for_current_project(port: u16) {
+    let Some(key) = current_project_registry_key() else {
+        return;
+    };
+    let path = agent007_global_home().join("ports.toml");
+    let mut root = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| raw.parse::<toml::Value>().ok())
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()));
+
+    let Some(root_table) = root.as_table_mut() else {
+        return;
+    };
+    let projects_entry = root_table
+        .entry("projects".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(projects_table) = projects_entry.as_table_mut() else {
+        return;
+    };
+    projects_table.insert(key, toml::Value::Integer(i64::from(port)));
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(raw) = toml::to_string_pretty(&root) {
+        let _ = std::fs::write(path, raw);
+    }
 }
 
 async fn dashboard_port_is_live(port: u16) -> bool {
@@ -5281,6 +5469,76 @@ output = "notes"
     }
 
     #[test]
+    fn record_actual_tokens_writes_structured_memory_records() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("workflow", "ship release").unwrap();
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
+
+        record_actual_tokens(&run_id, 77, "host-llm", Some("workflow result")).unwrap();
+
+        let scoped = memory_store().scoped("project");
+        let by_run = scoped
+            .read(&format!("run_records:{run_id}"))
+            .unwrap()
+            .unwrap();
+        let by_kind = scoped
+            .read(&format!("workflow_runs:{run_id}"))
+            .unwrap()
+            .unwrap();
+        let latest = scoped.read("workflow_last").unwrap().unwrap();
+        let record: serde_json::Value = serde_json::from_str(&by_run).unwrap();
+        let record_kind: serde_json::Value = serde_json::from_str(&by_kind).unwrap();
+        let latest_record: serde_json::Value = serde_json::from_str(&latest).unwrap();
+
+        for value in [record, record_kind, latest_record] {
+            assert_eq!(value["run_id"], run_id);
+            assert_eq!(value["kind"], "workflow");
+            assert_eq!(value["task"], "ship release");
+            assert_eq!(value["model"], "host-llm");
+            assert_eq!(value["tokens"], 77);
+            assert_eq!(value["output"], "workflow result");
+            assert_eq!(value["source"], "agent007_record_tokens");
+            assert!(value["timestamp"].as_str().is_some());
+        }
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn record_actual_tokens_uses_existing_output_when_output_arg_missing() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("skill", "summarize findings").unwrap();
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
+        load_run_store()
+            .write_text_artifact(&run_id, "output.txt", "captured output")
+            .unwrap();
+
+        record_actual_tokens(&run_id, 19, "host-llm", None).unwrap();
+
+        let detail = load_run_store().load_run(&run_id).unwrap();
+        assert_eq!(
+            detail.metadata.output_preview.as_deref(),
+            Some("captured output")
+        );
+
+        let key = format!("skill_{}", &run_id[..8.min(run_id.len())]);
+        let memory = memory_store()
+            .scoped("project")
+            .read(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(memory, "captured output");
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
     fn record_actual_tokens_skips_non_stale_finished_runs() {
         let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
@@ -5335,6 +5593,34 @@ output = "notes"
         let keys = memory_list("nonexistent_scope").unwrap();
         assert!(keys.is_empty());
         std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn memory_list_global_does_not_include_project_scope_entries() {
+        let _guard = env_lock();
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let project_home = project.path().join(".agent007");
+        std::fs::create_dir_all(&project_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("AGENT007_HOME", &project_home);
+        std::env::set_var("HOME", global.path());
+
+        memory_write("project", "project_only", "project value").unwrap();
+        memory_write("global", "global_only", "global value").unwrap();
+
+        let keys = memory_list("global").unwrap();
+        assert!(keys.contains(&"global_only".to_string()));
+        assert!(!keys.iter().any(|key| key.contains("project_only")));
+        assert!(!keys.iter().any(|key| key.starts_with("project:")));
+
+        std::env::remove_var("AGENT007_HOME");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[test]
@@ -5606,6 +5892,32 @@ requires_approval = true
         std::env::remove_var("AGENT007_HOME");
     }
 
+    #[test]
+    fn persist_dashboard_port_registers_port_globally_per_project() {
+        let _guard = env_lock();
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let project_home = project.path().join(".agent007");
+        std::fs::create_dir_all(&project_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("AGENT007_HOME", &project_home);
+        std::env::set_var("HOME", global.path());
+
+        persist_dashboard_port(8124);
+        assert_eq!(
+            read_registered_dashboard_port_for_current_project(),
+            Some(8124)
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
     #[tokio::test]
     async fn dashboard_port_is_live_detects_bound_listener() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -5711,6 +6023,31 @@ requires_approval = true
             hosted_delegate_state(&load_run_store(), run_id).expect("delegate state should exist");
         assert!(delegate_state.awaiting_host_report);
 
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn missing_skill_lookup_does_not_create_stuck_run() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        std::env::set_var("AGENT007_DRY_RUN", "1");
+
+        let result = run_skill_mcp(
+            &Config::default(),
+            "/definitely-missing-skill".to_string(),
+            "arg".to_string(),
+        )
+        .await;
+        assert!(result.is_err(), "expected missing skill error");
+
+        let runs = load_run_store().list_runs(10).unwrap();
+        assert!(
+            runs.is_empty(),
+            "missing skill should fail before run creation"
+        );
+
+        std::env::remove_var("AGENT007_DRY_RUN");
         std::env::remove_var("AGENT007_HOME");
     }
 

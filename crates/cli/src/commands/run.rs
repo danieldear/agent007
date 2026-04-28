@@ -1,8 +1,11 @@
 use anyhow::Result;
 use chrono::Utc;
+use reqwest::blocking::Client as BlockingHttpClient;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use std::{collections::HashMap, sync::OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -129,11 +132,65 @@ pub fn has_openai_api_key() -> bool {
         .unwrap_or(false)
 }
 
+fn ollama_health_timeout() -> Duration {
+    let ms = std::env::var("AGENT007_OLLAMA_HEALTH_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(400);
+    Duration::from_millis(ms.max(100))
+}
+
+fn cached_ollama_reachable(base_url: &str, timeout: Duration) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, bool)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = Instant::now();
+
+    if let Ok(guard) = cache.lock() {
+        if let Some((checked_at, cached_value)) = guard.get(base_url) {
+            if now.saturating_duration_since(*checked_at) < Duration::from_secs(2) {
+                return *cached_value;
+            }
+        }
+    }
+
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let reachable = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .ok()
+        .and_then(|client| client.get(url).send().ok())
+        .map(|response| response.status().is_success())
+        .unwrap_or(false);
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(base_url.to_string(), (now, reachable));
+    }
+    reachable
+}
+
+fn ollama_provider_available(config: &Config) -> bool {
+    let Some(ollama) = &config.models.ollama else {
+        return false;
+    };
+    if std::env::var("AGENT007_SKIP_OLLAMA_HEALTHCHECK")
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    cached_ollama_reachable(&ollama.base_url, ollama_health_timeout())
+}
+
 pub fn standalone_mode_available(config: &Config) -> bool {
     is_dry_run()
         || has_anthropic_api_key()
         || has_openai_api_key()
-        || config.models.ollama.is_some()
+        || ollama_provider_available(config)
 }
 
 pub fn runtime_mode_label(config: &Config) -> &'static str {
@@ -160,7 +217,7 @@ pub fn available_runtime_providers(config: &Config) -> Vec<String> {
     if has_openai_api_key() {
         providers.push("codex".to_string());
     }
-    if config.models.ollama.is_some() {
+    if ollama_provider_available(config) {
         providers.push("ollama".to_string());
     }
     providers
@@ -226,7 +283,8 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
         available.push("codex".to_string());
     }
 
-    if let Some(ollama) = &config.models.ollama {
+    if ollama_provider_available(config) {
+        let ollama = config.models.ollama.as_ref().expect("checked above");
         let model = ollama.default_model.clone();
         let provider = Arc::new(OllamaProvider::new(&ollama.base_url, &model));
         router.register("ollama", provider.clone() as Arc<dyn ModelProvider>);
@@ -284,7 +342,8 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
         router.alias(&model, "codex");
     }
 
-    if let Some(ollama) = &config.models.ollama {
+    if ollama_provider_available(config) {
+        let ollama = config.models.ollama.as_ref().expect("checked above");
         let model = ollama.default_model.clone();
         let provider = Arc::new(OllamaProvider::new(&ollama.base_url, &model));
         router.register("ollama", provider.clone() as Arc<dyn ModelProvider>);
@@ -338,7 +397,8 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     let cancel = CancellationToken::new();
     let tracker = TaskTracker::new();
 
-    let home = agent007_home();
+    let home = agent007_write_home();
+    std::fs::create_dir_all(&home)?;
 
     // 1. Core dispatcher — returns Arc<LocalDispatcher>
     let dispatcher = LocalDispatcher::new(config.core.task_queue_capacity);
@@ -1067,7 +1127,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, OllamaModelConfig};
     use crate::test_support::env_lock;
     use agent007_models::ModelError;
 
@@ -1192,6 +1252,26 @@ mod tests {
         std::env::set_var("AGENT007_NO_TUI", "1");
         assert!(should_use_non_interactive_mode());
         std::env::remove_var("AGENT007_NO_TUI");
+    }
+
+    #[test]
+    fn dead_ollama_falls_back_to_hosted_runtime_mode() {
+        let _guard = env_lock();
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("AGENT007_SKIP_OLLAMA_HEALTHCHECK");
+
+        let mut config = Config::default();
+        config.models.ollama = Some(OllamaModelConfig {
+            base_url: "http://127.0.0.1:9".to_string(),
+            default_model: "llama3.2".to_string(),
+        });
+        config.models.default = "ollama".to_string();
+
+        assert!(!standalone_mode_available(&config));
+        assert_eq!(runtime_mode_label(&config), "hosted-mcp");
+        assert!(available_runtime_providers(&config).is_empty());
     }
 
     #[tokio::test]

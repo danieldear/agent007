@@ -87,6 +87,8 @@ export function useApi() {
       return fetchJson(`/api/regression/evaluate${suffix}`)
     },
     listRuns: () => fetchJson('/api/runs'),
+    cleanupAwaitingRuns: (data) =>
+      fetchJson('/api/runs/cleanup-awaiting', { method: 'POST', body: JSON.stringify(data || {}) }),
     getRunDetail: (id) => fetchJson(`/api/runs/${encodeURIComponent(id)}`),
     approveRunStep: (id, data) => fetchJson(`/api/runs/${encodeURIComponent(id)}/approval`, { method: 'POST', body: JSON.stringify(data) }),
     resumeRun: (id) => fetchJson(`/api/runs/${encodeURIComponent(id)}/resume`, { method: 'POST' }),

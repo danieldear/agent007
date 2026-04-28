@@ -154,6 +154,10 @@ impl WebServer {
                 get(api::regression_evaluate_handler),
             )
             .route("/api/runs", get(api::runs_handler))
+            .route(
+                "/api/runs/cleanup-awaiting",
+                post(api::runs_cleanup_awaiting_handler),
+            )
             .route("/api/runs/{id}", get(api::run_detail_handler))
             .route("/api/runs/{id}/approval", post(api::run_approval_handler))
             .route("/api/runs/{id}/resume", post(api::run_resume_handler))

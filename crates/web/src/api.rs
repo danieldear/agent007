@@ -6,14 +6,13 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path as FsPath, PathBuf};
 use ts_rs::TS;
 
-use agent007_core::paths::{
-    agent007_global_home, agent007_home, agent007_project_home, agent007_write_home,
-};
+use agent007_core::paths::{agent007_global_home, agent007_project_home, agent007_write_home};
 use agent007_sharing;
 use agent007_testing::{evaluate_kpi_regression, summarize_scorecards, RegressionThresholds};
 use agent007_workflows::{
@@ -29,6 +28,19 @@ const EXTERNAL_WORKFLOW_CONTROL_ERROR: &str =
 
 fn dashboard_controls_workflow(kind: &str) -> bool {
     kind.starts_with("workflow-web-")
+}
+
+fn run_store_for_web() -> agent007_core::RunStore {
+    agent007_core::RunStore::new(agent007_write_home().join("sessions"))
+}
+
+fn skills_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![agent007_write_home().join("skills")];
+    let global = agent007_global_home().join("skills");
+    if !dirs.iter().any(|dir| dir == &global) {
+        dirs.push(global);
+    }
+    dirs
 }
 
 // ── request/response shapes ───────────────────────────────────────────────────
@@ -115,6 +127,27 @@ fn default_scorecards_limit() -> usize {
     100
 }
 
+fn default_cleanup_older_than_hours() -> u32 {
+    24 * 7
+}
+
+fn default_cleanup_limit() -> usize {
+    1000
+}
+
+#[derive(Debug, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct CleanupAwaitingRunsRequest {
+    #[serde(default = "default_cleanup_older_than_hours")]
+    pub older_than_hours: u32,
+    #[serde(default = "default_cleanup_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub include_dashboard_owned: bool,
+}
+
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 /// `POST /api/run` — submit a task to the orchestrator.
@@ -136,7 +169,7 @@ pub async fn run_handler(
     let prompt_store = Arc::new(std::sync::Mutex::new(
         agent007_core::types::PromptStore::default(),
     ));
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     let provider = state.model_router.route("task");
     let run = match store.create_run(
         "web-run",
@@ -162,6 +195,7 @@ pub async fn run_handler(
     {
         Ok(handle) => Some(handle),
         Err(e) => {
+            let _ = store.finish_run(&run.id, false, e.to_string());
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
@@ -215,7 +249,8 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
     let global_dir = agent007_global_home().join("skills");
 
     let mut skills: Vec<Value> = Vec::new();
-    let mut seen_triggers: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut index_by_trigger: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     let dirs: Vec<(std::path::PathBuf, &str)> = {
         let mut v: Vec<(std::path::PathBuf, &str)> = Vec::new();
@@ -229,8 +264,42 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
     for (dir, source) in &dirs {
         for skill in load_skills_from_dir(dir) {
             let trigger = skill.trigger().to_string();
-            if seen_triggers.insert(trigger.clone()) {
-                skills.push(skill_json(&skill, source));
+            if let Some(index) = index_by_trigger.get(&trigger).copied() {
+                if let Some(obj) = skills[index].as_object_mut() {
+                    let mut shadowed = obj
+                        .get("shadowed_sources")
+                        .and_then(|value| value.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    if !shadowed.iter().any(|entry| entry.as_str() == Some(source)) {
+                        shadowed.push(Value::String(source.to_string()));
+                    }
+                    obj.insert(
+                        "shadowed_sources".to_string(),
+                        Value::Array(shadowed.clone()),
+                    );
+                    obj.insert(
+                        "has_collisions".to_string(),
+                        Value::Bool(!shadowed.is_empty()),
+                    );
+                    obj.insert(
+                        "collision_count".to_string(),
+                        Value::from(shadowed.len() as u64),
+                    );
+                }
+            } else {
+                let mut payload = skill_json(&skill, source);
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert(
+                        "precedence_source".to_string(),
+                        Value::String(source.to_string()),
+                    );
+                    obj.insert("shadowed_sources".to_string(), Value::Array(Vec::new()));
+                    obj.insert("has_collisions".to_string(), Value::Bool(false));
+                    obj.insert("collision_count".to_string(), Value::from(0u64));
+                }
+                index_by_trigger.insert(trigger, skills.len());
+                skills.push(payload);
             }
         }
     }
@@ -310,7 +379,7 @@ pub async fn skills_run_handler(
 
     let executor = agent007_skills::SkillExecutor::new(model, retriever, memory)
         .with_global_memory(global_memory);
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     let run = match store.create_run(
         "web-skill-run",
         &format!("skill:{} {}", payload.trigger, payload.args),
@@ -327,31 +396,38 @@ pub async fn skills_run_handler(
         }
     };
 
-    let skills_dir = agent007_home().join("skills");
-    let loader = agent007_skills::SkillLoader::new(&skills_dir);
+    let mut matched_skill = None;
+    for dir in skills_search_dirs() {
+        let loader = agent007_skills::SkillLoader::new(&dir);
+        let skills = match loader.load_all() {
+            Ok(skills) => skills,
+            Err(e) => {
+                let _ = store.finish_run(&run.id, false, e.to_string());
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
+        if let Some(skill) = skills.into_iter().find(|s| s.trigger() == payload.trigger) {
+            matched_skill = Some(skill);
+            break;
+        }
+    }
 
-    let skills = match loader.load_all() {
-        Ok(s) => s,
-        Err(e) => {
+    let skill = match matched_skill {
+        Some(skill) => skill,
+        None => {
+            let summary = format!("skill not found: {}", payload.trigger);
+            let _ = store.finish_run(&run.id, false, &summary);
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": summary })),
             )
-                .into_response()
+                .into_response();
         }
     };
-
-    let skill =
-        match skills.into_iter().find(|s| s.trigger() == payload.trigger) {
-            Some(s) => s,
-            None => return (
-                StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({ "error": format!("skill not found: {}", payload.trigger) }),
-                ),
-            )
-                .into_response(),
-        };
 
     match executor.execute(&skill, &payload.args).await {
         Ok(output) => {
@@ -388,7 +464,7 @@ pub async fn skills_run_handler(
 pub async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     let m = crate::metrics::snapshot_with_shared_state(
         state.metrics.lock().await.clone(),
-        agent007_home(),
+        agent007_write_home(),
     );
     let tasks = m
         .recent_tasks
@@ -431,7 +507,7 @@ pub async fn status_handler(State(state): State<AppState>) -> impl IntoResponse 
 pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
     let mut m = crate::metrics::snapshot_with_shared_state(
         state.metrics.lock().await.clone(),
-        agent007_home(),
+        agent007_write_home(),
     );
 
     // Collect all home dirs (project-local first, then global) — deduplicated
@@ -517,7 +593,7 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
 /// `GET /api/scorecards` — recent run scorecards (newest first).
 pub async fn scorecards_handler(Query(query): Query<ScorecardsQuery>) -> impl IntoResponse {
     let limit = query.limit.clamp(1, 500);
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     match store.list_runs(limit) {
         Ok(runs) => {
             let mut scorecards = Vec::new();
@@ -542,7 +618,7 @@ pub async fn regression_evaluate_handler(
     Query(query): Query<RegressionEvaluateQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.clamp(1, 500);
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     let runs = match store.list_runs(limit) {
         Ok(runs) => runs,
         Err(e) => {
@@ -589,7 +665,7 @@ pub async fn regression_evaluate_handler(
 }
 
 pub async fn runs_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     match store.list_runs(25) {
         Ok(runs) => Json(serde_json::to_value(runs).unwrap_or_else(|_| serde_json::json!([])))
             .into_response(),
@@ -601,11 +677,92 @@ pub async fn runs_handler(State(_state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+pub async fn runs_cleanup_awaiting_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<CleanupAwaitingRunsRequest>,
+) -> impl IntoResponse {
+    let store = run_store_for_web();
+    let now = Utc::now();
+    let older_than_hours = payload.older_than_hours.max(1);
+    let limit = payload.limit.clamp(1, 5000);
+    let cutoff = now - Duration::hours(older_than_hours as i64);
+
+    let runs = match store.list_runs(limit) {
+        Ok(runs) => runs,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut considered = 0usize;
+    let mut matched = 0usize;
+    let mut cleaned = 0usize;
+    let mut skipped_dashboard_owned = 0usize;
+    let mut cleaned_ids: Vec<String> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+
+    for run in runs {
+        considered += 1;
+        if run.status != agent007_core::run_store::RunStatus::AwaitingApproval {
+            continue;
+        }
+        if run.started_at > cutoff {
+            continue;
+        }
+        if !payload.include_dashboard_owned && dashboard_controls_workflow(&run.kind) {
+            skipped_dashboard_owned += 1;
+            continue;
+        }
+
+        matched += 1;
+        if payload.dry_run {
+            cleaned_ids.push(run.id);
+            continue;
+        }
+
+        let summary = format!(
+            "cleanup: awaiting approval older than {} hours (cutoff {})",
+            older_than_hours,
+            cutoff.to_rfc3339()
+        );
+        match store.finish_run(&run.id, false, summary) {
+            Ok(_) => {
+                cleaned += 1;
+                cleaned_ids.push(run.id);
+            }
+            Err(error) => {
+                errors.push(serde_json::json!({
+                    "run_id": run.id,
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "ok": errors.is_empty(),
+        "dry_run": payload.dry_run,
+        "older_than_hours": older_than_hours,
+        "cutoff": cutoff.to_rfc3339(),
+        "considered": considered,
+        "matched": matched,
+        "cleaned": cleaned,
+        "skipped_dashboard_owned": skipped_dashboard_owned,
+        "cleaned_ids": cleaned_ids,
+        "errors": errors,
+    }))
+    .into_response()
+}
+
 pub async fn run_detail_handler(
     State(_state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     match store.load_run(&id) {
         Ok(run) => {
             let output_text = store
@@ -617,7 +774,10 @@ pub async fn run_detail_handler(
                 .ok()
                 .flatten();
             let persona_policy_warning = store
-                .read_json_artifact_optional::<serde_json::Value>(&id, "persona-policy-warning.json")
+                .read_json_artifact_optional::<serde_json::Value>(
+                    &id,
+                    "persona-policy-warning.json",
+                )
                 .ok()
                 .flatten();
             let token_summary = store
@@ -636,6 +796,14 @@ pub async fn run_detail_handler(
                 .read_json_artifact_optional::<serde_json::Value>(&id, "workflow-state.json")
                 .ok()
                 .flatten();
+            let resume_target = store
+                .read_json_artifact_optional::<ResumeTargetRef>(&id, RESUME_TARGET_ARTIFACT)
+                .ok()
+                .flatten();
+            let resume_target_status = resume_target
+                .as_ref()
+                .and_then(|target| store.load_run(&target.session).ok())
+                .map(|detail| detail.metadata.status);
             Json(serde_json::json!({
                 "run": run,
                 "output_text": output_text,
@@ -645,6 +813,8 @@ pub async fn run_detail_handler(
                 "workflow_request": workflow_request,
                 "workflow_source": workflow_source,
                 "workflow_state": workflow_state,
+                "resume_target_session": resume_target.as_ref().map(|target| target.session.clone()),
+                "resume_target_status": resume_target_status,
             }))
             .into_response()
         }
@@ -661,7 +831,7 @@ pub async fn run_approval_handler(
     Path(id): Path<String>,
     Json(payload): Json<ApprovalRequest>,
 ) -> impl IntoResponse {
-    let store = agent007_core::RunStore::new(agent007_home().join("sessions"));
+    let store = run_store_for_web();
     let detail = match store.load_run(&id) {
         Ok(detail) => detail,
         Err(e) => {
@@ -756,9 +926,7 @@ pub async fn run_resume_handler(
             .into_response();
     };
 
-    let store = Arc::new(agent007_core::RunStore::new(
-        agent007_home().join("sessions"),
-    ));
+    let store = Arc::new(run_store_for_web());
     let detail = match store.load_run(&id) {
         Ok(detail) => detail,
         Err(e) => {
@@ -770,6 +938,13 @@ pub async fn run_resume_handler(
         }
     };
     if !dashboard_controls_workflow(&detail.metadata.kind) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": EXTERNAL_WORKFLOW_CONTROL_ERROR })),
+        )
+            .into_response();
+    }
+    if detail.metadata.mode != "standalone" {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": EXTERNAL_WORKFLOW_CONTROL_ERROR })),
@@ -800,23 +975,32 @@ pub async fn run_resume_handler(
     if let Ok(Some(existing)) =
         store.read_json_artifact_optional::<ResumeTargetRef>(&id, RESUME_TARGET_ARTIFACT)
     {
-        let status = store
-            .load_run(&existing.session)
-            .map(|run| run.metadata.status)
-            .unwrap_or(agent007_core::run_store::RunStatus::Running);
-        return Json(serde_json::json!({
-            "ok": true,
-            "status": match status {
-                agent007_core::run_store::RunStatus::Running => "running",
-                agent007_core::run_store::RunStatus::AwaitingApproval => "awaiting-approval",
-                agent007_core::run_store::RunStatus::Succeeded => "succeeded",
-                agent007_core::run_store::RunStatus::Failed => "failed",
-            },
-            "session": existing.session,
-            "workflow": request.workflow,
-            "already_resumed": true,
-        }))
-        .into_response();
+        if let Ok(existing_run) = store.load_run(&existing.session) {
+            let status = existing_run.metadata.status;
+            if status != agent007_core::run_store::RunStatus::Failed {
+                return Json(serde_json::json!({
+                    "ok": true,
+                    "status": match status {
+                        agent007_core::run_store::RunStatus::Running => "running",
+                        agent007_core::run_store::RunStatus::AwaitingApproval => "awaiting-approval",
+                        agent007_core::run_store::RunStatus::Succeeded => "succeeded",
+                        agent007_core::run_store::RunStatus::Failed => "failed",
+                    },
+                    "session": existing.session,
+                    "workflow": request.workflow,
+                    "already_resumed": true,
+                }))
+                .into_response();
+            }
+            let _ = store.append_note(
+                &id,
+                "workflow-web-resume-retry",
+                serde_json::json!({
+                    "previous_session": existing.session,
+                    "previous_status": "failed",
+                }),
+            );
+        }
     }
     let workflow_ref =
         match store.read_json_artifact_optional::<WorkflowSourceRef>(&id, "workflow-source.json") {
@@ -884,6 +1068,7 @@ pub async fn run_resume_handler(
         "workflow-source.json",
         &WorkflowSourceRef { workflow_ref },
     ) {
+        let _ = store.finish_run(&resumed.id, false, e.to_string());
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -897,6 +1082,7 @@ pub async fn run_resume_handler(
             source_session: id.clone(),
         },
     ) {
+        let _ = store.finish_run(&resumed.id, false, e.to_string());
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -910,6 +1096,7 @@ pub async fn run_resume_handler(
             session: resumed.id.clone(),
         },
     ) {
+        let _ = store.finish_run(&resumed.id, false, e.to_string());
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -1234,7 +1421,8 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
     let global = agent007_global_home().join("workflows");
     let skill_associations = build_skill_association_index();
 
-    let mut seen = std::collections::HashSet::new();
+    let mut index_by_name: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut result: Vec<Value> = Vec::new();
     for wf_dir in workflow_dirs() {
         let is_global = wf_dir == global;
@@ -1244,14 +1432,47 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                 let ext = path.extension().and_then(|e| e.to_str());
                 if ext == Some("yaml") || ext == Some("yml") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if seen.insert(stem.to_string()) {
-                            let source = if is_global { "global" } else { "project" };
-                            result.push(workflow_list_item(
-                                &path,
-                                stem,
-                                source,
-                                &skill_associations,
-                            ));
+                        let source = if is_global { "global" } else { "project" };
+                        if let Some(index) = index_by_name.get(stem).copied() {
+                            if let Some(obj) = result[index].as_object_mut() {
+                                let mut shadowed = obj
+                                    .get("shadowed_sources")
+                                    .and_then(|value| value.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                if !shadowed.iter().any(|entry| entry.as_str() == Some(source)) {
+                                    shadowed.push(Value::String(source.to_string()));
+                                }
+                                obj.insert(
+                                    "shadowed_sources".to_string(),
+                                    Value::Array(shadowed.clone()),
+                                );
+                                obj.insert(
+                                    "has_collisions".to_string(),
+                                    Value::Bool(!shadowed.is_empty()),
+                                );
+                                obj.insert(
+                                    "collision_count".to_string(),
+                                    Value::from(shadowed.len() as u64),
+                                );
+                            }
+                        } else {
+                            let mut payload =
+                                workflow_list_item(&path, stem, source, &skill_associations);
+                            if let Some(obj) = payload.as_object_mut() {
+                                obj.insert(
+                                    "precedence_source".to_string(),
+                                    Value::String(source.to_string()),
+                                );
+                                obj.insert(
+                                    "shadowed_sources".to_string(),
+                                    Value::Array(Vec::new()),
+                                );
+                                obj.insert("has_collisions".to_string(), Value::Bool(false));
+                                obj.insert("collision_count".to_string(), Value::from(0u64));
+                            }
+                            index_by_name.insert(stem.to_string(), result.len());
+                            result.push(payload);
                         }
                     }
                 }
@@ -1922,12 +2143,16 @@ fn memory_store_for_web() -> Arc<agent007_memory::store::MemoryStore> {
     ))
 }
 
+fn memory_store_for_web_scope(scope: &str) -> Arc<agent007_memory::store::MemoryStore> {
+    let base = match scope {
+        "global" | "user" => agent007_global_home().join("memory"),
+        _ => agent007_write_home().join("memory"),
+    };
+    Arc::new(agent007_memory::store::MemoryStore::new(base))
+}
+
 fn web_namespace(scope: &str) -> &str {
-    if scope == "global" {
-        ""
-    } else {
-        scope
-    }
+    scope
 }
 
 // ── Memory list ───────────────────────────────────────────────────────────────
@@ -1944,7 +2169,7 @@ pub async fn memory_list_handler(
         )
             .into_response();
     }
-    let store = memory_store_for_web();
+    let store = memory_store_for_web_scope(&scope);
     let namespace = web_namespace(&scope);
     let keys = store.scoped(namespace).list_keys().unwrap_or_default();
     Json(keys).into_response()
@@ -1965,7 +2190,7 @@ pub async fn memory_get_handler(
         return (StatusCode::BAD_REQUEST, "invalid key").into_response();
     }
 
-    let store = memory_store_for_web();
+    let store = memory_store_for_web_scope(&scope);
     let namespace = web_namespace(&scope);
     match store.scoped(namespace).read(&key) {
         Ok(Some(content)) => (
@@ -3537,10 +3762,35 @@ mod tests {
     use crate::server::WebServer;
     use axum::http::StatusCode;
     use axum_test::TestServer;
+    use std::path::Path;
 
     fn test_server() -> TestServer {
         let server = WebServer::new_test();
         TestServer::new(server.into_router()).unwrap()
+    }
+
+    fn write_skill_fixture(base: &Path, file: &str, trigger: &str, name: &str) {
+        let dir = base.join(".agent007").join("skills");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(file),
+            format!(
+                "---\nname: {name}\ndescription: test\ntrigger: {trigger}\nmodel: codex\n---\nUse {{{{args}}}}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_workflow_fixture(base: &Path, file: &str, display: &str) {
+        let dir = base.join(".agent007").join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(file),
+            format!(
+                "name: \"{display}\"\n\nsteps:\n  - id: plan\n    agent: Researcher\n    prompt: \"Plan {{task}}\"\n    output: plan\n"
+            ),
+        )
+        .unwrap();
     }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3602,6 +3852,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_skills_reports_collision_metadata_with_project_precedence() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_skill_fixture(project.path(), "project_skill.md", "/dupe", "Project Skill");
+        write_skill_fixture(home.path(), "global_skill.md", "/dupe", "Global Skill");
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let ts = test_server();
+        let response = ts.get("/api/skills").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let dupe = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.get("trigger").and_then(|v| v.as_str()) == Some("/dupe"))
+            .expect("expected /dupe skill");
+        assert_eq!(dupe.get("source").and_then(|v| v.as_str()), Some("project"));
+        assert_eq!(
+            dupe.get("precedence_source").and_then(|v| v.as_str()),
+            Some("project")
+        );
+        assert_eq!(
+            dupe.get("has_collisions").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            dupe.get("collision_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        let shadowed = dupe
+            .get("shadowed_sources")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(shadowed
+            .iter()
+            .any(|entry| entry.as_str() == Some("global")));
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn api_workflows_reports_collision_metadata_with_project_precedence() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_workflow_fixture(project.path(), "dupe.yaml", "Project Workflow");
+        write_workflow_fixture(home.path(), "dupe.yaml", "Global Workflow");
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let ts = test_server();
+        let response = ts.get("/api/workflows").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let dupe = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.get("name").and_then(|v| v.as_str()) == Some("dupe"))
+            .expect("expected dupe workflow");
+        assert_eq!(dupe.get("source").and_then(|v| v.as_str()), Some("project"));
+        assert_eq!(
+            dupe.get("precedence_source").and_then(|v| v.as_str()),
+            Some("project")
+        );
+        assert_eq!(
+            dupe.get("has_collisions").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            dupe.get("collision_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        let shadowed = dupe
+            .get("shadowed_sources")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(shadowed
+            .iter()
+            .any(|entry| entry.as_str() == Some("global")));
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
     async fn api_skills_returns_array() {
         let ts = test_server();
         let response = ts.get("/api/skills").await;
@@ -3620,6 +3978,68 @@ mod tests {
         assert!(body.get("agents").is_some());
         assert!(body.get("tasks").is_some());
         assert!(body.get("avg_reward").is_some());
+    }
+
+    #[tokio::test]
+    async fn api_memory_scopes_keep_global_and_project_isolated() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let project_home = project.path().join(".agent007");
+        std::fs::create_dir_all(&project_home).unwrap();
+        let global_home = global.path().join(".agent007");
+        std::fs::create_dir_all(&global_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("AGENT007_HOME", &project_home);
+        std::env::set_var("HOME", global.path());
+
+        let project_store = std::sync::Arc::new(agent007_memory::store::MemoryStore::new(
+            project_home.join("memory"),
+        ));
+        project_store
+            .scoped("project")
+            .write("project_only", "project value")
+            .unwrap();
+
+        let global_store = std::sync::Arc::new(agent007_memory::store::MemoryStore::new(
+            global_home.join("memory"),
+        ));
+        global_store
+            .scoped("global")
+            .write("global_only", "global value")
+            .unwrap();
+
+        let ts = test_server();
+
+        let global_list = ts.get("/api/memory/global").await;
+        global_list.assert_status_ok();
+        let global_keys: serde_json::Value = global_list.json();
+        let global_keys = global_keys.as_array().cloned().unwrap_or_default();
+        assert!(global_keys
+            .iter()
+            .any(|k| k.as_str() == Some("global_only")));
+        assert!(!global_keys
+            .iter()
+            .any(|k| k.as_str() == Some("project_only")));
+
+        let project_list = ts.get("/api/memory/project").await;
+        project_list.assert_status_ok();
+        let project_keys: serde_json::Value = project_list.json();
+        let project_keys = project_keys.as_array().cloned().unwrap_or_default();
+        assert!(project_keys
+            .iter()
+            .any(|k| k.as_str() == Some("project_only")));
+        assert!(!project_keys
+            .iter()
+            .any(|k| k.as_str() == Some("global_only")));
+
+        std::env::remove_var("AGENT007_HOME");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[tokio::test]
@@ -4225,7 +4645,7 @@ requires_approval = true
                 "steps": [{
                     "id": "approve-me",
                     "agent": "Architect",
-                    "status": "approved",
+                    "status": "completed",
                     "attempts": 1,
                     "output_key": "plan",
                     "output_preview": "approved plan v2",
@@ -4253,6 +4673,213 @@ requires_approval = true
         assert_eq!(
             body.get("error").and_then(|value| value.as_str()),
             Some(EXTERNAL_WORKFLOW_CONTROL_ERROR)
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn api_runs_cleanup_awaiting_closes_only_stale_non_dashboard_runs() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sessions_dir = home.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        let old = chrono::Utc::now() - chrono::Duration::hours(12);
+        let recent = chrono::Utc::now() - chrono::Duration::minutes(30);
+
+        for (id, kind, started_at) in [
+            ("old-external", "workflow-cli", old),
+            ("old-dashboard", "workflow-web-resume", old),
+            ("recent-external", "workflow-cli", recent),
+        ] {
+            let session = sessions_dir.join(id);
+            std::fs::create_dir_all(&session).unwrap();
+            std::fs::write(
+                session.join("meta.json"),
+                serde_json::json!({
+                    "id": id,
+                    "kind": kind,
+                    "task": "stale approval",
+                    "mode": "standalone",
+                    "provider": "mock",
+                    "started_at": started_at,
+                    "finished_at": null,
+                    "status": "awaiting-approval",
+                    "output_preview": "approval required"
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let ts = test_server();
+        let response = ts
+            .post("/api/runs/cleanup-awaiting")
+            .json(&serde_json::json!({
+                "older_than_hours": 1,
+                "limit": 100,
+                "dry_run": false,
+                "include_dashboard_owned": false
+            }))
+            .await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("matched").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(body.get("cleaned").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            body.get("skipped_dashboard_owned").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        let old_external: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(sessions_dir.join("old-external").join("meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(old_external["status"], "failed");
+        assert!(old_external["finished_at"].is_string());
+
+        let old_dashboard: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(sessions_dir.join("old-dashboard").join("meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(old_dashboard["status"], "awaiting-approval");
+
+        let recent_external: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(sessions_dir.join("recent-external").join("meta.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recent_external["status"], "awaiting-approval");
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn api_run_resume_allows_retry_when_previous_resume_failed() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        let workflows = home.path().join("workflows");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        std::fs::write(
+            workflows.join("approval-flow.toml"),
+            r#"
+name = "approval-flow"
+
+[[steps]]
+id = "approve-me"
+agent = "Architect"
+prompt = "Plan {{task}}"
+output = "plan"
+requires_approval = true
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "workflow-web-resume",
+                "task": "approve auth",
+                "mode": "standalone",
+                "provider": "mock",
+                "started_at": chrono::Utc::now(),
+                "finished_at": chrono::Utc::now(),
+                "status": "awaiting-approval",
+                "output_preview": "approval required"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-request.json"),
+            serde_json::json!({
+                "workflow": "approval-flow",
+                "task": "approve auth"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-state.json"),
+            serde_json::json!({
+                "workflow": "approval-flow",
+                "task": "approve auth",
+                "status": "running",
+                "steps_total": 1,
+                "steps_completed": 1,
+                "completed_steps": ["approve-me"],
+                "skipped_steps": [],
+                "retry_counts": {},
+                "outputs": { "plan": "approved plan v2" },
+                "budget_used": { "tokens": 0, "estimated_usd": 0.0 },
+                "steps": [{
+                    "id": "approve-me",
+                    "agent": "Architect",
+                    "status": "completed",
+                    "attempts": 1,
+                    "output_key": "plan",
+                    "output_preview": "approved plan v2",
+                    "selected_route": null,
+                    "selected_target": null,
+                    "error": null
+                }],
+                "pending_approval": null,
+                "approval_decisions": {
+                    "approve-me": {
+                        "decision": "approve",
+                        "content": null
+                    }
+                },
+                "last_error": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Previous resumed session exists but failed.
+        let failed_session = home.path().join("sessions").join("failed-resume");
+        std::fs::create_dir_all(&failed_session).unwrap();
+        std::fs::write(
+            failed_session.join("meta.json"),
+            serde_json::json!({
+                "id": "failed-resume",
+                "kind": "workflow-web-resume",
+                "task": "approve auth",
+                "mode": "standalone",
+                "provider": "mock",
+                "started_at": chrono::Utc::now(),
+                "finished_at": chrono::Utc::now(),
+                "status": "failed",
+                "output_preview": "resume failed"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join(super::RESUME_TARGET_ARTIFACT),
+            serde_json::json!({ "session": "failed-resume" }).to_string(),
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts.post("/api/runs/session-1/resume").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let resumed_id = body
+            .get("session")
+            .and_then(|value| value.as_str())
+            .expect("resume response must include a new session id");
+        assert_ne!(resumed_id, "failed-resume");
+        assert_eq!(
+            body.get("already_resumed")
+                .and_then(|value| value.as_bool()),
+            None
         );
 
         std::env::remove_var("AGENT007_HOME");

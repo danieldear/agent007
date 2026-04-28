@@ -14,6 +14,11 @@ important for users to understand before relying on a feature.
 Workflow approval is surfaced to the client that initiated the workflow run
 when that client is available to own the conversation.
 
+Update (April 28, 2026):
+- Dashboard `Running`/`Active Agents` metrics now count only actively executing
+  runs.
+- Approval-paused runs are tracked separately as `awaiting approval`.
+
 Examples:
 - A workflow started from Codex should surface the approval back to Codex.
 - A workflow started from Claude Code should surface the approval back to
@@ -28,6 +33,8 @@ Examples:
 - Use the dashboard for monitoring, diagnostics, and standalone dashboard runs.
 - If a run originated in the dashboard's standalone runtime, `Resume Workflow`
   remains available there.
+- If old paused approvals accumulate, clean them with:
+  `POST /api/runs/cleanup-awaiting` (for example, `older_than_hours: 168`).
 
 ## Runtime mode fallback between standalone and hosted-MCP is incomplete
 
@@ -40,11 +47,14 @@ Examples:
 If project config still declares an Ollama provider, `agent007` may classify the
 runtime as standalone/local even when the Ollama service is unavailable.
 
+Update (April 28, 2026):
+- Runtime provider selection now performs a fast Ollama health check.
+- If Ollama is unreachable and no cloud provider is available, runtime mode now
+  degrades to `hosted-mcp` instead of staying in broken standalone mode.
+
 Examples:
 - `agent007 run` can fail or hang waiting on the local Ollama endpoint.
 - Skill execution can fail even though hosted MCP would have been a valid path.
-- The runtime does not automatically downgrade from dead local Ollama to
-  `hosted-mcp`.
 - Direct standalone commands and dashboard task execution do not automatically
   borrow the currently connected host LLM from Codex, Claude Code, Cursor, or
   another MCP host.
@@ -67,3 +77,28 @@ Examples:
   - expose clearer degraded-state/runtime-mode messaging
   - reduce confusion between hosted execution, standalone execution, and mock
     fallback behavior
+
+## Hosted `record_tokens` memory capture can appear sparse if output is omitted
+
+**Status:** Partially improved  
+**Observed:** April 28, 2026  
+**Area:** Hosted MCP run recording, project memory
+
+### Current behavior
+
+`agent007_record_tokens` now writes structured memory records in project scope:
+- `run_records:<run_id>`
+- `<kind>_runs:<run_id>`
+- `<kind>_last`
+
+When `output` is missing but `output.txt` already exists, that stored output is
+now reused for memory persistence and run preview.
+
+Remaining gap:
+- If the host never provides output and no stored output exists, the run can
+  still finalize with a generic preview (`completed`) and limited memory value.
+
+### Practical guidance
+
+- Always send `output` in `agent007_record_tokens` for high-quality memory.
+- Keep hosted responses concise but complete enough to be reused as memory.

@@ -19,6 +19,7 @@ pub type MetricsState = Arc<Mutex<DashboardMetrics>>;
 pub struct DashboardMetrics {
     pub active_agents: u32,
     pub running_tasks: u32,
+    pub awaiting_approvals: u32,
     pub completed_tasks: u32,
     pub failed_tasks: u32,
 
@@ -90,6 +91,7 @@ impl DashboardMetrics {
         Self {
             active_agents: 0,
             running_tasks: 0,
+            awaiting_approvals: 0,
             completed_tasks: 0,
             failed_tasks: 0,
             total_tokens: 0,
@@ -272,6 +274,7 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
     };
 
     metrics.running_tasks = 0;
+    metrics.awaiting_approvals = 0;
     metrics.completed_tasks = 0;
     metrics.failed_tasks = 0;
     metrics.total_tokens = 0;
@@ -294,8 +297,11 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
 
     for run in runs.iter().rev() {
         match run.status {
-            RunStatus::Running | RunStatus::AwaitingApproval => {
+            RunStatus::Running => {
                 metrics.running_tasks += 1;
+            }
+            RunStatus::AwaitingApproval => {
+                metrics.awaiting_approvals += 1;
             }
             RunStatus::Succeeded => {
                 metrics.completed_tasks += 1;
@@ -369,6 +375,8 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
         metrics.avg_latency_ms = total_latency_ms / latency_count as f64;
     }
 
+    // Active agents are tasks currently executing.
+    // Approval-paused runs are tracked separately in awaiting_approvals.
     metrics.active_agents = metrics.running_tasks;
     metrics.estimated_usd = metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
 }
@@ -520,6 +528,7 @@ mod tests {
         let m = DashboardMetrics::new();
         assert_eq!(m.active_agents, 0);
         assert_eq!(m.running_tasks, 0);
+        assert_eq!(m.awaiting_approvals, 0);
         assert_eq!(m.completed_tasks, 0);
         assert_eq!(m.total_tokens, 0);
         assert_eq!(m.scorecard_run_count, 0);
@@ -632,7 +641,9 @@ mod tests {
         );
 
         assert_eq!(snapshot.completed_tasks, 1);
-        assert_eq!(snapshot.running_tasks, 1);
+        assert_eq!(snapshot.running_tasks, 0);
+        assert_eq!(snapshot.awaiting_approvals, 1);
+        assert_eq!(snapshot.active_agents, 0);
         assert_eq!(snapshot.session_requests, 1);
         assert_eq!(snapshot.total_tokens, 321);
         assert_eq!(snapshot.scorecard_run_count, 2);

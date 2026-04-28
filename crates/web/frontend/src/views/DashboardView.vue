@@ -15,6 +15,7 @@ const selectedRunId = ref(null)
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
+const cleanupStatus = ref('')
 const taskPanelOpen = ref(false)
 const expandedRunId = ref(null)
 const chatMessages = ref([])
@@ -139,7 +140,7 @@ watch(() => props.stats, (v) => {
 })
 
 const m = computed(() => metrics.value || {
-  active_agents: 0, running_tasks: 0, completed_tasks: 0, failed_tasks: 0,
+  active_agents: 0, running_tasks: 0, awaiting_approvals: 0, completed_tasks: 0, failed_tasks: 0,
   total_tokens: 0, estimated_usd: 0, avg_reward: 0, session_requests: 0,
   scorecard_run_count: 0, success_rate: 0, avg_cost_usd: 0, avg_latency_ms: 0, total_retries: 0, avg_retries_per_run: 0,
   feedback_count: 0, prompt_improvements: 0,
@@ -182,7 +183,11 @@ const selectedPersonaPolicyWarning = computed(() => selectedRun.value?.persona_p
 const selectedRunTokenSummary = computed(() => selectedRun.value?.token_summary || null)
 const dashboardOwnsSelectedWorkflow = computed(() => selectedRunKind.value.startsWith('workflow-web-'))
 const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
-const selectedRunAlreadyResumed = computed(() => selectedRunArtifacts.value.includes('resume-target.json'))
+const selectedRunResumeTargetStatus = computed(() => selectedRun.value?.resume_target_status || null)
+const selectedRunAlreadyResumed = computed(() => {
+  if (!selectedRunArtifacts.value.includes('resume-target.json')) return false
+  return selectedRunResumeTargetStatus.value !== 'failed'
+})
 const selectedRunHasApprovalDecision = computed(() => {
   const decisions = selectedWorkflowState.value?.approval_decisions || {}
   return Object.keys(decisions).length > 0
@@ -305,6 +310,25 @@ async function resumeSelectedRun() {
   }
 }
 
+async function cleanupStaleApprovals() {
+  cleanupStatus.value = 'Cleaning stale approval runs...'
+  try {
+    const result = await api.cleanupAwaitingRuns({
+      older_than_hours: 24 * 7,
+      limit: 1000,
+      include_dashboard_owned: false,
+      dry_run: false,
+    })
+    const cleaned = result?.cleaned || 0
+    const matched = result?.matched || 0
+    cleanupStatus.value = `Closed ${cleaned} stale run(s) out of ${matched} matched.`
+    await refreshRuns()
+    metrics.value = await api.getStats() || metrics.value
+  } catch (e) {
+    cleanupStatus.value = `Error: ${e.message}`
+  }
+}
+
 async function submitTask() {
   const input = taskInput.value.trim()
   if (!input || chatPending.value) return
@@ -407,7 +431,14 @@ async function submitTask() {
           <div v-if="m.running_tasks > 0" class="absolute top-4 right-4">
             <span class="w-1.5 h-1.5 rounded-full bg-info animate-pulse inline-block"></span>
           </div>
-          <div class="text-[10px] font-mono text-base-content/25 mt-1">{{ m.session_requests }} requests</div>
+          <div class="text-[10px] font-mono text-base-content/25 mt-1">
+            <template v-if="(m.awaiting_approvals || 0) > 0">
+              {{ m.awaiting_approvals }} awaiting approval
+            </template>
+            <template v-else>
+              {{ m.session_requests }} requests
+            </template>
+          </div>
         </div>
         <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
           <div class="absolute inset-0 bg-gradient-to-br from-success/8 to-transparent pointer-events-none"></div>
@@ -519,8 +550,14 @@ async function submitTask() {
           <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
           <div class="flex items-center gap-3">
             <span class="text-[10px] font-mono text-base-content/30">{{ runs.length }} runs</span>
+            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="cleanupStaleApprovals">
+              cleanup stale approvals
+            </button>
             <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuns">↺ refresh</button>
           </div>
+        </div>
+        <div v-if="cleanupStatus" class="px-4 py-2 text-[10px] font-mono text-base-content/45 border-b border-base-300/40">
+          {{ cleanupStatus }}
         </div>
 
         <div v-if="runs.length" class="divide-y divide-base-300/40">
