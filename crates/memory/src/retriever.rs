@@ -2,7 +2,18 @@ use crate::error::MemoryError;
 use crate::store::MemoryStore;
 use crate::vectordb::VectorDB;
 use agent007_models::EmbeddingProvider;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RetrieveStats {
+    pub query_chars: usize,
+    pub vector_hits: usize,
+    pub fallback_hits: usize,
+    pub used_vector: bool,
+    pub used_fallback: bool,
+    pub mock_embedding: bool,
+}
 
 pub struct Retriever {
     embedder: Arc<dyn EmbeddingProvider>,
@@ -29,6 +40,18 @@ impl Retriever {
     }
 
     pub async fn retrieve(&self, query: &str) -> Result<String, MemoryError> {
+        let (context, _stats) = self.retrieve_with_stats(query).await?;
+        Ok(context)
+    }
+
+    pub async fn retrieve_with_stats(
+        &self,
+        query: &str,
+    ) -> Result<(String, RetrieveStats), MemoryError> {
+        let mut stats = RetrieveStats {
+            query_chars: query.chars().count(),
+            ..RetrieveStats::default()
+        };
         let embedding = self
             .embedder
             .embed(query)
@@ -37,11 +60,13 @@ impl Retriever {
 
         // Detect mock/zero embeddings — all zeros means the embedder is a stub.
         let is_mock_embedding = embedding.iter().all(|&v| v == 0.0);
+        stats.mock_embedding = is_mock_embedding;
 
         let fragments: Vec<String> = if is_mock_embedding {
             vec![]
         } else {
             let results = self.db.search(embedding, self.top_k).await?;
+            stats.vector_hits = results.len();
             results
                 .iter()
                 .filter_map(|r| {
@@ -54,7 +79,8 @@ impl Retriever {
         };
 
         if !fragments.is_empty() {
-            return Ok(fragments.join("\n\n"));
+            stats.used_vector = true;
+            return Ok((fragments.join("\n\n"), stats));
         }
 
         // Fallback: keyword scan across scoped memory files
@@ -71,6 +97,7 @@ impl Retriever {
                                 .iter()
                                 .any(|kw| kw.len() >= 3 && val_lower.contains(kw))
                             {
+                                stats.fallback_hits += 1;
                                 matched.push(format!("[{}/{}]\n{}", scope, key, val));
                             }
                         }
@@ -78,11 +105,12 @@ impl Retriever {
                 }
             }
             if !matched.is_empty() {
-                return Ok(matched.join("\n\n"));
+                stats.used_fallback = true;
+                return Ok((matched.join("\n\n"), stats));
             }
         }
 
-        Ok(String::new())
+        Ok((String::new(), stats))
     }
 }
 

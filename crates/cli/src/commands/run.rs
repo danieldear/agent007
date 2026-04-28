@@ -22,6 +22,7 @@ use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
 use agent007_mcp::{McpClient, McpServerConfig};
 use agent007_memory::store::{MemoryEntryType, MemoryMeta, MemoryStore};
 use agent007_memory::vectordb::LanceDBStore;
+use agent007_memory::Indexer;
 use agent007_memory::Retriever;
 use agent007_models::{
     ClaudeProvider, CodexProvider, EmbeddingProvider, MockProvider, ModelProvider, ModelRouter,
@@ -46,6 +47,7 @@ pub struct Stack {
     pub learning_dispatcher: Arc<LearningDispatcher>,
     pub model_router: Arc<ModelRouter>,
     pub skill_executor: Arc<SkillExecutor>,
+    pub rag_warmup_indexed_docs: usize,
     pub persona_registry: Arc<PersonaRegistry>,
     pub orchestrator: Arc<OrchestratorAgent>,
     pub zone_checker: Arc<ZoneChecker>,
@@ -414,7 +416,7 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         .as_ref()
         .map(|l| l.inject_for_categories.clone())
         .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
-    let skill_executor = build_skill_executor(
+    let (skill_executor, rag_warmup_indexed_docs) = build_skill_executor(
         model_router.clone() as Arc<dyn ModelProvider>,
         config,
         &vectordb_path_str,
@@ -422,9 +424,10 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         &skills_dir,
         is_dry_run,
     )
-    .await?
-    .with_router(model_router.clone())
-    .with_lsp_categories(lsp_categories);
+    .await?;
+    let skill_executor = skill_executor
+        .with_router(model_router.clone())
+        .with_lsp_categories(lsp_categories);
     let skill_executor = Arc::new(skill_executor);
 
     // 11. PersonaRegistry — load built-ins + user overrides from ~/.agent007/personas/
@@ -484,6 +487,7 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         learning_dispatcher,
         model_router,
         skill_executor,
+        rag_warmup_indexed_docs,
         persona_registry,
         orchestrator,
         zone_checker,
@@ -501,9 +505,9 @@ async fn build_skill_executor(
     config: &Config,
     vectordb_path: &str,
     memory_store: &Arc<MemoryStore>,
-    _skills_dir: &std::path::Path,
+    skills_dir: &std::path::Path,
     is_dry_run: bool,
-) -> Result<SkillExecutor> {
+) -> Result<(SkillExecutor, usize)> {
     let rag_config = config
         .memory
         .as_ref()
@@ -560,6 +564,23 @@ async fn build_skill_executor(
         Arc::new(store)
     };
 
+    let rag_enabled = rag_config.map(|rag| rag.enabled).unwrap_or(true);
+    let mut indexed_docs = 0usize;
+    if !is_dry_run && rag_enabled {
+        let indexer = Indexer::new(Arc::clone(&embedder), Arc::clone(&db), 900);
+        match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
+            Ok(count) => {
+                indexed_docs = count;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "RAG warmup index failed; continuing with keyword fallback"
+                );
+            }
+        }
+    }
+
     let retriever =
         Arc::new(Retriever::new(embedder, db, 5).with_memory_store(Arc::clone(memory_store)));
     let memory = memory_store.global();
@@ -568,7 +589,238 @@ async fn build_skill_executor(
     ));
     let global_memory = global_store.scoped("global");
 
-    Ok(SkillExecutor::new(provider, retriever, memory).with_global_memory(global_memory))
+    Ok((
+        SkillExecutor::new(provider, retriever, memory).with_global_memory(global_memory),
+        indexed_docs,
+    ))
+}
+
+const RAG_INDEX_MAX_FILES: usize = 400;
+const RAG_INDEX_MAX_FILE_BYTES: u64 = 256 * 1024;
+const RAG_INDEX_MAX_CHARS: usize = 80_000;
+const RAG_INDEX_MAX_MEMORY_ENTRIES_PER_SCOPE: usize = 200;
+
+fn rag_warmup_enabled() -> bool {
+    std::env::var("AGENT007_RAG_WARMUP")
+        .map(|raw| {
+            !matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+async fn warmup_retrieval_index(
+    config: &Config,
+    memory_store: &Arc<MemoryStore>,
+    skills_dir: &std::path::Path,
+    indexer: &Indexer,
+) -> Result<usize> {
+    if !rag_warmup_enabled() {
+        return Ok(0);
+    }
+
+    let mut indexed_docs = 0usize;
+    indexed_docs += index_memory_scope(indexer, memory_store, "project").await?;
+    indexed_docs += index_memory_scope(indexer, memory_store, "skills").await?;
+
+    let global_store = Arc::new(MemoryStore::new(agent007_global_home().join("memory")));
+    indexed_docs += index_memory_scope(indexer, &global_store, "global").await?;
+
+    indexed_docs += index_skill_templates(indexer, skills_dir).await?;
+    indexed_docs += index_configured_paths(indexer, config).await?;
+
+    tracing::debug!(indexed_docs, "RAG warmup completed");
+    Ok(indexed_docs)
+}
+
+async fn index_memory_scope(
+    indexer: &Indexer,
+    store: &Arc<MemoryStore>,
+    scope: &str,
+) -> Result<usize> {
+    let scoped = store.scoped(scope);
+    let keys = scoped.list_keys().unwrap_or_default();
+    let mut indexed = 0usize;
+
+    for key in keys
+        .into_iter()
+        .take(RAG_INDEX_MAX_MEMORY_ENTRIES_PER_SCOPE)
+    {
+        let Ok(Some(value)) = scoped.read(&key) else {
+            continue;
+        };
+        let content = truncate_chars(&value, RAG_INDEX_MAX_CHARS);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let doc_id = format!("memory:{scope}:{key}");
+        indexer
+            .index_text(&doc_id, &content)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to index {doc_id}: {}", e))?;
+        indexed += 1;
+    }
+
+    Ok(indexed)
+}
+
+async fn index_skill_templates(indexer: &Indexer, skills_dir: &std::path::Path) -> Result<usize> {
+    if !skills_dir.exists() {
+        return Ok(0);
+    }
+    let loader = agent007_skills::SkillLoader::new(skills_dir);
+    let skills = loader
+        .load_all()
+        .map_err(|e| anyhow::anyhow!("failed to load skills for indexing: {}", e))?;
+
+    let mut indexed = 0usize;
+    for skill in skills {
+        let prompt = skill.template();
+        if prompt.trim().is_empty() {
+            continue;
+        }
+        let doc_id = format!("skill:{}", skill.trigger());
+        indexer
+            .index_text(&doc_id, &truncate_chars(prompt, RAG_INDEX_MAX_CHARS))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to index {doc_id}: {}", e))?;
+        indexed += 1;
+    }
+    Ok(indexed)
+}
+
+async fn index_configured_paths(indexer: &Indexer, config: &Config) -> Result<usize> {
+    let Some(rag) = config.memory.as_ref().and_then(|m| m.rag.as_ref()) else {
+        return Ok(0);
+    };
+    if !rag.enabled || rag.index.is_empty() {
+        return Ok(0);
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut files = Vec::new();
+    for configured in &rag.index {
+        let root = resolve_index_root(&cwd, configured);
+        collect_indexable_files(&root, &mut files, RAG_INDEX_MAX_FILES);
+        if files.len() >= RAG_INDEX_MAX_FILES {
+            break;
+        }
+    }
+    files.sort();
+    files.dedup();
+    files.truncate(RAG_INDEX_MAX_FILES);
+
+    let mut indexed = 0usize;
+    for file in files {
+        let Ok(meta) = std::fs::metadata(&file) else {
+            continue;
+        };
+        if meta.len() > RAG_INDEX_MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let content = truncate_chars(&content, RAG_INDEX_MAX_CHARS);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let rel = file
+            .strip_prefix(&cwd)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| file.display().to_string());
+        let doc_id = format!("file:{rel}");
+        indexer
+            .index_text(&doc_id, &content)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to index {doc_id}: {}", e))?;
+        indexed += 1;
+    }
+
+    Ok(indexed)
+}
+
+fn resolve_index_root(cwd: &std::path::Path, configured: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(configured);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn collect_indexable_files(
+    root: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    limit: usize,
+) {
+    if out.len() >= limit {
+        return;
+    }
+    if !root.exists() {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(root) else {
+        return;
+    };
+    if meta.is_file() {
+        if is_indexable_source_file(root) {
+            out.push(root.to_path_buf());
+        }
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= limit {
+            break;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_indexable_files(&path, out, limit);
+        } else if is_indexable_source_file(&path) {
+            out.push(path);
+        }
+    }
+}
+
+fn is_indexable_source_file(path: &std::path::Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    matches!(
+        ext,
+        "rs" | "md"
+            | "txt"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "json"
+            | "js"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "vue"
+            | "py"
+            | "go"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "sql"
+    )
+}
+
+fn truncate_chars(input: &str, limit: usize) -> String {
+    if input.chars().count() <= limit {
+        return input.to_string();
+    }
+    input.chars().take(limit).collect()
 }
 
 /// A no-op VectorDB used in dry-run mode (no actual storage).
@@ -694,6 +946,20 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
             stack.dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
         )
         .await?;
+    let _ = stack.run_store.write_json_artifact(
+        &run.id,
+        "retrieval-telemetry.json",
+        &serde_json::json!({
+            "indexed_docs": stack.rag_warmup_indexed_docs,
+            "retrieval_queries": 0,
+            "retrieval_hits": 0,
+            "retrieval_hit_rate": 0.0,
+            "rag_context_chars": 0,
+            "vector_hits": 0,
+            "fallback_hits": 0,
+            "mock_embedding": false,
+        }),
+    );
 
     // Spawn feedback collector
     let collector = stack.feedback_collector.clone();
@@ -933,5 +1199,37 @@ mod tests {
         let provider = ResilientEmbeddingProvider::new(Arc::new(FailingEmbedder), 7);
         let embedding = provider.embed("hello").await.unwrap();
         assert_eq!(embedding, vec![0.0; 7]);
+    }
+
+    #[test]
+    fn indexable_source_file_matches_expected_extensions() {
+        assert!(is_indexable_source_file(std::path::Path::new(
+            "src/main.rs"
+        )));
+        assert!(is_indexable_source_file(std::path::Path::new(
+            "docs/plan.md"
+        )));
+        assert!(is_indexable_source_file(std::path::Path::new(
+            "web/app.vue"
+        )));
+        assert!(!is_indexable_source_file(std::path::Path::new(
+            "assets/logo.png"
+        )));
+        assert!(!is_indexable_source_file(std::path::Path::new(
+            "bin/agent007"
+        )));
+    }
+
+    #[test]
+    fn collect_indexable_files_respects_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}").unwrap();
+        std::fs::write(dir.path().join("b.md"), "# b").unwrap();
+        std::fs::write(dir.path().join("c.toml"), "[x]").unwrap();
+        std::fs::write(dir.path().join("d.png"), "not text").unwrap();
+
+        let mut files = Vec::new();
+        collect_indexable_files(dir.path(), &mut files, 2);
+        assert!(files.len() <= 2);
     }
 }

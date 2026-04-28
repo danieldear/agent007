@@ -159,51 +159,10 @@ pub async fn execute(config: Arc<Config>, action: SkillAction) -> Result<()> {
         }
         SkillAction::Add { path } => copy_skill_to_dir(std::path::Path::new(&path), &skills_dir),
         SkillAction::Run { trigger, args } => {
-            let is_dry_run = crate::commands::run::is_dry_run();
-            let router = Arc::new(crate::commands::run::build_model_router(
-                &config, is_dry_run,
-            ));
-
-            // Embedding provider + VectorDB for the Retriever
-            let embedder = Arc::new(agent007_models::MockProvider::with_embedding_dim(
-                "",
-                "mock-embed",
-                384,
-            )) as Arc<dyn agent007_models::EmbeddingProvider>;
-
-            let db: Arc<dyn agent007_memory::VectorDB> = if is_dry_run {
-                Arc::new(crate::commands::run::NoOpVectorDB)
-            } else {
-                let home = crate::commands::run::agent007_home();
-                let vdb_path = home.join("vectordb");
-                std::fs::create_dir_all(&vdb_path)?;
-                let vdb_path_str = vdb_path.to_string_lossy().to_string();
-                let store =
-                    agent007_memory::vectordb::LanceDBStore::new(&vdb_path_str, "skills", 384)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("failed to open vector db: {}", e))?;
-                Arc::new(store)
-            };
-
-            let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
-
-            let home = crate::commands::run::agent007_home();
-            let memory_dir = home.join("memory");
-            let memory_store = Arc::new(agent007_memory::store::MemoryStore::new(memory_dir));
-            let memory = memory_store.global();
-            let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
-                crate::commands::run::agent007_global_home().join("memory"),
-            ));
-            let global_memory = global_store.scoped("global");
-
-            let executor = agent007_skills::SkillExecutor::new(
-                router as Arc<dyn agent007_models::ModelProvider>,
-                retriever,
-                memory,
-            )
-            .with_global_memory(global_memory);
-
-            let result = run_skill(&trigger, &args, &executor).await?;
+            // Reuse the same stack/executor path as `agent007 run` so skill runs
+            // benefit from the exact same retrieval, memory, and routing behavior.
+            let stack = crate::commands::run::build_stack(config.as_ref()).await?;
+            let result = run_skill(&trigger, &args, &stack.skill_executor).await?;
             println!("{}", result);
             Ok(())
         }

@@ -177,6 +177,9 @@ const selectedRoutingRecommendations = computed(() => selectedWorkflowState.valu
 const pendingApproval = computed(() => selectedWorkflowState.value?.pending_approval || null)
 const selectedRunOutput = computed(() => selectedRun.value?.output_text || '')
 const selectedRunKind = computed(() => selectedRun.value?.run?.metadata?.kind || '')
+const selectedRetrievalTelemetry = computed(() => selectedRun.value?.retrieval_telemetry || null)
+const selectedPersonaPolicyWarning = computed(() => selectedRun.value?.persona_policy_warning || null)
+const selectedRunTokenSummary = computed(() => selectedRun.value?.token_summary || null)
 const dashboardOwnsSelectedWorkflow = computed(() => selectedRunKind.value.startsWith('workflow-web-'))
 const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
 const selectedRunAlreadyResumed = computed(() => selectedRunArtifacts.value.includes('resume-target.json'))
@@ -216,6 +219,11 @@ function fmtReasonCodes(codes) {
 function fmtConfidence(value) {
   if (typeof value !== 'number') return '0%'
   return `${Math.round(value * 100)}%`
+}
+
+function fmtPct(value) {
+  if (typeof value !== 'number') return '0%'
+  return `${(value * 100).toFixed(1)}%`
 }
 
 async function refreshRuns() {
@@ -594,6 +602,64 @@ async function submitTask() {
               <div v-if="selectedRunOutput">
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
                 <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed max-h-48 overflow-auto">{{ selectedRunOutput }}</div>
+              </div>
+
+              <!-- Retrieval Telemetry -->
+              <div v-if="selectedRetrievalTelemetry">
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Retrieval Telemetry</div>
+                <div class="grid grid-cols-4 gap-3">
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Indexed Docs</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.indexed_docs || 0 }}</div>
+                  </div>
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Hit Rate</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ fmtPct(selectedRetrievalTelemetry.retrieval_hit_rate || 0) }}</div>
+                  </div>
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Queries/Hits</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.retrieval_queries || 0 }} / {{ selectedRetrievalTelemetry.retrieval_hits || 0 }}</div>
+                  </div>
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Context Chars</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-3 gap-3 mt-3">
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>
+                  </div>
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Fallback Hits</div>
+                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.fallback_hits || 0 }}</div>
+                  </div>
+                  <div class="bg-base-200 rounded-lg p-3">
+                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Mock Embedding</div>
+                    <div class="font-mono text-xs" :class="selectedRetrievalTelemetry.mock_embedding ? 'text-warning' : 'text-success'">
+                      {{ selectedRetrievalTelemetry.mock_embedding ? 'yes' : 'no' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Token Summary -->
+              <div v-if="selectedRunTokenSummary" class="rounded-lg border border-base-300/60 bg-base-200 p-3">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Token Summary</div>
+                <div class="font-mono text-xs text-base-content/70">
+                  {{ selectedRunTokenSummary.tokens || 0 }} tokens · {{ selectedRunTokenSummary.requests || 0 }} request(s)
+                </div>
+              </div>
+
+              <!-- Persona Policy Warning -->
+              <div v-if="selectedPersonaPolicyWarning" class="rounded-lg border border-warning/40 bg-warning/10 p-4">
+                <div class="text-xs font-bold uppercase tracking-wider text-warning mb-2">Persona Tool Policy</div>
+                <div class="font-mono text-xs text-base-content/70 whitespace-pre-wrap">
+                  {{ selectedPersonaPolicyWarning.message || 'Tool policy warning recorded.' }}
+                </div>
+                <div class="font-mono text-[11px] text-base-content/50 mt-2">
+                  persona={{ selectedPersonaPolicyWarning.active_persona || 'unknown' }} · tool={{ selectedPersonaPolicyWarning.requested_tool || 'unknown' }} · strict={{ selectedPersonaPolicyWarning.strict_mode ? 'on' : 'off' }}
+                </div>
               </div>
 
               <!-- Workflow State -->

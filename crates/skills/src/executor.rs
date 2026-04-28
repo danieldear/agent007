@@ -1,9 +1,28 @@
 use crate::error::SkillError;
 use crate::types::Skill;
 use agent007_lsp_client::LspClient;
+use agent007_memory::retriever::RetrieveStats;
 use agent007_memory::{Retriever, ScopedMemoryStore};
 use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillExecutionMetrics {
+    pub retrieval_queries: u32,
+    pub retrieval_hits: u32,
+    pub retrieval_hit_rate: f64,
+    pub rag_context_chars: usize,
+    pub vector_hits: usize,
+    pub fallback_hits: usize,
+    pub mock_embedding: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillExecutionReport {
+    pub output: String,
+    pub metrics: SkillExecutionMetrics,
+}
 
 pub struct SkillExecutor {
     provider: Arc<dyn ModelProvider>,
@@ -46,10 +65,19 @@ impl SkillExecutor {
     }
 
     pub async fn execute(&self, skill: &Skill, args: &str) -> Result<String, SkillError> {
+        let report = self.execute_with_report(skill, args).await?;
+        Ok(report.output)
+    }
+
+    pub async fn execute_with_report(
+        &self,
+        skill: &Skill,
+        args: &str,
+    ) -> Result<SkillExecutionReport, SkillError> {
         // 1. RAG context
-        let rag_context = self
+        let (rag_context, retrieval_stats) = self
             .retriever
-            .retrieve(args)
+            .retrieve_with_stats(args)
             .await
             .map_err(|e| SkillError::Memory {
                 name: skill.name().to_string(),
@@ -155,7 +183,23 @@ impl SkillExecutor {
             source: e,
         })?;
 
-        Ok(response.content)
+        Ok(SkillExecutionReport {
+            output: response.content,
+            metrics: metrics_from_retrieval(&rag_context, &retrieval_stats),
+        })
+    }
+}
+
+fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> SkillExecutionMetrics {
+    let hits = u32::from(!rag_context.is_empty());
+    SkillExecutionMetrics {
+        retrieval_queries: 1,
+        retrieval_hits: hits,
+        retrieval_hit_rate: hits as f64,
+        rag_context_chars: rag_context.chars().count(),
+        vector_hits: retrieval.vector_hits,
+        fallback_hits: retrieval.fallback_hits,
+        mock_embedding: retrieval.mock_embedding,
     }
 }
 

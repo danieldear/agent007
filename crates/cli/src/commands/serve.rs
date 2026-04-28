@@ -2475,7 +2475,62 @@ async fn create_traced_stack(
             stack.dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
         )
         .await?;
+    let baseline = RetrievalTelemetryArtifact::baseline(stack.rag_warmup_indexed_docs);
+    let _ = write_retrieval_telemetry(&stack.run_store, &run.id, &baseline);
     Ok((stack, run.id))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RetrievalTelemetryArtifact {
+    indexed_docs: usize,
+    retrieval_queries: u32,
+    retrieval_hits: u32,
+    retrieval_hit_rate: f64,
+    rag_context_chars: usize,
+    vector_hits: usize,
+    fallback_hits: usize,
+    mock_embedding: bool,
+}
+
+impl RetrievalTelemetryArtifact {
+    fn baseline(indexed_docs: usize) -> Self {
+        Self {
+            indexed_docs,
+            retrieval_queries: 0,
+            retrieval_hits: 0,
+            retrieval_hit_rate: 0.0,
+            rag_context_chars: 0,
+            vector_hits: 0,
+            fallback_hits: 0,
+            mock_embedding: false,
+        }
+    }
+
+    fn from_skill_report(
+        indexed_docs: usize,
+        report: &agent007_skills::SkillExecutionReport,
+    ) -> Self {
+        Self {
+            indexed_docs,
+            retrieval_queries: report.metrics.retrieval_queries,
+            retrieval_hits: report.metrics.retrieval_hits,
+            retrieval_hit_rate: report.metrics.retrieval_hit_rate,
+            rag_context_chars: report.metrics.rag_context_chars,
+            vector_hits: report.metrics.vector_hits,
+            fallback_hits: report.metrics.fallback_hits,
+            mock_embedding: report.metrics.mock_embedding,
+        }
+    }
+}
+
+fn write_retrieval_telemetry(
+    store: &agent007_core::RunStore,
+    run_id: &str,
+    telemetry: &RetrievalTelemetryArtifact,
+) -> Result<()> {
+    store
+        .write_json_artifact(run_id, "retrieval-telemetry.json", telemetry)
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 fn create_delegate_run(kind: &str, task: &str) -> Result<String> {
@@ -2900,8 +2955,18 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
         let trace_task = format!("skill:{} {}", trigger, args);
         let (stack, run_id) = create_traced_stack(config, "skill", &trace_task).await?;
         let skill = find_skill(&trigger)?;
-        match stack.skill_executor.execute(&skill, &args).await {
-            Ok(output) => {
+        match stack
+            .skill_executor
+            .execute_with_report(&skill, &args)
+            .await
+        {
+            Ok(report) => {
+                let output = report.output.clone();
+                let telemetry = RetrievalTelemetryArtifact::from_skill_report(
+                    stack.rag_warmup_indexed_docs,
+                    &report,
+                );
+                let _ = write_retrieval_telemetry(&stack.run_store, &run_id, &telemetry);
                 let _ = stack.run_store.finish_run(&run_id, true, &output);
                 Ok(output)
             }
@@ -3914,6 +3979,29 @@ async fn mcp_tool_call(
 ) -> Result<String> {
     let trace_task = format!("call downstream MCP tool {name}");
     let (stack, run_id) = create_traced_stack(config, "mcp-tool-call", &trace_task).await?;
+    if let Some(violation) = evaluate_persona_tool_policy(name) {
+        let warning_payload = serde_json::json!({
+            "active_persona": violation.persona,
+            "requested_tool": name,
+            "allowed_tools": violation.allowed_tools,
+            "strict_mode": strict_persona_tool_enforcement(),
+            "message": violation.message,
+        });
+        let _ = stack.run_store.write_json_artifact(
+            &run_id,
+            "persona-policy-warning.json",
+            &warning_payload,
+        );
+        if strict_persona_tool_enforcement() {
+            let summary = format!(
+                "persona tool policy blocked MCP tool call: {}",
+                violation.message
+            );
+            let _ = stack.run_store.finish_run(&run_id, false, &summary);
+            return Err(anyhow::anyhow!(summary));
+        }
+        tracing::warn!("{}", violation.message);
+    }
     match stack
         .tool_executor
         .call_mcp_tool(agent_id, name, args)
@@ -3931,6 +4019,78 @@ async fn mcp_tool_call(
             Err(error.into())
         }
     }
+}
+
+#[derive(Debug)]
+struct PersonaToolPolicyViolation {
+    persona: String,
+    allowed_tools: Vec<String>,
+    message: String,
+}
+
+fn strict_persona_tool_enforcement() -> bool {
+    std::env::var("AGENT007_ENFORCE_PERSONA_TOOLS")
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn evaluate_persona_tool_policy(tool_name: &str) -> Option<PersonaToolPolicyViolation> {
+    let Ok(Some(active_persona)) = memory_read("user", "active_persona") else {
+        return None;
+    };
+    let registry = configured_persona_registry();
+    let spec = {
+        use agent007_core::PersonaProvider;
+        registry.get(&active_persona)
+    }?;
+    if spec.allowed_tools.is_empty() {
+        return None;
+    }
+    if persona_allows_tool(&spec.allowed_tools, tool_name) {
+        return None;
+    }
+    let persona_name = spec.name.clone();
+    let allowed_tools = spec.allowed_tools.clone();
+    Some(PersonaToolPolicyViolation {
+        persona: persona_name.clone(),
+        allowed_tools: allowed_tools.clone(),
+        message: format!(
+            "active persona '{}' does not allow MCP tool '{}'. Allowed: {}",
+            persona_name,
+            tool_name,
+            allowed_tools.join(", ")
+        ),
+    })
+}
+
+fn persona_allows_tool(allowed_tools: &[String], tool_name: &str) -> bool {
+    let name = tool_name.to_ascii_lowercase();
+    for allowed in allowed_tools {
+        let normalized = allowed.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        if matches!(
+            normalized.as_str(),
+            "*" | "all" | "any" | "mcp" | "mcp_tool" | "mcp_tools"
+        ) {
+            return true;
+        }
+        if normalized == name {
+            return true;
+        }
+        if let Some(prefix) = normalized.strip_suffix('*') {
+            if !prefix.is_empty() && name.starts_with(prefix) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn run_history(limit: usize) -> Result<String> {

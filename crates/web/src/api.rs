@@ -612,6 +612,18 @@ pub async fn run_detail_handler(
                 .read_text_artifact_optional(&id, "output.txt")
                 .ok()
                 .flatten();
+            let retrieval_telemetry = store
+                .read_json_artifact_optional::<serde_json::Value>(&id, "retrieval-telemetry.json")
+                .ok()
+                .flatten();
+            let persona_policy_warning = store
+                .read_json_artifact_optional::<serde_json::Value>(&id, "persona-policy-warning.json")
+                .ok()
+                .flatten();
+            let token_summary = store
+                .read_json_artifact_optional::<serde_json::Value>(&id, "token-summary.json")
+                .ok()
+                .flatten();
             let workflow_request = store
                 .read_json_artifact_optional::<serde_json::Value>(&id, "workflow-request.json")
                 .ok()
@@ -627,6 +639,9 @@ pub async fn run_detail_handler(
             Json(serde_json::json!({
                 "run": run,
                 "output_text": output_text,
+                "retrieval_telemetry": retrieval_telemetry,
+                "persona_policy_warning": persona_policy_warning,
+                "token_summary": token_summary,
                 "workflow_request": workflow_request,
                 "workflow_source": workflow_source,
                 "workflow_state": workflow_state,
