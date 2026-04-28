@@ -921,7 +921,7 @@ footer {
   <div class="section-inner">
     <p class="section-tag reveal">Get started</p>
     <h2 class="section-title reveal">Install paths,<br/>clearly defined.</h2>
-    <p class="section-sub reveal">Linux x86_64 ships as a prebuilt release artifact via curl installer. macOS currently installs from source.</p>
+    <p class="section-sub reveal">Linux x86_64 ships as a prebuilt release artifact via curl installer. macOS currently installs from source, and cargo install now builds dashboard assets automatically.</p>
 
     <div class="install-grid">
       <div class="reveal">
@@ -963,6 +963,10 @@ footer {
     <p class="section-sub reveal" style="margin-top:1.75rem; max-width:880px;">
       Current release automation publishes Linux artifacts only to keep pipeline time low.
       CI and release runners are Linux-based for now; macOS uses source install until prebuilt artifacts are reintroduced.
+    </p>
+
+    <p class="section-sub reveal" style="max-width:880px;">
+      Source installs (`cargo install --git ...` or local cargo install) auto-build the frontend and embed the dashboard bundle in the binary, so <code>agent007 serve</code> works without a separate frontend build step.
     </p>
 
     <div class="reveal">
