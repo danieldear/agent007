@@ -1,11 +1,11 @@
 # Milestones — V2 M3 Collaboration + Adaptive Foundation
 
-| Milestone | Duration | Goal | Exit Criteria |
-|---|---:|---|---|
-| M3.1 Collaboration Core | 2 weeks | Secure optional peer sync for approved artifacts | Envelope signing + policy filter + local mesh tests pass |
-| M3.2 Eval Gates | 2 weeks | Introduce scorecards and regression blocking | Scorecards emitted + gate policy enforced + dashboard visible |
-| M3.3 Adaptive Shadow | 2 weeks | Emit recommendations without behavior risk | Recommendation confidence surfaced + fallback validated |
-| M3.4 Hardening & Rollout | 1-2 weeks | Production readiness and controlled enablement | Security/perf suites pass + rollout matrix complete |
+| Milestone | Status | Duration | Goal | Exit Criteria |
+|---|---|---:|---|---|
+| M3.1 Collaboration Core | ✅ Complete | 2 weeks | Secure optional peer sync for approved artifacts | Envelope signing + policy filter + local mesh tests pass |
+| M3.2 Eval Gates | ✅ Complete | 2 weeks | Introduce scorecards and regression blocking | Scorecards emitted + gate policy enforced + dashboard visible |
+| M3.3 Adaptive Shadow | ✅ Complete | 2 weeks | Emit recommendations without behavior risk | Recommendation confidence surfaced + fallback validated |
+| M3.4 Hardening & Rollout | 🔄 In Progress | 1-2 weeks | Production readiness and controlled enablement | Security/perf suites pass + rollout matrix complete |
 
 ## Feature Breakdown
 

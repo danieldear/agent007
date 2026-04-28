@@ -16,77 +16,77 @@ V2 upgrades agent007 from static orchestration to measurable, adaptive, and coll
 
 ## 4. User Stories and Acceptance Criteria
 
-### US-1 Run Evals
+### US-1 Run Evals ✅ Complete (M1)
 As a developer, I need run-level quality metrics so I can trust improvements.
 - AC-1: Every run records a normalized score with sub-signals.
 - AC-2: Dashboard displays success/cost/latency/retry trends.
 - AC-3: Regression suite can fail CI when quality drops beyond threshold.
 
-### US-2 Recovery Loops
+### US-2 Recovery Loops ✅ Complete (M2)
 As a developer, I want failed runs to auto-recover before hard failure.
 - AC-1: Execution follows bounded recovery chain.
 - AC-2: Retry attempts and transitions are visible in run logs.
 - AC-3: Terminal fail occurs after policy-defined limits.
 
-### US-3 Budget Governor
+### US-3 Budget Governor ✅ Complete (M2)
 As a team lead, I need hard cost controls.
 - AC-1: Per-run and per-session budget caps configurable.
 - AC-2: System downgrades strategy/model gracefully before aborting.
 - AC-3: Budget events are auditable in run artifacts.
 
-### US-4 Adaptive Routing v1
+### US-4 Adaptive Routing v1 ✅ Complete (M3.3 — shadow mode)
 As a user, I want model selection to adapt by task context.
 - AC-1: Router uses heuristic policy inputs (task type, historical success, budget pressure).
 - AC-2: Fallback route always available.
 - AC-3: Routing decisions are explainable in logs.
 
-### US-5 Smart Human Escalation
+### US-5 Smart Human Escalation ✅ Complete (M2)
 As a user, I want escalation only when confidence is low.
 - AC-1: Escalation triggers based on policy thresholds.
 - AC-2: Approval prompts include concise rationale.
 - AC-3: Users can override and continue.
 
-### US-6 Policy Learning
+### US-6 Policy Learning 📋 Planned (M3.4+)
 As a platform owner, I want policy improvement over time without unstable behavior.
 - AC-1: Learning store tracks policy candidates and confidence.
 - AC-2: High-impact changes require approval.
 - AC-3: Rollback to previous policy is one-step.
 
-### US-7 Workflow Optimizer + A/B
+### US-7 Workflow Optimizer + A/B 📋 Planned (M3.4+)
 As a team lead, I want data-driven workflow tuning.
 - AC-1: A/B experiment framework can split traffic between two policies.
 - AC-2: Winner criteria configurable (success/cost/latency weighted).
 - AC-3: Experiment report saved in run artifacts.
 
-### US-8 Tool Reliability Scoring
+### US-8 Tool Reliability Scoring 📋 Planned (M3.4+)
 As a user, I want flaky tools automatically deprioritized.
 - AC-1: Tool health score computed from failures/timeouts.
 - AC-2: Low-score tools auto-demoted unless explicitly pinned.
 - AC-3: Tool score history shown in dashboard.
 
-### US-9 Guardrails Engine
+### US-9 Guardrails Engine ✅ Complete (M2)
 As a platform engineer, I need policy checks before risky execution.
 - AC-1: Guardrails evaluated before destructive operations.
 - AC-2: Violations create explicit blocked events.
 - AC-3: Guardrails are configurable per project/org.
 
-### US-10 Org Analytics Dashboard
+### US-10 Org Analytics Dashboard ✅ Complete (M1)
 As a lead, I need cross-run trend visibility.
 - AC-1: Aggregated KPIs visible by workflow/skill/model.
 - AC-2: Time window filters supported.
 - AC-3: Export snapshot to JSON.
 
-### US-11 Auto-Healing Sessions
+### US-11 Auto-Healing Sessions ✅ Complete (M2)
 As a user, I want resilience to process restarts.
 - AC-1: Stale interrupted runs can be recovered to succeeded when host tokens/results arrive.
 - AC-2: Recovery reason is explicit in metadata.
 - AC-3: No false-positive “recorded” state when mutation is skipped.
 
-### US-12 Libp2p Collaboration (Phase 1 local)
+### US-12 Libp2p Collaboration (Phase 1 local) ✅ Core Complete (M3.1) / 📋 Full mesh planned (M4)
 As a team, we want lightweight local collaboration.
-- AC-1: Peers auto-discover on local network (mDNS).
-- AC-2: Signed metadata announcements for shared artifacts.
-- AC-3: Content pulled on demand (request-response), not broadcast by default.
+- AC-1: Peers auto-discover on local network (mDNS). ✅
+- AC-2: Signed metadata announcements for shared artifacts. ✅ (signed envelopes + policy redaction implemented)
+- AC-3: Content pulled on demand (request-response), not broadcast by default. 📋 Planned (M4)
 
 ## 5. Functional Requirements
 1. Run scorecard API and storage schema.

@@ -2,6 +2,8 @@
 
 Skills are reusable prompt templates triggered by `/slash-commands`. They're Markdown files with YAML frontmatter stored in `~/.agent007/skills/` (global) or `.agent007/skills/` (project-local). Project-local skills override global ones with the same trigger.
 
+Skills can be placed directly in the skills directory or organized into **subdirectories (skill folders)**. The loader scans recursively, so `~/.agent007/skills/my-team/review.md` is loaded the same as `~/.agent007/skills/review.md`. Folders are purely organizational; the trigger still controls routing.
+
 ## Frontmatter schema
 
 ```yaml

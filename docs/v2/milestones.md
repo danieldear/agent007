@@ -1,12 +1,12 @@
 # Milestones & Features: agent007 V2
 
 ## Milestone Table
-| Milestone | Goal | Key Features | Exit Criteria |
-|---|---|---|---|
-| M1 Foundation | Establish measurement baseline | Run scorecards, KPI dashboard, regression harness | Scorecards on every run, KPI panels live, regression gate active |
-| M2 Reliability | Reduce avoidable failures and cost spikes | Recovery state machine, budget governor, guardrails, smart escalation | Deterministic recovery flow, budget enforcement, clear guardrail blocking |
-| M3 Intelligence | Improve route/policy quality | Adaptive routing, policy learning, A/B, tool reliability, workflow optimizer | Explainable routing, reversible policy updates, experiment winner reports |
-| M4 Collaboration | Enable local team sharing | p2p scaffold, mDNS, signed metadata gossip, request-response pull, trust controls | Peer discovery works, signatures verify, artifact pull succeeds |
+| Milestone | Status | Goal | Key Features | Exit Criteria |
+|---|---|---|---|---|
+| M1 Foundation | ✅ Complete | Establish measurement baseline | Run scorecards, KPI dashboard, regression harness | Scorecards on every run, KPI panels live, regression gate active |
+| M2 Reliability | ✅ Complete | Reduce avoidable failures and cost spikes | Recovery state machine, budget governor, guardrails, smart escalation | Deterministic recovery flow, budget enforcement, clear guardrail blocking |
+| M3 Intelligence | ✅ Complete (M3.1–M3.3) / 🔄 In Progress (M3.4) | Improve route/policy quality + collaboration core | Eval gates, adaptive shadow, signed envelopes, policy redaction, workflow hardening | Explainable routing, reversible policy updates, experiment winner reports |
+| M4 Collaboration | 📋 Planned | Enable local team sharing (libp2p mesh) | p2p scaffold, mDNS, signed metadata gossip, request-response pull, trust controls | Peer discovery works, signatures verify, artifact pull succeeds |
 
 ## Feature Breakdown by Milestone
 ### M1

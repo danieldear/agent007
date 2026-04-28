@@ -6,11 +6,11 @@
 3. M3 Controlled Rollout and Quality Gate
 
 ## Milestone Table
-| Milestone | Goal | Key Features | Dependencies | Exit Criteria |
-|---|---|---|---|---|
-| M1 | Consistent retrieval + execution behavior | Warmup indexing bounds, shared skill executor path, telemetry artifact generation, persona policy enforcement | none | core paths green + artifacts persisted |
-| M2 | User-facing observability | run-detail API extension, dashboard telemetry/policy/token cards, docs updates | M1 | artifacts visible in UI and validated |
-| M3 | Safe rollout | strict-mode rollout matrix, KPI baseline tracking, rollback playbook | M2 | measured rollout decision gates |
+| Milestone | Status | Goal | Key Features | Dependencies | Exit Criteria |
+|---|---|---|---|---|---|
+| M1 | ✅ Complete | Consistent retrieval + execution behavior | Warmup indexing bounds, shared skill executor path, telemetry artifact generation, persona policy enforcement | none | core paths green + artifacts persisted |
+| M2 | ✅ Complete | User-facing observability | run-detail API extension, dashboard telemetry/policy/token cards, docs updates | M1 | artifacts visible in UI and validated |
+| M3 | 📋 Planned | Safe rollout | strict-mode rollout matrix, KPI baseline tracking, rollback playbook | M2 | measured rollout decision gates |
 
 ## Parallel Workstreams
 1. Backend: retriever/executor/policy and artifact persistence.
