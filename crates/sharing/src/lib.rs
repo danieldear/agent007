@@ -39,6 +39,8 @@ pub struct Bundle {
     pub workflows: Vec<BundleAsset>,
     #[serde(default)]
     pub tools: Vec<BundleAsset>,
+    #[serde(default)]
+    pub personas: Vec<BundleAsset>,
 }
 
 impl Bundle {
@@ -46,6 +48,7 @@ impl Bundle {
         skills: Vec<BundleAsset>,
         workflows: Vec<BundleAsset>,
         tools: Vec<BundleAsset>,
+        personas: Vec<BundleAsset>,
     ) -> Self {
         Self {
             version: "1".to_string(),
@@ -53,6 +56,7 @@ impl Bundle {
             skills,
             workflows,
             tools,
+            personas,
         }
     }
 
@@ -66,12 +70,13 @@ impl Bundle {
 }
 
 /// Builds a bundle from files on disk.
-/// Accepts multiple skills and workflows directories so that project-local
+/// Accepts multiple skills, workflows, and persona directories so that project-local
 /// and global agent007 homes can both be searched (matching the listing APIs).
 pub struct BundleBuilder {
     skills_dirs: Vec<PathBuf>,
     workflows_dirs: Vec<PathBuf>,
     tools_dirs: Vec<PathBuf>,
+    persona_dirs: Vec<PathBuf>,
 }
 
 impl BundleBuilder {
@@ -88,11 +93,28 @@ impl BundleBuilder {
             .filter_map(|p| p.parent().map(|parent| parent.join("tools")))
             .filter(|p| seen_tools.insert(p.clone()))
             .collect();
+        // Derive persona dirs from the parent of each skills dir (same home), deduplicated.
+        let mut seen_personas: HashSet<PathBuf> = HashSet::new();
+        let persona_dirs: Vec<PathBuf> = skills_dirs
+            .iter()
+            .filter_map(|p| p.parent().map(|parent| parent.join("personas")))
+            .filter(|p| seen_personas.insert(p.clone()))
+            .collect();
         Self {
             skills_dirs,
             workflows_dirs,
             tools_dirs,
+            persona_dirs,
         }
+    }
+
+    /// Override the persona search directories (used in tests and when callers need fine control).
+    pub fn with_persona_dirs(
+        mut self,
+        dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Self {
+        self.persona_dirs = dirs.into_iter().map(|p| p.into()).collect();
+        self
     }
 
     /// Build a bundle containing the specified skills (by trigger) and workflows (by name).
@@ -101,7 +123,8 @@ impl BundleBuilder {
         let skills = self.collect_skill_assets(skill_triggers)?;
         let workflows = self.collect_workflow_assets(workflow_names)?;
         let tools = self.collect_tools_assets(&skills, &workflows)?;
-        Ok(Bundle::new(skills, workflows, tools))
+        let personas = self.collect_persona_assets(&skills, &workflows)?;
+        Ok(Bundle::new(skills, workflows, tools, personas))
     }
 
     fn collect_skill_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
@@ -288,6 +311,67 @@ impl BundleBuilder {
         Ok(assets)
     }
 
+    fn collect_persona_assets(
+        &self,
+        skills: &[BundleAsset],
+        workflows: &[BundleAsset],
+    ) -> Result<Vec<BundleAsset>> {
+        if !self.persona_dirs.iter().any(|d| d.exists()) {
+            return Ok(Vec::new());
+        }
+
+        // Gather agent names referenced by selected workflows and skills.
+        let mut agent_names: HashSet<String> = HashSet::new();
+        for workflow in workflows {
+            collect_workflow_agent_refs(&workflow.content, &mut agent_names);
+        }
+        for skill in skills {
+            collect_workflow_agent_refs(&skill.content, &mut agent_names);
+        }
+
+        if agent_names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut assets: Vec<BundleAsset> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        for persona_dir in &self.persona_dirs {
+            if !persona_dir.exists() {
+                continue;
+            }
+            for entry in std::fs::read_dir(persona_dir)?.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                    continue;
+                }
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if !agent_names.contains(&stem) {
+                    continue;
+                }
+                let filename = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if filename.is_empty() || !seen.insert(filename.clone()) {
+                    continue;
+                }
+                let content = std::fs::read_to_string(&path)?;
+                assets.push(BundleAsset::new(filename, content));
+            }
+        }
+        assets.sort_by(|a, b| a.filename.cmp(&b.filename));
+        Ok(assets)
+    }
+
     fn build_skill_tool_ref_index(&self) -> Result<HashMap<String, HashSet<String>>> {
         let mut index: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -363,6 +447,7 @@ pub struct BundleImporter {
     skills_dir: PathBuf,
     workflows_dir: PathBuf,
     tools_dir: PathBuf,
+    personas_dir: PathBuf,
 }
 
 impl BundleImporter {
@@ -377,6 +462,7 @@ impl BundleImporter {
             skills_dir,
             workflows_dir,
             tools_dir: home.join("tools"),
+            personas_dir: home.join("personas"),
         }
     }
 
@@ -387,6 +473,7 @@ impl BundleImporter {
             .iter()
             .chain(bundle.workflows.iter())
             .chain(bundle.tools.iter())
+            .chain(bundle.personas.iter())
         {
             if !asset.verify() {
                 bail!(
@@ -400,6 +487,7 @@ impl BundleImporter {
         results.extend(self.write_assets(&bundle.skills, &self.skills_dir, overwrite)?);
         results.extend(self.write_assets(&bundle.workflows, &self.workflows_dir, overwrite)?);
         results.extend(self.write_assets(&bundle.tools, &self.tools_dir, overwrite)?);
+        results.extend(self.write_assets(&bundle.personas, &self.personas_dir, overwrite)?);
         Ok(results)
     }
 
@@ -594,6 +682,24 @@ fn collect_tool_refs_from_text(text: &str, out: &mut HashSet<String>) {
             continue;
         }
         collect_tool_ref_from_token(&token, out);
+    }
+}
+
+fn collect_workflow_agent_refs(content: &str, out: &mut HashSet<String>) {
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("agent:") {
+            continue;
+        }
+        let value = trimmed
+            .trim_start_matches("agent:")
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'');
+        let key = value.trim().to_ascii_lowercase();
+        if !key.is_empty() {
+            out.insert(key);
+        }
     }
 }
 
@@ -923,6 +1029,7 @@ mod tests {
             )],
             vec![],
             vec![],
+            vec![],
         );
         let json = bundle.to_json().unwrap();
         let back = Bundle::from_json(&json).unwrap();
@@ -938,7 +1045,7 @@ mod tests {
         let asset = BundleAsset::new("existing.md", "original");
         std::fs::write(skills_dir.join("existing.md"), "original").unwrap();
 
-        let bundle = Bundle::new(vec![asset], vec![], vec![]);
+        let bundle = Bundle::new(vec![asset], vec![], vec![], vec![]);
         let importer = BundleImporter::new(&skills_dir, dir.path().join("workflows"));
         let results = importer.import(&bundle, false).unwrap();
         assert_eq!(results[0].action, ImportAction::Skipped);
@@ -958,6 +1065,7 @@ mod tests {
                     "#!/usr/bin/env bash\necho ok",
                 ),
             ],
+            vec![],
             vec![],
             vec![],
         );
@@ -989,6 +1097,7 @@ mod tests {
                 "adb/flash.sh",
                 "#!/usr/bin/env bash\necho flash",
             )],
+            vec![],
         );
         let importer = BundleImporter::new(dir.path().join("skills"), dir.path().join("workflows"));
         importer.import(&bundle, true).unwrap();
@@ -1086,6 +1195,59 @@ mod tests {
         assert_eq!(bundle.workflows.len(), 1, "expected selected workflow only");
         assert_eq!(bundle.tools.len(), 1, "expected tool from referenced skill");
         assert_eq!(bundle.tools[0].filename, "ml/predict.py");
+    }
+
+    #[test]
+    fn builder_workflow_pulls_persona_for_referenced_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let personas_dir = dir.path().join("personas");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&personas_dir).unwrap();
+
+        std::fs::write(
+            workflows_dir.join("review.yaml"),
+            "name: review\nsteps:\n  - id: s1\n    agent: Architect\n    prompt: design it\n",
+        )
+        .unwrap();
+        std::fs::write(
+            personas_dir.join("architect.toml"),
+            "[persona]\nname = \"Architect\"\n",
+        )
+        .unwrap();
+        // unrelated persona — should NOT be included
+        std::fs::write(
+            personas_dir.join("coder.toml"),
+            "[persona]\nname = \"Coder\"\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir])
+            .with_persona_dirs([&personas_dir]);
+        let bundle = builder.build(&[], &["review"]).unwrap();
+
+        assert_eq!(bundle.workflows.len(), 1);
+        assert_eq!(bundle.personas.len(), 1, "only the referenced persona exported");
+        assert_eq!(bundle.personas[0].filename, "architect.toml");
+    }
+
+    #[test]
+    fn importer_writes_personas() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = Bundle::new(
+            vec![],
+            vec![],
+            vec![],
+            vec![BundleAsset::new(
+                "architect.toml",
+                "[persona]\nname = \"Architect\"\n",
+            )],
+        );
+        let importer = BundleImporter::new(dir.path().join("skills"), dir.path().join("workflows"));
+        importer.import(&bundle, true).unwrap();
+        assert!(dir.path().join("personas").join("architect.toml").exists());
     }
 
     #[test]

@@ -61,6 +61,22 @@ pub fn workflow_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Return the ordered list of directories to search for personas (project-local first, then global).
+pub fn persona_search_dirs() -> Vec<PathBuf> {
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![PathBuf::from(home).join("personas")];
+    }
+    let mut dirs = Vec::new();
+    if let Some(project) = agent007_project_home() {
+        dirs.push(project.join("personas"));
+    }
+    let global = agent007_global_home().join("personas");
+    if !dirs.iter().any(|d| d == &global) {
+        dirs.push(global);
+    }
+    dirs
+}
+
 /// Return the directory where new assets (skills, workflows, memory) should be written.
 ///
 /// Preference order:

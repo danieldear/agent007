@@ -13,8 +13,8 @@ use std::path::{Path as FsPath, PathBuf};
 use ts_rs::TS;
 
 use agent007_core::paths::{
-    agent007_global_home, agent007_project_home, agent007_write_home, skills_search_dirs,
-    workflow_search_dirs,
+    agent007_global_home, agent007_project_home, agent007_write_home, persona_search_dirs,
+    skills_search_dirs, workflow_search_dirs,
 };
 use agent007_sharing;
 use agent007_testing::{evaluate_kpi_regression, summarize_scorecards, RegressionThresholds};
@@ -3070,8 +3070,9 @@ pub async fn bundle_export_handler(
     let wf_filters: Vec<&str> = parse_bundle_selection(params.workflows.as_deref());
 
     // Use the same multi-dir search order as the listing APIs so that both
-    // project-local and global skills/workflows are found during export.
-    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs());
+    // project-local and global skills/workflows/personas are found during export.
+    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
+        .with_persona_dirs(persona_search_dirs());
     match builder.build(&skill_filters, &wf_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (

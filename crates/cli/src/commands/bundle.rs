@@ -1,7 +1,7 @@
 use crate::commands::slash_commands::sync_claude_slash_commands_for_home;
 use crate::config::Config;
 use crate::BundleAction;
-use agent007_core::paths::{agent007_global_home, agent007_write_home, skills_search_dirs, workflow_search_dirs};
+use agent007_core::paths::{agent007_global_home, agent007_write_home, persona_search_dirs, skills_search_dirs, workflow_search_dirs};
 use agent007_sharing::{Bundle, BundleBuilder, BundleImporter};
 use anyhow::Result;
 use std::sync::Arc;
@@ -13,7 +13,8 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             skills,
             workflows,
         } => {
-            let builder = BundleBuilder::new(skills_search_dirs(), workflow_search_dirs());
+            let builder = BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
+                .with_persona_dirs(persona_search_dirs());
 
             let skill_refs: Vec<&str> = skills.iter().map(String::as_str).collect();
             let wf_refs: Vec<&str> = workflows.iter().map(String::as_str).collect();
@@ -23,10 +24,11 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             let dest = output.unwrap_or_else(|| "agent007-bundle.a7bundle".to_string());
             std::fs::write(&dest, &json)?;
             println!(
-                "✓ Exported {} skill(s), {} workflow(s), and {} tool file(s) to {dest}",
+                "✓ Exported {} skill(s), {} workflow(s), {} tool file(s), and {} persona(s) to {dest}",
                 bundle.skills.len(),
                 bundle.workflows.len(),
-                bundle.tools.len()
+                bundle.tools.len(),
+                bundle.personas.len(),
             );
             Ok(())
         }
@@ -42,10 +44,11 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
                 Bundle::from_json(&content).map_err(|e| anyhow::anyhow!("invalid bundle: {e}"))?;
 
             println!(
-                "Bundle contains {} skill(s), {} workflow(s), and {} tool file(s)",
+                "Bundle contains {} skill(s), {} workflow(s), {} tool file(s), and {} persona(s)",
                 bundle.skills.len(),
                 bundle.workflows.len(),
-                bundle.tools.len()
+                bundle.tools.len(),
+                bundle.personas.len(),
             );
 
             let target = if global {
