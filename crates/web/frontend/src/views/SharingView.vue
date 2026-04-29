@@ -33,7 +33,7 @@ function toggleAllWorkflows() {
 // ─── import state ────────────────────────────────────────────────────────────
 const fileInput = ref(null)
 const bundleData = ref(null)
-const bundlePreview = ref(null)   // { skillCount, workflowCount, toolsCount }
+const bundlePreview = ref(null)   // { skillCount, workflowCount, toolsCount, personasCount }
 const parseError = ref(null)
 const overwrite = ref(false)
 const importStatus = ref(null)
@@ -123,13 +123,14 @@ async function handleFileChange(e) {
     const text = await file.text()
     const parsed = JSON.parse(text)
 
-    // Strict shape check — bundle schema: { skills: [], workflows: [] }
+    // Strict shape check — bundle schema: { skills: [], workflows: [], tools: [], personas: [] }
     const skillCount = Array.isArray(parsed.skills) ? parsed.skills.length : null
     const workflowCount = Array.isArray(parsed.workflows) ? parsed.workflows.length : null
     const toolsCount = Array.isArray(parsed.tools) ? parsed.tools.length : null
+    const personasCount = Array.isArray(parsed.personas) ? parsed.personas.length : null
 
-    if (skillCount === null && workflowCount === null && toolsCount === null) {
-      parseError.value = 'File does not look like an agent007 bundle (missing skills/workflows/tools arrays)'
+    if (skillCount === null && workflowCount === null && toolsCount === null && personasCount === null) {
+      parseError.value = 'File does not look like an agent007 bundle (missing skills/workflows/tools/personas arrays)'
       return
     }
 
@@ -138,6 +139,7 @@ async function handleFileChange(e) {
       skillCount: skillCount ?? 0,
       workflowCount: workflowCount ?? 0,
       toolsCount: toolsCount ?? 0,
+      personasCount: personasCount ?? 0,
     }
   } catch (err) {
     parseError.value = `Could not parse bundle: ${err.message}`
@@ -200,7 +202,8 @@ async function importBundle() {
               </div>
             </div>
             <p class="text-xs text-base-content/50 mb-4 leading-relaxed">
-              Bundle selected skills and workflows into a <code class="font-mono bg-base-300/80 px-1 rounded">.a7bundle</code>
+              Bundle selected skills and workflows — along with their associated tools, scripts, and personas — into a
+              <code class="font-mono bg-base-300/80 px-1 rounded">.a7bundle</code>
               file for sharing or backup on any agent007 instance.
             </p>
 
@@ -285,7 +288,7 @@ async function importBundle() {
                       <div v-if="w.description" class="text-[10px] text-base-content/40 leading-relaxed mt-0.5">
                         {{ w.description }}
                       </div>
-                      <div v-if="(w.skill_refs && w.skill_refs.length) || assocTools(w).length || assocScripts(w).length"
+                      <div v-if="(w.skill_refs && w.skill_refs.length) || (w.agent_refs && w.agent_refs.length) || assocTools(w).length || assocScripts(w).length"
                         class="mt-1 flex items-center gap-1 flex-wrap">
                         <span
                           v-for="skill in previewAssociations(w.skill_refs || [], 2)"
@@ -293,6 +296,12 @@ async function importBundle() {
                           class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-secondary/25 text-secondary/80 bg-secondary/5"
                           :title="skill"
                         >{{ skill }}</span>
+                        <span
+                          v-for="agent in previewAssociations(w.agent_refs || [], 2)"
+                          :key="`${w.name}-agent-${agent}`"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-accent/25 text-accent/80 bg-accent/5"
+                          :title="`persona: ${agent}`"
+                        >{{ agent }}</span>
                         <span
                           v-for="tool in previewAssociations(assocTools(w), 2)"
                           :key="`${w.name}-tool-${tool}`"
@@ -302,7 +311,7 @@ async function importBundle() {
                         <span
                           v-for="script in previewAssociations(assocScripts(w), 2)"
                           :key="`${w.name}-script-${script}`"
-                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-accent/25 text-accent/80 bg-accent/5"
+                          class="text-[9px] font-mono px-1.5 py-0.5 rounded border border-warning/25 text-warning/80 bg-warning/5"
                           :title="script"
                         >{{ compactRef(script) }}</span>
                       </div>
@@ -361,8 +370,8 @@ async function importBundle() {
               </div>
             </div>
             <p class="text-xs text-base-content/50 mb-4 leading-relaxed">
-              Import a <code class="font-mono bg-base-300/80 px-1 rounded">.a7bundle</code> file to add skills
-              and workflows to this instance.
+              Import a <code class="font-mono bg-base-300/80 px-1 rounded">.a7bundle</code> file to add skills,
+              workflows, tools, and personas to this instance.
             </p>
 
             <!-- Hidden file input -->
@@ -389,17 +398,21 @@ async function importBundle() {
             <!-- Bundle stats preview -->
             <div v-if="bundlePreview" class="mt-4 space-y-4">
               <div class="stats stats-horizontal bg-base-300 w-full shadow-none border border-base-content/8 rounded-xl">
-                <div class="stat py-3 px-5">
+                <div class="stat py-3 px-4">
                   <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Skills</div>
                   <div class="stat-value text-2xl text-primary">{{ bundlePreview.skillCount }}</div>
                 </div>
-                <div class="stat py-3 px-5">
+                <div class="stat py-3 px-4">
                   <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Workflows</div>
                   <div class="stat-value text-2xl text-secondary">{{ bundlePreview.workflowCount }}</div>
                 </div>
-                <div class="stat py-3 px-5">
+                <div class="stat py-3 px-4">
                   <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Tools</div>
                   <div class="stat-value text-2xl text-info">{{ bundlePreview.toolsCount }}</div>
+                </div>
+                <div class="stat py-3 px-4">
+                  <div class="stat-title text-[10px] font-mono uppercase tracking-widest">Personas</div>
+                  <div class="stat-value text-2xl text-accent">{{ bundlePreview.personasCount }}</div>
                 </div>
               </div>
 
@@ -437,7 +450,7 @@ async function importBundle() {
             <h3 class="font-bold font-mono text-[10px] uppercase tracking-widest text-base-content/40 mb-4">
               Bundle Format Reference
             </h3>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-5">
               <div class="flex items-start gap-3">
                 <span class="text-primary opacity-60 mt-0.5">⚡</span>
                 <div>
@@ -469,14 +482,26 @@ async function importBundle() {
                 </div>
               </div>
               <div class="flex items-start gap-3">
-                <span class="text-accent opacity-60 mt-0.5">◈</span>
+                <span class="text-accent opacity-60 mt-0.5">👤</span>
+                <div>
+                  <p class="text-xs font-mono font-semibold text-base-content/70 mb-1">Personas</p>
+                  <p class="text-xs text-base-content/45 leading-relaxed">
+                    TOML agent persona files referenced by workflow <code class="bg-base-300 px-0.5 rounded">agent:</code> steps.
+                    Pulled automatically from both project-local and global homes.
+                  </p>
+                </div>
+              </div>
+              <div class="flex items-start gap-3">
+                <span class="text-base-content opacity-40 mt-0.5">◈</span>
                 <div>
                   <p class="text-xs font-mono font-semibold text-base-content/70 mb-1">Container</p>
                   <p class="text-xs text-base-content/45 leading-relaxed">
                     JSON envelope with <code class="bg-base-300 px-0.5 rounded">version</code>,
                     <code class="bg-base-300 px-0.5 rounded">created_at</code>, and arrays of
-                    <code class="bg-base-300 px-0.5 rounded">skills</code> and
-                    <code class="bg-base-300 px-0.5 rounded">workflows</code> — each with filename, content, and sha256.
+                    <code class="bg-base-300 px-0.5 rounded">skills</code>,
+                    <code class="bg-base-300 px-0.5 rounded">workflows</code>,
+                    <code class="bg-base-300 px-0.5 rounded">tools</code>, and
+                    <code class="bg-base-300 px-0.5 rounded">personas</code> — each with filename, content, and sha256.
                   </p>
                 </div>
               </div>

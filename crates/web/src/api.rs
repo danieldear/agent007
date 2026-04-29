@@ -3603,6 +3603,7 @@ fn workflow_list_item(
     let mut description = String::new();
     let mut steps_count = 0usize;
     let mut skill_refs: Vec<String> = Vec::new();
+    let mut agent_refs: Vec<String> = Vec::new();
     let mut associations = AssociatedAssets::default();
 
     if let Ok(raw) = std::fs::read_to_string(path) {
@@ -3612,6 +3613,9 @@ fn workflow_list_item(
             description = def.description.unwrap_or_default();
             steps_count = def.steps.len();
             for step in &def.steps {
+                if !step.agent.is_empty() {
+                    agent_refs.push(step.agent.clone());
+                }
                 if let Some(prompt) = &step.prompt {
                     extract_associations_from_text(prompt, &mut associations);
                 }
@@ -3634,6 +3638,8 @@ fn workflow_list_item(
 
     skill_refs.sort();
     skill_refs.dedup();
+    agent_refs.sort();
+    agent_refs.dedup();
 
     serde_json::json!({
         "name": name,
@@ -3641,6 +3647,7 @@ fn workflow_list_item(
         "description": description,
         "steps": steps_count,
         "skill_refs": skill_refs,
+        "agent_refs": agent_refs,
         "associations": associations.to_json(),
     })
 }
