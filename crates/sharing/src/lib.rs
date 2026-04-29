@@ -117,13 +117,22 @@ impl BundleBuilder {
         self
     }
 
-    /// Build a bundle containing the specified skills (by trigger) and workflows (by name).
-    /// Pass empty slices to include all.
-    pub fn build(&self, skill_triggers: &[&str], workflow_names: &[&str]) -> Result<Bundle> {
+    /// Build a bundle containing the specified skills (by trigger), workflows (by name),
+    /// and personas (by name).  Pass empty slices to mean "auto-detect from context".
+    ///
+    /// Personas are collected as the union of:
+    ///   - explicitly requested names (persona_names non-empty → only those names)
+    ///   - names auto-detected from the `agent:` fields of selected workflows/skills
+    pub fn build(
+        &self,
+        skill_triggers: &[&str],
+        workflow_names: &[&str],
+        persona_names: &[&str],
+    ) -> Result<Bundle> {
         let skills = self.collect_skill_assets(skill_triggers)?;
         let workflows = self.collect_workflow_assets(workflow_names)?;
         let tools = self.collect_tools_assets(&skills, &workflows)?;
-        let personas = self.collect_persona_assets(&skills, &workflows)?;
+        let personas = self.collect_persona_assets(&skills, &workflows, persona_names)?;
         Ok(Bundle::new(skills, workflows, tools, personas))
     }
 
@@ -315,13 +324,21 @@ impl BundleBuilder {
         &self,
         skills: &[BundleAsset],
         workflows: &[BundleAsset],
+        explicit_filter: &[&str],
     ) -> Result<Vec<BundleAsset>> {
         if !self.persona_dirs.iter().any(|d| d.exists()) {
             return Ok(Vec::new());
         }
 
-        // Gather agent names referenced by selected workflows and skills.
-        let mut agent_names: HashSet<String> = HashSet::new();
+        // Explicit selection (lowercased persona names the caller wants regardless of refs).
+        let explicit: HashSet<String> = explicit_filter
+            .iter()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Auto-detect agent names referenced by selected workflows and skills.
+        let mut agent_names: HashSet<String> = explicit.clone();
         for workflow in workflows {
             collect_workflow_agent_refs(&workflow.content, &mut agent_names);
         }
@@ -1138,7 +1155,7 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["ml-skill"], &["__none__"]).unwrap();
+        let bundle = builder.build(&["ml-skill"], &["__none__"], &[]).unwrap();
 
         assert_eq!(bundle.skills.len(), 1, "expected only selected skill");
         assert!(
@@ -1186,7 +1203,7 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["__none__"], &["train"]).unwrap();
+        let bundle = builder.build(&["__none__"], &["train"], &[]).unwrap();
 
         assert!(
             bundle.skills.is_empty(),
@@ -1226,7 +1243,7 @@ mod tests {
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir])
             .with_persona_dirs([&personas_dir]);
-        let bundle = builder.build(&[], &["review"]).unwrap();
+        let bundle = builder.build(&[], &["review"], &[]).unwrap();
 
         assert_eq!(bundle.workflows.len(), 1);
         assert_eq!(bundle.personas.len(), 1, "only the referenced persona exported");

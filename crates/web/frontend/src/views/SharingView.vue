@@ -7,10 +7,12 @@ const { api } = useApi()
 // ─── data ────────────────────────────────────────────────────────────────────
 const skills = ref([])
 const workflows = ref([])
+const personas = ref([])
 
 // ─── export state ────────────────────────────────────────────────────────────
 const selectedSkills = ref([])
 const selectedWorkflows = ref([])
+const selectedPersonas = ref([])
 const exportStatus = ref(null)
 const exporting = ref(false)
 
@@ -20,6 +22,9 @@ const allSkillsSelected = computed(
 const allWorkflowsSelected = computed(
   () => workflows.value.length > 0 && selectedWorkflows.value.length === workflows.value.length
 )
+const allPersonasSelected = computed(
+  () => personas.value.length > 0 && selectedPersonas.value.length === personas.value.length
+)
 
 function toggleAllSkills() {
   selectedSkills.value = allSkillsSelected.value
@@ -28,6 +33,9 @@ function toggleAllSkills() {
 }
 function toggleAllWorkflows() {
   selectedWorkflows.value = allWorkflowsSelected.value ? [] : workflows.value.map(w => w.name)
+}
+function toggleAllPersonas() {
+  selectedPersonas.value = allPersonasSelected.value ? [] : personas.value.map(p => p.name)
 }
 
 // ─── import state ────────────────────────────────────────────────────────────
@@ -41,7 +49,11 @@ const importing = ref(false)
 
 // ─── load data ────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  const [sk, wf] = await Promise.all([api.listSkills(), api.listWorkflows()])
+  const [sk, wf, ps] = await Promise.all([
+    api.listSkills(),
+    api.listWorkflows(),
+    api.listPersonas(),
+  ])
   if (sk) {
     skills.value = sk
     selectedSkills.value = sk.map(s => s.trigger.replace(/^\//, ''))
@@ -49,6 +61,10 @@ onMounted(async () => {
   if (wf) {
     workflows.value = wf
     selectedWorkflows.value = wf.map(w => w.name)
+  }
+  if (ps) {
+    personas.value = ps
+    selectedPersonas.value = ps.map(p => p.name)
   }
 })
 
@@ -77,7 +93,7 @@ async function exportBundle() {
   exporting.value = true
   exportStatus.value = null
   try {
-    const res = await api.exportBundle(selectedSkills.value, selectedWorkflows.value)
+    const res = await api.exportBundle(selectedSkills.value, selectedWorkflows.value, selectedPersonas.value)
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       exportStatus.value = { type: 'error', message: body?.error || `Export failed (${res.status})` }
@@ -207,7 +223,7 @@ async function importBundle() {
               file for sharing or backup on any agent007 instance.
             </p>
 
-            <div class="grid grid-cols-1 2xl:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 2xl:grid-cols-3 gap-4">
               <!-- Skills picker -->
               <div>
                 <div class="flex items-center justify-between mb-2">
@@ -319,6 +335,39 @@ async function importBundle() {
                   </label>
                 </div>
               </div>
+              <!-- Personas picker -->
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">👤 Personas</span>
+                  <label class="flex items-center gap-1.5 cursor-pointer">
+                    <span class="text-[10px] text-base-content/35 font-mono">all</span>
+                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary"
+                      :checked="allPersonasSelected" @change="toggleAllPersonas" />
+                  </label>
+                </div>
+                <div v-if="!personas.length" class="text-[11px] text-base-content/30 italic py-2">No personas installed</div>
+                <div class="space-y-1 max-h-56 overflow-y-auto pr-1">
+                  <label v-for="p in personas" :key="p.name"
+                    class="flex items-start gap-2 cursor-pointer hover:bg-base-300/60 rounded px-1.5 py-1.5">
+                    <input type="checkbox" class="checkbox checkbox-xs checkbox-primary shrink-0 mt-0.5"
+                      :value="p.name" v-model="selectedPersonas" />
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-[11px] font-mono truncate">{{ p.name }}</span>
+                        <span class="badge badge-xs shrink-0 font-mono"
+                          :class="p.source === 'global'
+                            ? 'badge-ghost text-base-content/35'
+                            : 'badge-warning text-warning-content'">
+                          {{ p.source === 'global' ? 'Global' : 'Proj' }}
+                        </span>
+                      </div>
+                      <div v-if="p.description" class="text-[10px] text-base-content/40 leading-relaxed mt-0.5">
+                        {{ p.description }}
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <!-- Selection summary + export button -->
@@ -330,11 +379,14 @@ async function importBundle() {
                 <span v-if="selectedWorkflows.length" class="badge badge-secondary badge-xs">
                   {{ selectedWorkflows.length }} workflow{{ selectedWorkflows.length !== 1 ? 's' : '' }}
                 </span>
-                <span v-if="!selectedSkills.length && !selectedWorkflows.length"
+                <span v-if="selectedPersonas.length" class="badge badge-accent badge-xs">
+                  {{ selectedPersonas.length }} persona{{ selectedPersonas.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-if="!selectedSkills.length && !selectedWorkflows.length && !selectedPersonas.length"
                   class="text-[11px] font-mono text-base-content/30">nothing selected</span>
               </div>
               <button class="btn btn-xs btn-primary font-mono"
-                :disabled="exporting || (selectedSkills.length === 0 && selectedWorkflows.length === 0)"
+                :disabled="exporting || (selectedSkills.length === 0 && selectedWorkflows.length === 0 && selectedPersonas.length === 0)"
                 @click="exportBundle">
                 <span v-if="exporting" class="loading loading-spinner loading-xs"></span>
                 <span v-else class="text-xs">↓</span>

@@ -1203,31 +1203,59 @@ pub struct PersonaSaveRequest {
 }
 
 pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let mut dirs = Vec::new();
-    if let Some(project_home) = agent007_project_home() {
-        dirs.push(project_home.join("personas"));
-    }
     let global_dir = agent007_global_home().join("personas");
-    if !dirs.iter().any(|dir| dir == &global_dir) {
-        dirs.push(global_dir);
+    let project_dir = agent007_project_home().map(|p| p.join("personas"));
+
+    // Load each source separately so we can tag with "global" / "project".
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut personas: Vec<Value> = Vec::new();
+
+    let sources: Vec<(std::path::PathBuf, &str)> = {
+        let mut v: Vec<(std::path::PathBuf, &str)> = Vec::new();
+        if let Some(pd) = &project_dir {
+            v.push((pd.clone(), "project"));
+        }
+        v.push((global_dir.clone(), "global"));
+        v
+    };
+
+    for (dir, source_label) in &sources {
+        if let Ok(registry) = agent007_personas::PersonaRegistry::load_from_dirs(
+            std::iter::once(dir.as_path()),
+        ) {
+            use agent007_core::PersonaProvider;
+            for p in registry.list() {
+                let key = p.name.to_ascii_lowercase();
+                if seen.insert(key) {
+                    personas.push(serde_json::json!({
+                        "name": p.name,
+                        "description": p.description,
+                        "preferred_model": p.preferred_model,
+                        "allowed_tools": p.allowed_tools,
+                        "system_prompt": p.system_prompt,
+                        "source": source_label,
+                    }));
+                }
+            }
+        }
     }
-    let registry =
-        agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
-            .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
-    use agent007_core::PersonaProvider;
-    let personas: Vec<Value> = registry
-        .list()
-        .iter()
-        .map(|p| {
-            serde_json::json!({
+
+    // Fall back to built-ins if nothing was found on disk.
+    if personas.is_empty() {
+        use agent007_core::PersonaProvider;
+        let registry = agent007_personas::PersonaRegistry::built_in();
+        for p in registry.list() {
+            personas.push(serde_json::json!({
                 "name": p.name,
                 "description": p.description,
                 "preferred_model": p.preferred_model,
                 "allowed_tools": p.allowed_tools,
                 "system_prompt": p.system_prompt,
-            })
-        })
-        .collect();
+                "source": "global",
+            }));
+        }
+    }
+
     Json(Value::Array(personas)).into_response()
 }
 
@@ -3059,21 +3087,23 @@ pub async fn workflow_delete_handler(Path(name): Path<String>) -> impl IntoRespo
 pub struct BundleExportQuery {
     pub skills: Option<String>,
     pub workflows: Option<String>,
+    pub personas: Option<String>,
 }
 
-/// `GET /api/bundle/export` — export selected (or all) skills+workflows as JSON bundle.
+/// `GET /api/bundle/export` — export selected (or all) skills+workflows+personas as JSON bundle.
 pub async fn bundle_export_handler(
     State(_state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<BundleExportQuery>,
 ) -> impl IntoResponse {
     let skill_filters: Vec<&str> = parse_bundle_selection(params.skills.as_deref());
     let wf_filters: Vec<&str> = parse_bundle_selection(params.workflows.as_deref());
+    let persona_filters: Vec<&str> = parse_bundle_selection(params.personas.as_deref());
 
     // Use the same multi-dir search order as the listing APIs so that both
     // project-local and global skills/workflows/personas are found during export.
     let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
         .with_persona_dirs(persona_search_dirs());
-    match builder.build(&skill_filters, &wf_filters) {
+    match builder.build(&skill_filters, &wf_filters, &persona_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (
                 StatusCode::OK,

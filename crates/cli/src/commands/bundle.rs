@@ -12,13 +12,15 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             output,
             skills,
             workflows,
+            personas,
         } => {
             let builder = BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
                 .with_persona_dirs(persona_search_dirs());
 
             let skill_refs: Vec<&str> = skills.iter().map(String::as_str).collect();
             let wf_refs: Vec<&str> = workflows.iter().map(String::as_str).collect();
-            let bundle = builder.build(&skill_refs, &wf_refs)?;
+            let persona_refs: Vec<&str> = personas.iter().map(String::as_str).collect();
+            let bundle = builder.build(&skill_refs, &wf_refs, &persona_refs)?;
 
             let json = bundle.to_json()?;
             let dest = output.unwrap_or_else(|| "agent007-bundle.a7bundle".to_string());

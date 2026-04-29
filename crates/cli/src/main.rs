@@ -220,6 +220,10 @@ pub enum BundleAction {
         /// Workflow names to include (default: all). E.g. --workflow tdd
         #[arg(long, value_name = "NAME")]
         workflows: Vec<String>,
+        /// Persona names to include (default: auto-detected from selected workflows/skills).
+        /// Pass --persona Architect to add a specific persona regardless of workflow refs.
+        #[arg(long, value_name = "NAME")]
+        personas: Vec<String>,
     },
     /// Import a .a7bundle file into the current project
     Import {
