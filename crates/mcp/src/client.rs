@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, process::Stdio, time::Duration};
 
 use rmcp::{
     model::{CallToolRequestParams, ClientInfo},
@@ -6,8 +6,20 @@ use rmcp::{
     ServiceExt,
 };
 use serde_json::Value;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    time::timeout,
+};
 
 use crate::{config::McpServerConfig, error::McpError};
+
+/// Timeout for the initial MCP handshake (`ClientInfo::serve`).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for listing tools from a server.
+const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for a single tool call. 60 s gives long-running tools room while
+/// still surfacing a hang rather than blocking the LLM forever.
+const TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A description of a single tool advertised by an MCP server.
 #[derive(Debug, Clone)]
@@ -52,16 +64,42 @@ impl McpClient {
 
             let cmd = build_command(config);
 
-            let transport =
-                TokioChildProcess::new(cmd).map_err(|e| McpError::ServerStartFailed {
-                    name: config.name.clone(),
-                    source: e,
-                })?;
+            // Pipe stderr so the child never blocks on a full pipe buffer.
+            // Captured lines are forwarded to tracing for visibility.
+            let (transport, stderr_opt) =
+                TokioChildProcess::builder(cmd)
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| McpError::ServerStartFailed {
+                        name: config.name.clone(),
+                        source: e,
+                    })?;
 
-            let client_info = ClientInfo::default();
-            let running = client_info
-                .serve(transport)
+            if let Some(stderr) = stderr_opt {
+                let server_name = config.name.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stderr);
+                    let mut line = String::new();
+                    while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                        tracing::debug!(
+                            server = %server_name,
+                            stderr = %line.trim_end(),
+                            "MCP server stderr"
+                        );
+                        line.clear();
+                    }
+                });
+            }
+
+            let running = timeout(CONNECT_TIMEOUT, ClientInfo::default().serve(transport))
                 .await
+                .map_err(|_| {
+                    McpError::Sdk(format!(
+                        "MCP handshake timed out after {}s for server '{}'",
+                        CONNECT_TIMEOUT.as_secs(),
+                        config.name
+                    ))
+                })?
                 .map_err(|e| McpError::Sdk(e.to_string()))?;
 
             let peer = running.peer().clone();
@@ -72,16 +110,23 @@ impl McpClient {
             });
 
             // Discover and index tools from this server.
-            match peer.list_all_tools().await {
-                Ok(tools) => {
+            match timeout(LIST_TOOLS_TIMEOUT, peer.list_all_tools()).await {
+                Ok(Ok(tools)) => {
                     for tool in tools {
                         let name = tool.name.to_string();
                         tracing::info!(server = %config.name, tool = %name, "registered tool");
                         self.tool_index.insert(name, handle_idx);
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!(server = %config.name, error = %e, "failed to list tools after connect");
+                }
+                Err(_) => {
+                    tracing::error!(
+                        server = %config.name,
+                        "list_tools timed out after {}s",
+                        LIST_TOOLS_TIMEOUT.as_secs()
+                    );
                 }
             }
 
@@ -95,10 +140,14 @@ impl McpClient {
         let mut map: HashMap<String, ToolDef> = HashMap::new();
 
         for handle in &self.handles {
-            let tools = handle
-                .peer
-                .list_all_tools()
+            let tools = timeout(LIST_TOOLS_TIMEOUT, handle.peer.list_all_tools())
                 .await
+                .map_err(|_| {
+                    McpError::Sdk(format!(
+                        "list_tools timed out after {}s",
+                        LIST_TOOLS_TIMEOUT.as_secs()
+                    ))
+                })?
                 .map_err(|e| McpError::Sdk(e.to_string()))?;
 
             for tool in tools {
@@ -150,13 +199,31 @@ impl McpClient {
             CallToolRequestParams::new(name.to_string())
         };
 
-        let result = handle.peer.call_tool(params).await.map_err(|e| {
-            tracing::error!(tool = %name, error = %e, "tool call failed");
-            McpError::ToolCallFailed {
-                tool: name.to_string(),
-                reason: e.to_string(),
-            }
-        })?;
+        let result = timeout(TOOL_CALL_TIMEOUT, handle.peer.call_tool(params))
+            .await
+            .map_err(|_| {
+                tracing::error!(
+                    tool = %name,
+                    "tool call timed out after {}s — check the tool exits and flushes stdout",
+                    TOOL_CALL_TIMEOUT.as_secs()
+                );
+                McpError::ToolCallFailed {
+                    tool: name.to_string(),
+                    reason: format!(
+                        "timed out after {}s — ensure the tool writes a newline-terminated \
+                         JSON response to stdout and exits (common fix on WSL: add \
+                         sys.stdout.flush() or run Python with -u)",
+                        TOOL_CALL_TIMEOUT.as_secs()
+                    ),
+                }
+            })?
+            .map_err(|e| {
+                tracing::error!(tool = %name, error = %e, "tool call failed");
+                McpError::ToolCallFailed {
+                    tool: name.to_string(),
+                    reason: e.to_string(),
+                }
+            })?;
 
         // Prefer structured_content if present; otherwise serialise the content vec.
         let json = if let Some(structured) = result.structured_content {
@@ -185,7 +252,10 @@ impl McpClient {
                 }
 
                 let cmd = build_command(config);
-                let transport = match TokioChildProcess::new(cmd) {
+                let (transport, stderr_opt) = match TokioChildProcess::builder(cmd)
+                    .stderr(Stdio::piped())
+                    .spawn()
+                {
                     Ok(t) => t,
                     Err(e) => {
                         last_err = Some(McpError::ServerStartFailed {
@@ -196,10 +266,38 @@ impl McpClient {
                     }
                 };
 
-                let running = match ClientInfo::default().serve(transport).await {
-                    Ok(r) => r,
-                    Err(e) => {
+                if let Some(stderr) = stderr_opt {
+                    let server_name = config.name.clone();
+                    tokio::spawn(async move {
+                        let mut reader = BufReader::new(stderr);
+                        let mut line = String::new();
+                        while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                            tracing::debug!(
+                                server = %server_name,
+                                stderr = %line.trim_end(),
+                                "MCP server stderr"
+                            );
+                            line.clear();
+                        }
+                    });
+                }
+
+                let running = match timeout(
+                    CONNECT_TIMEOUT,
+                    ClientInfo::default().serve(transport),
+                )
+                .await
+                {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
                         last_err = Some(McpError::Sdk(e.to_string()));
+                        continue;
+                    }
+                    Err(_) => {
+                        last_err = Some(McpError::Sdk(format!(
+                            "MCP handshake timed out after {}s",
+                            CONNECT_TIMEOUT.as_secs()
+                        )));
                         continue;
                     }
                 };
@@ -211,8 +309,8 @@ impl McpClient {
                     _service: running,
                 });
 
-                match peer.list_all_tools().await {
-                    Ok(tools) => {
+                match timeout(LIST_TOOLS_TIMEOUT, peer.list_all_tools()).await {
+                    Ok(Ok(tools)) => {
                         for tool in tools {
                             self.tool_index.insert(tool.name.to_string(), handle_idx);
                         }
@@ -220,8 +318,14 @@ impl McpClient {
                         last_err = None;
                         break;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         last_err = Some(McpError::Sdk(e.to_string()));
+                    }
+                    Err(_) => {
+                        last_err = Some(McpError::Sdk(format!(
+                            "list_tools timed out after {}s",
+                            LIST_TOOLS_TIMEOUT.as_secs()
+                        )));
                     }
                 }
             }
@@ -234,11 +338,19 @@ impl McpClient {
     }
 }
 
+/// Build a `tokio::process::Command` from an [`McpServerConfig`].
+///
+/// Multi-word `command` fields with no `args` are split on whitespace rather
+/// than forwarded to `sh -c`. Invoking `sh` (dash on Ubuntu) causes silent
+/// hangs on WSL when scripts have CRLF line endings or differ from bash in
+/// PATH resolution.
 fn build_command(config: &McpServerConfig) -> tokio::process::Command {
-    let uses_shell = config.args.is_empty() && config.command.split_whitespace().count() > 1;
-    let mut cmd = if uses_shell {
-        let mut command = tokio::process::Command::new("sh");
-        command.arg("-c").arg(&config.command);
+    let mut cmd = if config.args.is_empty() {
+        let mut parts = config.command.split_whitespace();
+        let prog = parts.next().unwrap_or(&config.command);
+        let extra: Vec<&str> = parts.collect();
+        let mut command = tokio::process::Command::new(prog);
+        command.args(extra);
         command
     } else {
         let mut command = tokio::process::Command::new(&config.command);
@@ -327,5 +439,27 @@ mod tests {
         assert!(debug.contains("\"npx\""));
         assert!(debug.contains("\"-y\""));
         assert!(debug.contains("/tmp"));
+    }
+
+    // test: multi-word command with no args is split directly — no shell invocation.
+    // This prevents silent hangs on WSL where `sh` (dash) mishandles CRLF scripts.
+    #[test]
+    fn build_command_splits_multi_word_command_without_shell() {
+        let config = McpServerConfig {
+            name: "test".to_string(),
+            command: "python my_tool.py".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: None,
+        };
+        let command = build_command(&config);
+        let debug = format!("{command:?}");
+        assert!(debug.contains("\"python\""), "expected python in: {debug}");
+        assert!(
+            debug.contains("\"my_tool.py\""),
+            "expected my_tool.py in: {debug}"
+        );
+        assert!(!debug.contains("\"sh\""), "must not invoke sh: {debug}");
+        assert!(!debug.contains("\"bash\""), "must not invoke bash: {debug}");
     }
 }
