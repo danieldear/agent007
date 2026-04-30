@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useApi } from '../composables/useApi.js'
 
 const { api } = useApi()
@@ -13,6 +13,7 @@ const personas = ref([])
 const selectedSkills = ref([])
 const selectedWorkflows = ref([])
 const selectedPersonas = ref([])
+const selectedTools = ref([])
 const exportStatus = ref(null)
 const exporting = ref(false)
 
@@ -26,6 +27,38 @@ const allPersonasSelected = computed(
   () => personas.value.length > 0 && selectedPersonas.value.length === personas.value.length
 )
 
+// All unique tools/scripts discovered across all skills and workflows.
+// API paths: tools/ml/infer.py → bundle key: ml/infer.py
+//            scripts/train.py  → bundle key: scripts/train.py
+function apiPathToBundleKey(path) {
+  return path.startsWith('tools/') ? path.slice('tools/'.length) : path
+}
+
+const allTools = computed(() => {
+  const seen = new Map()
+  for (const s of skills.value) {
+    for (const t of (s.associations?.tools || [])) {
+      const key = apiPathToBundleKey(t)
+      if (!seen.has(key)) seen.set(key, { key, display: t, type: 'tool', source: s.source })
+    }
+    for (const sc of (s.associations?.scripts || [])) {
+      const key = apiPathToBundleKey(sc)
+      if (!seen.has(key)) seen.set(key, { key, display: sc, type: 'script', source: s.source })
+    }
+  }
+  for (const w of workflows.value) {
+    for (const t of (w.associations?.tools || [])) {
+      const key = apiPathToBundleKey(t)
+      if (!seen.has(key)) seen.set(key, { key, display: t, type: 'tool', source: w.source })
+    }
+  }
+  return [...seen.values()]
+})
+
+const allToolsSelected = computed(
+  () => allTools.value.length > 0 && selectedTools.value.length === allTools.value.length
+)
+
 function toggleAllSkills() {
   selectedSkills.value = allSkillsSelected.value
     ? []
@@ -37,6 +70,51 @@ function toggleAllWorkflows() {
 function toggleAllPersonas() {
   selectedPersonas.value = allPersonasSelected.value ? [] : personas.value.map(p => p.name)
 }
+function toggleAllTools() {
+  selectedTools.value = allToolsSelected.value ? [] : allTools.value.map(t => t.key)
+}
+
+// ─── auto-select tools from selected skills/workflows ───────────────────────
+watch([selectedSkills, selectedWorkflows, skills, workflows], () => {
+  const auto = new Set()
+  for (const s of skills.value) {
+    const key = s.trigger.replace(/^\//, '')
+    if (!selectedSkills.value.includes(key)) continue
+    for (const t of (s.associations?.tools || [])) auto.add(apiPathToBundleKey(t))
+    for (const sc of (s.associations?.scripts || [])) auto.add(apiPathToBundleKey(sc))
+  }
+  for (const w of workflows.value) {
+    if (!selectedWorkflows.value.includes(w.name)) continue
+    for (const t of (w.associations?.tools || [])) auto.add(apiPathToBundleKey(t))
+  }
+  // Keep any manually added tools; drop tools whose parent was deselected
+  selectedTools.value = [
+    ...new Set([
+      ...selectedTools.value.filter(k => auto.has(k)),
+      ...auto,
+    ])
+  ]
+}, { deep: true })
+
+// ─── cascade: selecting a workflow auto-selects its skill and persona deps ───
+watch(selectedWorkflows, (newVal, oldVal) => {
+  const added = newVal.filter(n => !(oldVal || []).includes(n))
+  for (const name of added) {
+    const wf = workflows.value.find(w => w.name === name)
+    if (!wf) continue
+    for (const skillRef of (wf.skill_refs || [])) {
+      const normalized = skillRef.replace(/^\//, '')
+      if (!selectedSkills.value.includes(normalized)) selectedSkills.value.push(normalized)
+    }
+    for (const agentRef of (wf.agent_refs || [])) {
+      const lower = agentRef.toLowerCase()
+      const persona = personas.value.find(p => p.name.toLowerCase() === lower)
+      if (persona && !selectedPersonas.value.includes(persona.name)) {
+        selectedPersonas.value.push(persona.name)
+      }
+    }
+  }
+}, { deep: true })
 
 // ─── import state ────────────────────────────────────────────────────────────
 const fileInput = ref(null)
@@ -86,7 +164,7 @@ function compactRef(value) {
 }
 
 const totalSelected = computed(
-  () => selectedSkills.value.length + selectedWorkflows.value.length + selectedPersonas.value.length
+  () => selectedSkills.value.length + selectedWorkflows.value.length + selectedPersonas.value.length + selectedTools.value.length
 )
 
 // ─── export ──────────────────────────────────────────────────────────────────
@@ -94,7 +172,7 @@ async function exportBundle() {
   exporting.value = true
   exportStatus.value = null
   try {
-    const res = await api.exportBundle(selectedSkills.value, selectedWorkflows.value, selectedPersonas.value)
+    const res = await api.exportBundle(selectedSkills.value, selectedWorkflows.value, selectedPersonas.value, selectedTools.value)
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       exportStatus.value = { type: 'error', message: body?.error || `Export failed (${res.status})` }
@@ -214,7 +292,7 @@ async function importBundle() {
           <div class="sr-panel xl:col-span-8 flex flex-col">
             <div class="sr-panel-hd">
               <div class="flex items-center gap-2">
-                <div class="sr-panel-ico" style="background:rgba(34,211,238,.1); color:#22d3ee">
+                <div class="sr-panel-ico" style="background:color-mix(in oklab,var(--color-info) 12%,transparent); color:var(--color-info)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                     <polyline points="7 10 12 15 17 10"/>
@@ -230,7 +308,7 @@ async function importBundle() {
             <div class="picker-wrap flex-1">
               <!-- Skills -->
               <div class="pcol">
-                <div class="pcol-hd" style="--col-accent:#22d3ee">
+                <div class="pcol-hd" style="--col-accent:var(--color-info)">
                   <span class="pcol-label">Skills</span>
                   <button class="pcol-toggle" @click="toggleAllSkills">
                     {{ allSkillsSelected ? 'none' : 'all' }}
@@ -241,7 +319,7 @@ async function importBundle() {
                   <label v-for="s in skills" :key="s.trigger"
                     class="pitem"
                     :class="{ 'pitem-on': selectedSkills.includes(s.trigger.replace(/^\//, '')) }"
-                    style="--col-accent:#22d3ee">
+                    style="--col-accent:var(--color-info)">
                     <input type="checkbox" class="pchk"
                       :value="s.trigger.replace(/^\//, '')" v-model="selectedSkills" />
                     <div class="pitem-body">
@@ -267,7 +345,7 @@ async function importBundle() {
 
               <!-- Workflows -->
               <div class="pcol">
-                <div class="pcol-hd" style="--col-accent:#a78bfa">
+                <div class="pcol-hd" style="--col-accent:var(--color-primary)">
                   <span class="pcol-label">Workflows</span>
                   <button class="pcol-toggle" @click="toggleAllWorkflows">
                     {{ allWorkflowsSelected ? 'none' : 'all' }}
@@ -278,7 +356,7 @@ async function importBundle() {
                   <label v-for="w in workflows" :key="w.name"
                     class="pitem"
                     :class="{ 'pitem-on': selectedWorkflows.includes(w.name) }"
-                    style="--col-accent:#a78bfa">
+                    style="--col-accent:var(--color-primary)">
                     <input type="checkbox" class="pchk"
                       :value="w.name" v-model="selectedWorkflows" />
                     <div class="pitem-body">
@@ -307,7 +385,7 @@ async function importBundle() {
 
               <!-- Personas -->
               <div class="pcol">
-                <div class="pcol-hd" style="--col-accent:#f472b6">
+                <div class="pcol-hd" style="--col-accent:var(--color-secondary)">
                   <span class="pcol-label">Personas</span>
                   <button class="pcol-toggle" @click="toggleAllPersonas">
                     {{ allPersonasSelected ? 'none' : 'all' }}
@@ -318,7 +396,7 @@ async function importBundle() {
                   <label v-for="p in personas" :key="p.name"
                     class="pitem"
                     :class="{ 'pitem-on': selectedPersonas.includes(p.name) }"
-                    style="--col-accent:#f472b6">
+                    style="--col-accent:var(--color-secondary)">
                     <input type="checkbox" class="pchk"
                       :value="p.name" v-model="selectedPersonas" />
                     <div class="pitem-body">
@@ -333,19 +411,53 @@ async function importBundle() {
                   </label>
                 </div>
               </div>
+
+              <div class="pdivider"></div>
+
+              <!-- Tools & Scripts -->
+              <div class="pcol">
+                <div class="pcol-hd" style="--col-accent:var(--color-warning)">
+                  <span class="pcol-label">Tools</span>
+                  <button class="pcol-toggle" @click="toggleAllTools">
+                    {{ allToolsSelected ? 'none' : 'all' }}
+                  </button>
+                </div>
+                <div v-if="!allTools.length" class="pcol-empty">no tools detected</div>
+                <div class="plist">
+                  <label v-for="t in allTools" :key="t.key"
+                    class="pitem"
+                    :class="{ 'pitem-on': selectedTools.includes(t.key) }"
+                    style="--col-accent:var(--color-warning)">
+                    <input type="checkbox" class="pchk"
+                      :value="t.key" v-model="selectedTools" />
+                    <div class="pitem-body">
+                      <div class="pitem-row">
+                        <span class="ptrigger" :title="t.key">{{ compactRef(t.key) }}</span>
+                        <span class="atag" :class="t.type === 'script' ? 'atag-script' : 'atag-tool'">{{ t.type }}</span>
+                        <span class="src-pill" :class="t.source === 'global' ? 'src-g' : 'src-p'">
+                          {{ t.source === 'global' ? 'global' : 'proj' }}
+                        </span>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <!-- Action bar -->
             <div class="action-bar">
               <div class="manifest-tags">
-                <span v-if="selectedSkills.length" class="mtag" style="--ac:#22d3ee">
+                <span v-if="selectedSkills.length" class="mtag" style="--ac:var(--color-info)">
                   {{ selectedSkills.length }} skill{{ selectedSkills.length !== 1 ? 's' : '' }}
                 </span>
-                <span v-if="selectedWorkflows.length" class="mtag" style="--ac:#a78bfa">
+                <span v-if="selectedWorkflows.length" class="mtag" style="--ac:var(--color-primary)">
                   {{ selectedWorkflows.length }} workflow{{ selectedWorkflows.length !== 1 ? 's' : '' }}
                 </span>
-                <span v-if="selectedPersonas.length" class="mtag" style="--ac:#f472b6">
+                <span v-if="selectedPersonas.length" class="mtag" style="--ac:var(--color-secondary)">
                   {{ selectedPersonas.length }} persona{{ selectedPersonas.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-if="selectedTools.length" class="mtag" style="--ac:var(--color-warning)">
+                  {{ selectedTools.length }} tool{{ selectedTools.length !== 1 ? 's' : '' }}
                 </span>
                 <span v-if="totalSelected === 0" class="manifest-empty">nothing selected</span>
               </div>
@@ -374,7 +486,7 @@ async function importBundle() {
           <div class="sr-panel xl:col-span-4 flex flex-col">
             <div class="sr-panel-hd">
               <div class="flex items-center gap-2">
-                <div class="sr-panel-ico" style="background:rgba(167,139,250,.1); color:#a78bfa">
+                <div class="sr-panel-ico" style="background:color-mix(in oklab,var(--color-primary) 12%,transparent); color:var(--color-primary)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                     <polyline points="17 8 12 3 7 8"/>
@@ -414,19 +526,19 @@ async function importBundle() {
               <template v-if="bundlePreview">
                 <div class="bstat-grid">
                   <div class="bstat">
-                    <span class="bstat-val" style="color:#22d3ee">{{ bundlePreview.skillCount }}</span>
+                    <span class="bstat-val" style="color:var(--color-info)">{{ bundlePreview.skillCount }}</span>
                     <span class="bstat-lbl">skills</span>
                   </div>
                   <div class="bstat">
-                    <span class="bstat-val" style="color:#a78bfa">{{ bundlePreview.workflowCount }}</span>
+                    <span class="bstat-val" style="color:var(--color-primary)">{{ bundlePreview.workflowCount }}</span>
                     <span class="bstat-lbl">workflows</span>
                   </div>
                   <div class="bstat">
-                    <span class="bstat-val" style="color:#fbbf24">{{ bundlePreview.toolsCount }}</span>
+                    <span class="bstat-val" style="color:var(--color-warning)">{{ bundlePreview.toolsCount }}</span>
                     <span class="bstat-lbl">tools</span>
                   </div>
                   <div class="bstat">
-                    <span class="bstat-val" style="color:#f472b6">{{ bundlePreview.personasCount }}</span>
+                    <span class="bstat-val" style="color:var(--color-secondary)">{{ bundlePreview.personasCount }}</span>
                     <span class="bstat-lbl">personas</span>
                   </div>
                 </div>
@@ -468,37 +580,37 @@ async function importBundle() {
           <div class="ref-hd">Bundle Format Reference</div>
           <div class="ref-grid">
             <div class="ref-card">
-              <div class="ref-stripe" style="background:#22d3ee"></div>
+              <div class="ref-stripe" style="background:var(--color-info)"></div>
               <div>
-                <div class="ref-title" style="color:#22d3ee">Skills</div>
+                <div class="ref-title" style="color:var(--color-info)">Skills</div>
                 <p class="ref-body">Markdown files with YAML frontmatter — trigger, name, description, model, and a prompt template using <code>&#123;&#123;args&#125;&#125;</code>.</p>
               </div>
             </div>
             <div class="ref-card">
-              <div class="ref-stripe" style="background:#a78bfa"></div>
+              <div class="ref-stripe" style="background:var(--color-primary)"></div>
               <div>
-                <div class="ref-title" style="color:#a78bfa">Workflows</div>
+                <div class="ref-title" style="color:var(--color-primary)">Workflows</div>
                 <p class="ref-body">YAML pipelines with named persona steps, optional <code>depends_on</code>, and node types: evaluator, router, approval, orchestrator.</p>
               </div>
             </div>
             <div class="ref-card">
-              <div class="ref-stripe" style="background:#fbbf24"></div>
+              <div class="ref-stripe" style="background:var(--color-warning)"></div>
               <div>
-                <div class="ref-title" style="color:#fbbf24">Tools / Scripts</div>
+                <div class="ref-title" style="color:var(--color-warning)">Tools / Scripts</div>
                 <p class="ref-body">Executable assets in <code>tools/</code> and <code>scripts/</code> that skills depend on — packed and restored automatically.</p>
               </div>
             </div>
             <div class="ref-card">
-              <div class="ref-stripe" style="background:#f472b6"></div>
+              <div class="ref-stripe" style="background:var(--color-secondary)"></div>
               <div>
-                <div class="ref-title" style="color:#f472b6">Personas</div>
+                <div class="ref-title" style="color:var(--color-secondary)">Personas</div>
                 <p class="ref-body">TOML agent persona files referenced by workflow <code>agent:</code> fields. Collected from project-local and global homes.</p>
               </div>
             </div>
             <div class="ref-card" style="border-right:none">
-              <div class="ref-stripe" style="background:#94a3b8"></div>
+              <div class="ref-stripe" style="background:var(--color-neutral-content)"></div>
               <div>
-                <div class="ref-title" style="color:#94a3b8">Container</div>
+                <div class="ref-title" style="color:var(--color-neutral-content)">Container</div>
                 <p class="ref-body">JSON with <code>version</code>, <code>created_at</code>, and arrays of <code>skills</code>, <code>workflows</code>, <code>tools</code>, <code>personas</code> — each with filename, content, sha256.</p>
               </div>
             </div>
@@ -516,7 +628,7 @@ async function importBundle() {
 /* ── Root ─────────────────────────────────────────────────────────────────── */
 .sr {
   font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
-  background-image: radial-gradient(circle, rgba(148,163,184,.08) 1px, transparent 1px);
+  background-image: radial-gradient(circle, color-mix(in oklab,var(--color-base-content) 8%,transparent) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 
@@ -529,7 +641,7 @@ async function importBundle() {
   width: 3px;
   height: 26px;
   border-radius: 2px;
-  background: linear-gradient(180deg, #22d3ee 0%, #a78bfa 50%, #f472b6 100%);
+  background: linear-gradient(180deg, var(--color-info) 0%, var(--color-primary) 50%, var(--color-secondary) 100%);
   flex-shrink: 0;
 }
 
@@ -554,14 +666,14 @@ async function importBundle() {
   letter-spacing: 0.07em;
   padding: 3px 10px;
   border-radius: 2px;
-  border: 1px solid rgba(148,163,184,.2);
+  border: 1px solid color-mix(in oklab,var(--color-base-content) 20%,transparent);
   opacity: .55;
 }
 
 /* ── Panels ──────────────────────────────────────────────────────────────── */
 .sr-panel {
   border-radius: 4px;
-  border: 1px solid rgba(148,163,184,.12);
+  border: 1px solid color-mix(in oklab,var(--color-base-content) 12%,transparent);
   overflow: hidden;
 }
 
@@ -570,7 +682,7 @@ async function importBundle() {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(148,163,184,.09);
+  border-bottom: 1px solid color-mix(in oklab,var(--color-base-content) 9%,transparent);
   background: rgba(0,0,0,.08);
 }
 
@@ -602,16 +714,20 @@ async function importBundle() {
 /* ── Picker grid ─────────────────────────────────────────────────────────── */
 .picker-wrap {
   display: grid;
-  grid-template-columns: 1fr 1px 1fr 1px 1fr;
+  grid-template-columns: 1fr 1px 1fr 1px 1fr 1px 1fr;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
+  .picker-wrap { grid-template-columns: 1fr 1px 1fr; }
+}
+
+@media (max-width: 700px) {
   .picker-wrap { grid-template-columns: 1fr; }
   .pdivider { display: none; }
 }
 
 .pdivider {
-  background: rgba(148,163,184,.08);
+  background: color-mix(in oklab,var(--color-base-content) 8%,transparent);
 }
 
 .pcol {
@@ -662,7 +778,7 @@ async function importBundle() {
   max-height: 256px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148,163,184,.12) transparent;
+  scrollbar-color: color-mix(in oklab,var(--color-base-content) 12%,transparent) transparent;
 }
 
 /* ── Picker items ─────────────────────────────────────────────────────────── */
@@ -676,7 +792,7 @@ async function importBundle() {
   transition: background 0.12s, border-color 0.15s;
   user-select: none;
 }
-.pitem:hover { background: rgba(148,163,184,.04); }
+.pitem:hover { background: color-mix(in oklab,var(--color-base-content) 4%,transparent); }
 .pitem-on {
   border-left-color: var(--col-accent);
   background: color-mix(in srgb, var(--col-accent) 5%, transparent);
@@ -688,7 +804,7 @@ async function importBundle() {
   margin-top: 3px;
   flex-shrink: 0;
   cursor: pointer;
-  accent-color: #22d3ee;
+  accent-color: var(--color-info);
 }
 
 .pitem-body { min-width: 0; flex: 1; }
@@ -717,8 +833,8 @@ async function importBundle() {
   letter-spacing: 0.05em;
   flex-shrink: 0;
 }
-.src-g { background: rgba(148,163,184,.1); opacity: .45; }
-.src-p { background: rgba(251,191,36,.12); color: #fbbf24; opacity: .9; }
+.src-g { background: color-mix(in oklab,var(--color-base-content) 8%,transparent); opacity: .45; }
+.src-p { background: color-mix(in oklab,var(--color-warning) 12%,transparent); color: var(--color-warning); opacity: .9; }
 
 .psteps {
   font-size: 8px;
@@ -748,10 +864,10 @@ async function importBundle() {
   border-radius: 2px;
   border: 1px solid;
 }
-.atag-tool   { border-color: rgba(34,211,238,.25); color: rgba(34,211,238,.7);  background: rgba(34,211,238,.06); }
-.atag-script { border-color: rgba(251,191,36,.25); color: rgba(251,191,36,.7);  background: rgba(251,191,36,.06); }
-.atag-skill  { border-color: rgba(167,139,250,.25); color: rgba(167,139,250,.7); background: rgba(167,139,250,.06); }
-.atag-agent  { border-color: rgba(244,114,182,.25); color: rgba(244,114,182,.7); background: rgba(244,114,182,.06); }
+.atag-tool   { border-color: color-mix(in oklab,var(--color-info) 30%,transparent);      color: var(--color-info);      background: color-mix(in oklab,var(--color-info) 8%,transparent); }
+.atag-script { border-color: color-mix(in oklab,var(--color-warning) 30%,transparent);   color: var(--color-warning);   background: color-mix(in oklab,var(--color-warning) 8%,transparent); }
+.atag-skill  { border-color: color-mix(in oklab,var(--color-primary) 30%,transparent);   color: var(--color-primary);   background: color-mix(in oklab,var(--color-primary) 8%,transparent); }
+.atag-agent  { border-color: color-mix(in oklab,var(--color-secondary) 30%,transparent); color: var(--color-secondary); background: color-mix(in oklab,var(--color-secondary) 8%,transparent); }
 
 /* ── Action bar ──────────────────────────────────────────────────────────── */
 .action-bar {
@@ -761,7 +877,7 @@ async function importBundle() {
   flex-wrap: wrap;
   gap: 10px;
   padding: 10px 14px;
-  border-top: 1px solid rgba(148,163,184,.08);
+  border-top: 1px solid color-mix(in oklab,var(--color-base-content) 8%,transparent);
   background: rgba(0,0,0,.06);
 }
 
@@ -796,8 +912,8 @@ async function importBundle() {
   font-weight: 500;
   padding: 6px 16px;
   border-radius: 3px;
-  background: #22d3ee;
-  color: #0c1a1f;
+  background: var(--color-info);
+  color: var(--color-info-content);
   border: none;
   cursor: pointer;
   letter-spacing: 0.04em;
@@ -816,8 +932,8 @@ async function importBundle() {
   font-size: 10.5px;
   border-top: 1px solid transparent;
 }
-.status-ok  { background: rgba(34,197,94,.07);  color: rgba(34,197,94,.9);  border-top-color: rgba(34,197,94,.15); }
-.status-err { background: rgba(239,68,68,.07);  color: rgba(239,68,68,.9);  border-top-color: rgba(239,68,68,.15); }
+.status-ok  { background: color-mix(in oklab,var(--color-success) 8%,transparent);  color: var(--color-success);  border-top-color: color-mix(in oklab,var(--color-success) 18%,transparent); }
+.status-err { background: color-mix(in oklab,var(--color-error) 8%,transparent);    color: var(--color-error);    border-top-color: color-mix(in oklab,var(--color-error) 18%,transparent); }
 
 /* ── Import body ─────────────────────────────────────────────────────────── */
 .import-body {
@@ -825,7 +941,7 @@ async function importBundle() {
 }
 
 .drop-zone {
-  border: 1px dashed rgba(148,163,184,.22);
+  border: 1px dashed color-mix(in oklab,var(--color-base-content) 22%,transparent);
   border-radius: 4px;
   padding: 32px 16px;
   text-align: center;
@@ -837,17 +953,17 @@ async function importBundle() {
   gap: 8px;
 }
 .drop-zone:hover {
-  border-color: rgba(167,139,250,.45);
-  background: rgba(167,139,250,.03);
+  border-color: color-mix(in oklab,var(--color-primary) 45%,transparent);
+  background: color-mix(in oklab,var(--color-primary) 4%,transparent);
 }
 
 .drop-svg {
   width: 56px;
   height: 56px;
-  color: rgba(148,163,184,.22);
+  color: color-mix(in oklab,var(--color-base-content) 22%,transparent);
   transition: color 0.2s;
 }
-.drop-zone:hover .drop-svg { color: rgba(167,139,250,.4); }
+.drop-zone:hover .drop-svg { color: color-mix(in oklab,var(--color-primary) 40%,transparent); }
 
 .drop-label {
   font-size: 10.5px;
@@ -873,7 +989,7 @@ async function importBundle() {
   gap: 2px;
   padding: 10px 12px;
   border-radius: 3px;
-  border: 1px solid rgba(148,163,184,.1);
+  border: 1px solid color-mix(in oklab,var(--color-base-content) 10%,transparent);
   background: rgba(0,0,0,.08);
 }
 
@@ -909,13 +1025,13 @@ async function importBundle() {
 .ow-track {
   width: 30px;
   height: 17px;
-  background: rgba(148,163,184,.15);
+  background: color-mix(in oklab,var(--color-base-content) 15%,transparent);
   border-radius: 9px;
   position: relative;
   transition: background 0.2s;
   flex-shrink: 0;
 }
-.ow-on { background: rgba(251,191,36,.5); }
+.ow-on { background: color-mix(in oklab,var(--color-warning) 50%,transparent); }
 .ow-thumb {
   position: absolute;
   top: 2.5px;
@@ -939,15 +1055,15 @@ async function importBundle() {
   font-weight: 500;
   padding: 6px 14px;
   border-radius: 3px;
-  background: rgba(167,139,250,.12);
-  color: #a78bfa;
-  border: 1px solid rgba(167,139,250,.28);
+  background: color-mix(in oklab,var(--color-primary) 12%,transparent);
+  color: var(--color-primary);
+  border: 1px solid color-mix(in oklab,var(--color-primary) 28%,transparent);
   cursor: pointer;
   transition: all 0.15s;
 }
 .import-btn:hover:not(:disabled) {
-  background: rgba(167,139,250,.22);
-  border-color: rgba(167,139,250,.5);
+  background: color-mix(in oklab,var(--color-primary) 22%,transparent);
+  border-color: color-mix(in oklab,var(--color-primary) 50%,transparent);
 }
 .import-btn:disabled { opacity: .35; cursor: not-allowed; }
 
@@ -968,7 +1084,7 @@ async function importBundle() {
 /* ── Format reference ─────────────────────────────────────────────────────── */
 .ref-hd {
   padding: 9px 14px;
-  border-bottom: 1px solid rgba(148,163,184,.08);
+  border-bottom: 1px solid color-mix(in oklab,var(--color-base-content) 8%,transparent);
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 10.5px;
   font-weight: 600;
@@ -990,7 +1106,7 @@ async function importBundle() {
   display: flex;
   gap: 10px;
   padding: 14px 14px;
-  border-right: 1px solid rgba(148,163,184,.07);
+  border-right: 1px solid color-mix(in oklab,var(--color-base-content) 7%,transparent);
 }
 
 .ref-stripe {
@@ -1020,7 +1136,7 @@ async function importBundle() {
   font-size: 9px;
   padding: 1px 4px;
   border-radius: 2px;
-  background: rgba(148,163,184,.1);
+  background: color-mix(in oklab,var(--color-base-content) 10%,transparent);
   opacity: .9;
 }
 </style>

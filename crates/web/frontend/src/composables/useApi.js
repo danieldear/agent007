@@ -109,13 +109,14 @@ export function useApi() {
     },
 
     // Sharing — bundle export (returns raw Response so caller can stream blob)
-    exportBundle: (skills, workflows, personas) => {
+    exportBundle: (skills, workflows, personas, tools) => {
       const params = new URLSearchParams()
       // Always include all params so explicit empty selection is preserved.
       // Backend treats missing params as "include all" for backward compatibility.
       params.set('skills', Array.isArray(skills) ? skills.join(',') : '')
       params.set('workflows', Array.isArray(workflows) ? workflows.join(',') : '')
       params.set('personas', Array.isArray(personas) ? personas.join(',') : '')
+      params.set('tools', Array.isArray(tools) ? tools.join(',') : '')
       return fetch(BASE + `/api/bundle/export?${params}`)
     },
 

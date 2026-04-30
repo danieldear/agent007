@@ -3088,6 +3088,7 @@ pub struct BundleExportQuery {
     pub skills: Option<String>,
     pub workflows: Option<String>,
     pub personas: Option<String>,
+    pub tools: Option<String>,
 }
 
 /// `GET /api/bundle/export` — export selected (or all) skills+workflows+personas as JSON bundle.
@@ -3098,12 +3099,13 @@ pub async fn bundle_export_handler(
     let skill_filters: Vec<&str> = parse_bundle_selection(params.skills.as_deref());
     let wf_filters: Vec<&str> = parse_bundle_selection(params.workflows.as_deref());
     let persona_filters: Vec<&str> = parse_bundle_selection(params.personas.as_deref());
+    let tool_filters: Vec<&str> = parse_bundle_selection(params.tools.as_deref());
 
     // Use the same multi-dir search order as the listing APIs so that both
     // project-local and global skills/workflows/personas are found during export.
     let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
         .with_persona_dirs(persona_search_dirs());
-    match builder.build(&skill_filters, &wf_filters, &persona_filters) {
+    match builder.build(&skill_filters, &wf_filters, &persona_filters, &tool_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (
                 StatusCode::OK,

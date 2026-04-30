@@ -118,20 +118,24 @@ impl BundleBuilder {
     }
 
     /// Build a bundle containing the specified skills (by trigger), workflows (by name),
-    /// and personas (by name).  Pass empty slices to mean "auto-detect from context".
+    /// personas (by name), and optionally a filtered set of tool paths.
     ///
     /// Personas are collected as the union of:
     ///   - explicitly requested names (persona_names non-empty → only those names)
     ///   - names auto-detected from the `agent:` fields of selected workflows/skills
+    ///
+    /// `tool_filter`: empty = auto-include all detected tools; `["__none__"]` = include none;
+    /// otherwise only include tools whose bundle path is in the filter.
     pub fn build(
         &self,
         skill_triggers: &[&str],
         workflow_names: &[&str],
         persona_names: &[&str],
+        tool_filter: &[&str],
     ) -> Result<Bundle> {
         let skills = self.collect_skill_assets(skill_triggers)?;
         let workflows = self.collect_workflow_assets(workflow_names)?;
-        let tools = self.collect_tools_assets(&skills, &workflows)?;
+        let tools = self.collect_tools_assets(&skills, &workflows, tool_filter)?;
         let personas = self.collect_persona_assets(&skills, &workflows, persona_names)?;
         Ok(Bundle::new(skills, workflows, tools, personas))
     }
@@ -253,7 +257,17 @@ impl BundleBuilder {
         &self,
         skills: &[BundleAsset],
         workflows: &[BundleAsset],
+        tool_filter: &[&str],
     ) -> Result<Vec<BundleAsset>> {
+        // "__none__" sentinel → caller explicitly wants no tools.
+        if tool_filter.iter().any(|s| s.trim() == "__none__") {
+            return Ok(Vec::new());
+        }
+        let explicit_filter: HashSet<String> = tool_filter
+            .iter()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !self.tools_dirs.iter().any(|d| d.exists()) {
             return Ok(Vec::new());
         }
@@ -315,6 +329,10 @@ impl BundleBuilder {
                 assets.push(BundleAsset::new(rel_norm.clone(), content));
                 break;
             }
+        }
+        // Apply explicit filter: if non-empty, only keep the listed tools.
+        if !explicit_filter.is_empty() {
+            assets.retain(|a| explicit_filter.contains(&a.filename.to_ascii_lowercase()));
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
@@ -1155,7 +1173,7 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["ml-skill"], &["__none__"], &[]).unwrap();
+        let bundle = builder.build(&["ml-skill"], &["__none__"], &[], &[]).unwrap();
 
         assert_eq!(bundle.skills.len(), 1, "expected only selected skill");
         assert!(
@@ -1203,7 +1221,7 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["__none__"], &["train"], &[]).unwrap();
+        let bundle = builder.build(&["__none__"], &["train"], &[], &[]).unwrap();
 
         assert!(
             bundle.skills.is_empty(),
@@ -1243,7 +1261,7 @@ mod tests {
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir])
             .with_persona_dirs([&personas_dir]);
-        let bundle = builder.build(&[], &["review"], &[]).unwrap();
+        let bundle = builder.build(&[], &["review"], &[], &[]).unwrap();
 
         assert_eq!(bundle.workflows.len(), 1);
         assert_eq!(bundle.personas.len(), 1, "only the referenced persona exported");

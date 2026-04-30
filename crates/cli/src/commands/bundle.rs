@@ -20,7 +20,7 @@ pub async fn execute(_config: Arc<Config>, action: BundleAction) -> Result<()> {
             let skill_refs: Vec<&str> = skills.iter().map(String::as_str).collect();
             let wf_refs: Vec<&str> = workflows.iter().map(String::as_str).collect();
             let persona_refs: Vec<&str> = personas.iter().map(String::as_str).collect();
-            let bundle = builder.build(&skill_refs, &wf_refs, &persona_refs)?;
+            let bundle = builder.build(&skill_refs, &wf_refs, &persona_refs, &[])?;
 
             let json = bundle.to_json()?;
             let dest = output.unwrap_or_else(|| "agent007-bundle.a7bundle".to_string());
