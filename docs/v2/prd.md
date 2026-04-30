@@ -88,6 +88,30 @@ As a team, we want lightweight local collaboration.
 - AC-2: Signed metadata announcements for shared artifacts. ✅ (signed envelopes + policy redaction implemented)
 - AC-3: Content pulled on demand (request-response), not broadcast by default. 📋 Planned (M4)
 
+### US-13 Learned Routing Policy 📋 Planned (M6)
+As a platform owner, I want route selection to learn from real run outcomes.
+- AC-1: Candidate route scored by contextual features (task shape, prior route outcomes, budget pressure).
+- AC-2: Learned policy ships in shadow mode first with confidence + fallback path.
+- AC-3: Promotion to active route policy requires offline eval and canary pass.
+
+### US-14 Retrieval Relevance Ranking 📋 Planned (M6)
+As a user, I want memory context to be relevant and concise.
+- AC-1: Retrieved chunks receive a learned relevance score before prompt injection.
+- AC-2: Retrieval quality metrics (hit-rate, fallback-rate, prompt-context utility) are logged per run.
+- AC-3: Ranker reduces low-value context tokens without reducing success rate.
+
+### US-15 Failure-Risk Prediction + Proactive Recovery 📋 Planned (M6)
+As a user, I want fewer wasted retries and fewer dead-end runs.
+- AC-1: Step-level risk score predicts likely failure/tool error before execution.
+- AC-2: High-risk steps trigger safer route/model/tool strategy under policy.
+- AC-3: Escalation and rollback behavior remain auditable and reversible.
+
+### US-16 Token-Efficient Local Automation 📋 Planned (M6)
+As a frequent user, I want deterministic tasks handled locally instead of spending LLM tokens.
+- AC-1: Repetitive command flows can be packaged as local tools/scripts and discovered by the orchestrator.
+- AC-2: Workflows can call local tools for setup/validation/log parsing tasks before model invocation.
+- AC-3: Dashboard exposes token savings trend from local-tool execution.
+
 ## 5. Functional Requirements
 1. Run scorecard API and storage schema.
 2. Recovery state-machine integration in workflow runner.
@@ -101,6 +125,9 @@ As a team, we want lightweight local collaboration.
 10. Dashboard KPI and analytics panels.
 11. Restart recovery and stale-run mutation logic.
 12. Libp2p mDNS peer discovery and signed event channel.
+13. Offline feature builder + model-eval artifacts for learned routing/ranking.
+14. Shadow inference path and canary rollout controls for learned policies.
+15. Local tool/script registry integration for deterministic task offload.
 
 ## 6. Non-Functional Requirements
 1. Backward compatibility with existing commands/workflows.
@@ -126,6 +153,8 @@ As a team, we want lightweight local collaboration.
 3. -30% manual escalation rate.
 4. >50% recoverable failures auto-resolved.
 5. p2p local sync event propagation median <5s.
+6. -15-30% prompt tokens for workflows with local deterministic tool offload.
+7. +10% retrieval utility signal (higher useful-context hit rate with same/lower token budget).
 
 ## 10. Rollout Strategy
 1. Phase-gated, feature-flagged rollout.
