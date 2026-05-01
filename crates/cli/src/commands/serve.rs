@@ -446,6 +446,10 @@ impl Agent007Server {
                         "output": {
                             "type": "string",
                             "description": "The host-generated output for the step"
+                        },
+                        "tokens": {
+                            "type": "integer",
+                            "description": "Actual total tokens used (input+output) for this step. Provide if available for accurate dashboard metrics."
                         }
                     },
                     "required": ["session", "step", "output"]
@@ -1017,9 +1021,8 @@ impl ServerHandler for Agent007Server {
             let task_id = core_task.id;
             self.publish_task_assigned(&aid, &core_task).await;
             match run_skill_mcp(&self.config, skill.trigger.clone(), args).await {
-                Ok(output) => {
-                    let token_est = output.len() / 4;
-                    self.publish_model_request(token_est).await;
+                Ok((output, tokens)) => {
+                    self.publish_model_request(tokens).await;
                     self.publish_task_completed(&aid, task_id, &output).await;
                     return Ok(CallToolResult::success(vec![Content::text(output)]));
                 }
@@ -1138,9 +1141,8 @@ impl ServerHandler for Agent007Server {
                             skill: trigger.clone(),
                         });
                         match run_skill_mcp(&self.config, trigger, args).await {
-                            Ok(output) => {
-                                let token_est = output.len() / 4;
-                                self.publish_model_request(token_est).await;
+                            Ok((output, tokens)) => {
+                                self.publish_model_request(tokens).await;
                                 self.publish_task_completed(&aid, task_id, &output).await;
                                 Ok(CallToolResult::success(vec![Content::text(output)]))
                             }
@@ -1203,9 +1205,8 @@ impl ServerHandler for Agent007Server {
                     skill: trigger.clone(),
                 });
                 match run_skill_mcp(&self.config, trigger, args).await {
-                    Ok(output) => {
-                        let token_est = output.len() / 4;
-                        self.publish_model_request(token_est).await;
+                    Ok((output, tokens)) => {
+                        self.publish_model_request(tokens).await;
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
@@ -1447,7 +1448,13 @@ impl ServerHandler for Agent007Server {
                 let session = extract_string(request.arguments.as_ref(), "session")?;
                 let step = extract_string(request.arguments.as_ref(), "step")?;
                 let output = extract_string(request.arguments.as_ref(), "output")?;
-                match workflow_hosted_submit_step(&session, &step, &output) {
+                let tokens = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                match workflow_hosted_submit_step(&session, &step, &output, tokens) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                         "Error: {e}"
@@ -3118,7 +3125,7 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
     }
 }
 
-async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result<String> {
+async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result<(String, usize)> {
     if standalone_mode_available(config) {
         let skill = find_skill(&trigger)?;
         let trace_task = format!("skill:{} {}", trigger, args);
@@ -3130,13 +3137,20 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
         {
             Ok(report) => {
                 let output = report.output.clone();
+                // Use actual LLM token counts when available; fall back to char estimate.
+                let tokens = report
+                    .metrics
+                    .input_tokens
+                    .zip(report.metrics.output_tokens)
+                    .map(|(i, o)| (i + o) as usize)
+                    .unwrap_or_else(|| output.len() / 4);
                 let telemetry = RetrievalTelemetryArtifact::from_skill_report(
                     stack.rag_warmup_indexed_docs,
                     &report,
                 );
                 let _ = write_retrieval_telemetry(&stack.run_store, &run_id, &telemetry);
                 let _ = stack.run_store.finish_run(&run_id, true, &output);
-                Ok(output)
+                Ok((output, tokens))
             }
             Err(error) => {
                 let _ = stack
@@ -3184,7 +3198,8 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
         mark_delegate_run_handed_off(&run_id, "delegated to host LLM", &output)?;
         // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
         // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
-        Ok(output)
+        let token_est = output.len() / 4;
+        Ok((output, token_est))
     }
 }
 
@@ -3753,7 +3768,7 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
     })
 }
 
-fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Result<String> {
+fn workflow_hosted_submit_step(session: &str, step: &str, output: &str, tokens: Option<usize>) -> Result<String> {
     with_hosted_session_lock(session, || {
         // Slice 2: verify memory claim before accepting submission.
         let claim_key = format!("workflow:sessions:{session}:steps:{step}:claim");
@@ -3792,8 +3807,8 @@ fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Resul
                         "progress": &progress,
                     }),
                 )?;
-                // Estimate tokens from output length so dashboard metrics update.
-                let token_estimate = (output.len() / 4).max(1);
+                // Use caller-reported tokens when available; fall back to char estimate.
+                let token_estimate = tokens.unwrap_or_else(|| (output.len() / 4).max(1));
                 let _ = store.append_event(
                     session,
                     &AgentEvent::ModelRequest {
@@ -5831,7 +5846,7 @@ output = "notes"
         assert_eq!(started["progress"]["status"], "ready");
         assert_eq!(started["progress"]["ready_steps"][0]["id"], "research");
 
-        let completed = workflow_hosted_submit_step(&session, "research", "notes v1").unwrap();
+        let completed = workflow_hosted_submit_step(&session, "research", "notes v1", None).unwrap();
         let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
         assert_eq!(completed["progress"]["status"], "succeeded");
         assert_eq!(completed["workflow_state"]["outputs"]["notes"], "notes v1");
@@ -5863,7 +5878,7 @@ requires_approval = true
         let started: serde_json::Value = serde_json::from_str(&started).unwrap();
         let session = started["session"].as_str().unwrap().to_string();
 
-        let waiting = workflow_hosted_submit_step(&session, "plan", "draft plan").unwrap();
+        let waiting = workflow_hosted_submit_step(&session, "plan", "draft plan", None).unwrap();
         let waiting: serde_json::Value = serde_json::from_str(&waiting).unwrap();
         assert_eq!(waiting["progress"]["status"], "awaiting-approval");
 
@@ -5934,7 +5949,7 @@ output = "review_report"
             let step = step.to_string();
             let output = output.to_string();
             handles.push(thread::spawn(move || {
-                workflow_hosted_submit_step(&session, &step, &output)
+                workflow_hosted_submit_step(&session, &step, &output, None)
             }));
         }
         for handle in handles {
@@ -5957,7 +5972,7 @@ output = "review_report"
         assert_eq!(status["progress"]["status"], "awaiting-outputs");
         assert_eq!(status["progress"]["running_steps"][0], "synthesize");
 
-        let finished = workflow_hosted_submit_step(&session, "synthesize", "final report").unwrap();
+        let finished = workflow_hosted_submit_step(&session, "synthesize", "final report", None).unwrap();
         let finished: serde_json::Value = serde_json::from_str(&finished).unwrap();
         assert_eq!(finished["progress"]["status"], "succeeded");
         assert_eq!(

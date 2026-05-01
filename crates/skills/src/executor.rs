@@ -16,6 +16,9 @@ pub struct SkillExecutionMetrics {
     pub vector_hits: usize,
     pub fallback_hits: usize,
     pub mock_embedding: bool,
+    /// Actual token counts from the LLM API response, if available.
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,9 +186,13 @@ impl SkillExecutor {
             source: e,
         })?;
 
+        let mut metrics = metrics_from_retrieval(&rag_context, &retrieval_stats);
+        metrics.input_tokens = response.input_tokens;
+        metrics.output_tokens = response.output_tokens;
+
         Ok(SkillExecutionReport {
             output: response.content,
-            metrics: metrics_from_retrieval(&rag_context, &retrieval_stats),
+            metrics,
         })
     }
 }
@@ -200,6 +207,8 @@ fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> Skill
         vector_hits: retrieval.vector_hits,
         fallback_hits: retrieval.fallback_hits,
         mock_embedding: retrieval.mock_embedding,
+        input_tokens: None,
+        output_tokens: None,
     }
 }
 
