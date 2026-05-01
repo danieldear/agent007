@@ -22,10 +22,17 @@ Implement **Hosted-MCP workflow execution**: the `WorkflowEngine` manages workfl
 The protocol:
 
 1. Host calls `agent007_workflow_start(name, task)` → server creates a session, returns `session_id`
-2. Host calls `agent007_workflow_next(session_id)` → server returns the next batch of ready steps (steps whose `depends_on` are all satisfied), each with a fully-rendered prompt
+2. Host calls `agent007_workflow_next(session_id)` → server returns the next batch of ready steps (steps whose `depends_on` are all satisfied), each with a fully-rendered prompt. Each step includes `session_id` and `step_id` injected into the prompt footer so the step agent can self-submit.
 3. Host executes each step prompt using its own LLM context and tools
-4. Host calls `agent007_workflow_submit_step(session_id, step_id, output)` → server stores output, updates dependency graph, and makes the next batch of steps available
-5. Repeat until all steps are complete or a human approval gate is reached
+4. **Self-submit**: the step agent calls `agent007_workflow_submit_step(session_id, step_id, output[, tokens])` directly — the orchestrator does not need to relay the output. An optional `tokens` integer field accepts actual token usage for accurate dashboard metrics.
+5. The server verifies a memory-backed step claim (2-hour TTL) before accepting submission, preventing replay of stale or duplicate outputs.
+6. Repeat until all steps are complete or a human approval gate is reached
+
+Additional tools available to step agents during execution:
+
+- `agent007_workflow_get_output(session, key)` — fetch a prior step's output on demand without injecting it into the orchestrating context (avoids token bloat)
+- `agent007_workflow_heartbeat(session, step, hint?)` — write a timestamped liveness note every 3-5 minutes; steps silent for >10 min are flagged stale in `workflow_status` responses and the dashboard
+- `agent007_workflow_status(session)` — inspect current session state, per-step liveness, and any stale warnings
 
 Approval gates pause execution and return a structured response requiring a `agent007_workflow_approve(session_id, decision)` call before proceeding.
 
@@ -60,7 +67,7 @@ Approval gates pause execution and return a structured response requiring a `age
 - **Active host participation required**: Workflow execution is not autonomous. If the host LLM drops its context or the editor is closed mid-workflow, execution pauses until `workflow_next` is called again. Sessions do not self-advance.
 - **Latency**: Each step requires at least two round-trip MCP calls (`workflow_next` + `workflow_submit_step`) in addition to the LLM call itself. For workflows with many sequential steps, this adds perceptible overhead.
 - **Host fidelity variance**: Step outputs depend on the host LLM's interpretation of the step prompt. The same workflow may produce different results across different host models or sessions.
-- **`run_id` tracking**: The host must track `run_id` values to record actual token usage via `agent007_record_tokens`. This bookkeeping is easy to skip, leading to inaccurate dashboard metrics.
+- **`run_id` tracking**: The host must track `run_id` values to record actual token usage via `agent007_record_tokens`. This bookkeeping is easy to skip, leading to inaccurate dashboard metrics. Mitigated by the optional `tokens` parameter on `workflow_submit_step` for hosted clients that can report usage inline.
 
 ## Related ADRs
 

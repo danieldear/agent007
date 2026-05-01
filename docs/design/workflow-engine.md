@@ -159,21 +159,36 @@ pub struct ValidatedDag {
 In Hosted-MCP mode the host LLM (running in the editor) drives step execution. The engine
 acts as a stateful coordinator; the host is responsible for generating text.
 
-### 4.1 Protocol (three MCP tools)
+### 4.1 Protocol
 
 ```
 agent007_workflow_start(name, task)
   └── Creates a new WorkflowRunState, persists to sessions/<run-id>/
-      Returns: { session, status, ready_steps, ... }
+      Returns: { session, status, ready_steps, running_step_liveness, warnings, ... }
 
 agent007_workflow_next(session)
   └── Returns the next batch of ready HostedWorkflowStep objects (leased)
-      Host LLM executes each step's prompt and calls submit_step
+      Writes a 2-hour TTL memory claim per dispatched step
+      Returns: { ready_steps, running_step_liveness, warnings, ... }
 
-agent007_workflow_submit_step(session, step, output)
-  └── Records step output into state.outputs
+agent007_workflow_submit_step(session, step, output[, tokens])
+  └── Verifies memory claim has not expired
+      Records step output into state.outputs
       Advances step status to Completed
+      Cleans up claim + heartbeat memory keys
       Returns updated HostedWorkflowProgress
+
+agent007_workflow_get_output(session, key)
+  └── Returns a single prior step output by output_key
+      Step agents call this on demand instead of receiving all outputs injected
+
+agent007_workflow_heartbeat(session, step[, hint])
+  └── Writes { last_active, progress_hint } to memory
+      Persists last_heartbeat_at + last_heartbeat_hint into workflow-state.json
+      Step agents must call every 3-5 minutes; silence >10 min → stale
+
+agent007_workflow_status(session)
+  └── Returns current session state + per-step liveness + stale warnings
 ```
 
 ### 4.2 `HostedWorkflowStep` — what the host receives
@@ -184,16 +199,40 @@ pub struct HostedWorkflowStep {
     pub agent: String,
     pub model_hint: String,          // from persona or step.model override
     pub system_prompt: Option<String>, // from PersonaSpec
-    pub prompt: String,              // fully rendered Tera template
+    pub prompt: String,              // fully rendered Tera template + self-submit footer
     pub output_key: Option<String>,  // variable name to store result under
     pub inputs: HashMap<String, String>, // resolved input values
     pub depends_on: Vec<String>,
     pub step_type: StepType,
     pub requires_approval: bool,
+    pub session_id: String,          // injected so step agent can self-submit
 }
 ```
 
-The `prompt` field is already rendered — the host LLM just executes it.
+The `prompt` field is already rendered. It includes a self-submit footer that instructs the step agent to call `workflow_submit_step` directly with its `session_id` and `step_id`, heartbeat every 3-5 min, and use `workflow_get_output` to fetch prior outputs on demand.
+
+### 4.3 Liveness and staleness
+
+Every `workflow_status` / `workflow_next` / `workflow_submit_step` response includes:
+
+```json
+{
+  "running_step_liveness": [
+    {
+      "step": "research",
+      "last_heartbeat_hint": "scanning 340 files",
+      "last_heartbeat_age_secs": 47,
+      "last_heartbeat_ago": "47s ago",
+      "stale": false
+    }
+  ],
+  "warnings": []
+}
+```
+
+A step is stale if `last_heartbeat_age_secs > 600` (10 min). If no heartbeat has been sent, `dispatched_age_secs` is computed from the claim's `issued_at` instead. Stale steps generate a human-readable entry in `warnings` for the host LLM to act on.
+
+`WorkflowStepState` carries `last_heartbeat_at` and `last_heartbeat_hint` (both `Option<String>`, `#[serde(default)]`) so liveness data persists in `workflow-state.json` and is visible in the dashboard without a separate API endpoint.
 
 ### 4.3 State machine
 

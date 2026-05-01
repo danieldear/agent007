@@ -78,6 +78,28 @@ Examples:
   - reduce confusion between hosted execution, standalone execution, and mock
     fallback behavior
 
+## Hosted workflow steps go silent with no liveness signal — resolved
+
+**Status:** Fixed (2026-05-01)  
+**Area:** Hosted workflows, staleness detection
+
+Previously, running steps provided no liveness signal. If a background step silently stalled, the workflow sat in `awaiting-outputs` indefinitely with no indication of whether work was in progress or the step had crashed.
+
+**Resolution:** `workflow_heartbeat` now persists heartbeat data into `workflow-state.json` as well as memory. `workflow_status` computes `running_step_liveness` per in-flight step with hint + age. Steps silent for >10 min are flagged `stale: true` in both the MCP response and the dashboard (red badge, stale warning). Step prompts explicitly require heartbeats every 3-5 minutes.
+
+---
+
+## Token counts show estimated values instead of actual LLM usage — resolved
+
+**Status:** Fixed (2026-05-01)  
+**Area:** Token metrics, dashboard
+
+In standalone mode, `run_skill_mcp` used `output.len() / 4` as the token count regardless of whether actual counts were available from the LLM API. Claude's API response already populated `input_tokens` and `output_tokens` but they were dropped by the skill executor.
+
+**Resolution:** `SkillExecutionMetrics` now carries actual `input_tokens` / `output_tokens` from the API response. `run_skill_mcp` uses the real sum when available; the char estimate is a fallback only for providers that don't return usage. `workflow_submit_step` accepts an optional `tokens` parameter so hosted clients (Codex, Cursor) can report actual usage inline.
+
+---
+
 ## Hosted `record_tokens` memory capture can appear sparse if output is omitted
 
 **Status:** Partially improved  
