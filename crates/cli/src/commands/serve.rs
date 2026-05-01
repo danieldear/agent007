@@ -467,6 +467,48 @@ impl Agent007Server {
                 }),
             ),
 
+            tool(
+                "agent007_workflow_get_output",
+                "Fetch a named step output from a hosted workflow session. Use this inside a step agent to retrieve prior outputs on demand, avoiding token bloat in the orchestrating context.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Hosted workflow session ID"
+                        },
+                        "key": {
+                            "type": "string",
+                            "description": "The output key name (e.g. 'ranging_report', 'code')"
+                        }
+                    },
+                    "required": ["session", "key"]
+                }),
+            ),
+
+            tool(
+                "agent007_workflow_heartbeat",
+                "Report progress from inside a running workflow step. Keeps the step alive in the watchdog and surfaces a progress hint on the dashboard.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session": {
+                            "type": "string",
+                            "description": "Hosted workflow session ID"
+                        },
+                        "step": {
+                            "type": "string",
+                            "description": "Step ID sending the heartbeat"
+                        },
+                        "hint": {
+                            "type": "string",
+                            "description": "Short description of current progress (e.g. 'analyzing phase 2 of 5')"
+                        }
+                    },
+                    "required": ["session", "step"]
+                }),
+            ),
+
             // 6. Git status
             tool(
                 "agent007_git_status",
@@ -1416,6 +1458,29 @@ impl ServerHandler for Agent007Server {
             "agent007_workflow_status" => {
                 let session = extract_string(request.arguments.as_ref(), "session")?;
                 match workflow_hosted_status(&session) {
+                    Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
+                }
+            }
+
+            "agent007_workflow_get_output" => {
+                let session = extract_string(request.arguments.as_ref(), "session")?;
+                let key = extract_string(request.arguments.as_ref(), "key")?;
+                match workflow_hosted_get_output(&session, &key) {
+                    Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Error: {e}"
+                    ))])),
+                }
+            }
+
+            "agent007_workflow_heartbeat" => {
+                let session = extract_string(request.arguments.as_ref(), "session")?;
+                let step = extract_string(request.arguments.as_ref(), "step")?;
+                let hint = optional_string(request.arguments.as_ref(), "hint");
+                match workflow_hosted_heartbeat(&session, &step, hint.as_deref()) {
                     Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                         "Error: {e}"
@@ -2376,6 +2441,14 @@ fn agent007_help(topic: Option<&str>) -> String {
             "Submit hosted workflow step output",
         ),
         ("agent007_workflow_status", "Inspect hosted workflow state"),
+        (
+            "agent007_workflow_get_output",
+            "Fetch a named step output (use inside step agents to avoid token bloat)",
+        ),
+        (
+            "agent007_workflow_heartbeat",
+            "Report progress from inside a running step (keeps it alive in the watchdog)",
+        ),
     ];
 
     let mut lines = Vec::new();
@@ -3542,6 +3615,8 @@ fn hosted_workflow_response(
             "agent007_workflow_next",
             "agent007_workflow_submit_step",
             "agent007_workflow_approve",
+            "agent007_workflow_get_output",
+            "agent007_workflow_heartbeat",
         ],
         "execution_instructions": {
             "overview": "You are the host LLM executing a multi-step hosted workflow. \
@@ -3554,14 +3629,19 @@ fn hosted_workflow_response(
                 "   - If model_hint is 'ollama' or 'host-llm': use whatever model you are currently running on.",
                 "   - IMPORTANT: honor the model_hint — it was set by the workflow author to use a specific model's strengths.",
                 "3. Use the step's 'system_prompt' (if present) as your system context for that step.",
-                "4. Execute the step's 'prompt' as the user message.",
-                "5. After getting the response, call agent007_workflow_submit_step with: session, step=step.id, output=<your response>.",
-                "6. Call agent007_workflow_next to get the next batch of ready steps.",
-                "7. Repeat until progress.status is 'succeeded' or 'failed'.",
-                "8. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
-                "   - Before approving, surface progress.pending_approval.content_preview (and the full content when available) back to the user in this same conversation.",
-                "   - Collect the user's approve/edit/deny decision inline in this client, not in the web dashboard.",
-                "   - After recording the decision, call agent007_workflow_next to continue.",
+                "4. Execute the step's 'prompt' as the user message. The prompt includes self-submit instructions — pass them to the subagent.",
+                "5. SELF-SUBMIT: each step's prompt already instructs the subagent to call agent007_workflow_submit_step itself. \
+                   The step also includes session_id so the subagent can close the loop directly. \
+                   You do NOT need to call workflow_submit_step for steps executed by background agents — they do it.",
+                "6. For inline steps (where you are the executing agent, not a subagent): call agent007_workflow_submit_step with session, step=step.id, output=<your response>.",
+                "7. To fetch prior step outputs inside a step agent without injecting them into the orchestrating context, use agent007_workflow_get_output.",
+                "8. For long-running steps, call agent007_workflow_heartbeat periodically to report progress and prevent stale detection.",
+                "9. Call agent007_workflow_next to get the next batch of ready steps.",
+                "10. Repeat until progress.status is 'succeeded' or 'failed'.",
+                "11. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
+                "    - Before approving, surface progress.pending_approval.content_preview (and the full content when available) back to the user in this same conversation.",
+                "    - Collect the user's approve/edit/deny decision inline in this client, not in the web dashboard.",
+                "    - After recording the decision, call agent007_workflow_next to continue.",
             ],
             "model_hint_values": {
                 "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
@@ -3570,7 +3650,8 @@ fn hosted_workflow_response(
                 "host-llm": "Use whatever model you are currently running on (no preference)"
             },
             "parallel_execution": "If multiple steps appear in ready_steps with no dependencies between them, \
-                execute them concurrently and submit all outputs before calling workflow_next."
+                execute them concurrently as background agents. Each agent has its session_id and step_id baked into its prompt \
+                and will self-submit. Poll agent007_workflow_status to track progress."
         }
     }))?)
 }
@@ -3643,6 +3724,23 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
                         "progress": &progress,
                     }),
                 )?;
+                // Slice 2: write memory claims for each newly dispatched step.
+                let now = chrono::Utc::now();
+                let expires = now + chrono::Duration::hours(2);
+                for step in &progress.ready_steps {
+                    let claim_key = format!(
+                        "workflow:sessions:{session}:steps:{step_id}:claim",
+                        step_id = step.id
+                    );
+                    let claim = serde_json::json!({
+                        "session_id": session,
+                        "step_id": step.id,
+                        "issued_at": now.to_rfc3339(),
+                        "expires_at": expires.to_rfc3339(),
+                    })
+                    .to_string();
+                    let _ = memory_write("project", &claim_key, &claim);
+                }
                 sync_hosted_run_metadata(&store, session, &progress)?;
                 hosted_workflow_response(session, &request, &progress, &state)
             }
@@ -3657,12 +3755,34 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
 
 fn workflow_hosted_submit_step(session: &str, step: &str, output: &str) -> Result<String> {
     with_hosted_session_lock(session, || {
+        // Slice 2: verify memory claim before accepting submission.
+        let claim_key = format!("workflow:sessions:{session}:steps:{step}:claim");
+        if let Ok(Some(raw)) = memory_read("project", &claim_key) {
+            if let Ok(claim) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(expires_str) = claim["expires_at"].as_str() {
+                    if let Ok(expires) = chrono::DateTime::parse_from_rfc3339(expires_str) {
+                        if chrono::Utc::now() > expires.with_timezone(&chrono::Utc) {
+                            return Err(anyhow::anyhow!(
+                                "step claim for '{}' has expired — the step was dispatched too long ago. \
+                                Call agent007_workflow_status to check the current workflow state.",
+                                step
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
         let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
 
         match engine.submit_step_output(&def, &mut state, step, output) {
             Ok(progress) => {
                 store.write_json_artifact(session, "workflow-state.json", &state)?;
+                // Slice 2: clean up the claim and heartbeat after successful submission.
+                let _ = memory_write("project", &claim_key, "consumed");
+                let hb_key = format!("workflow:sessions:{session}:steps:{step}:heartbeat");
+                let _ = memory_write("project", &hb_key, "done");
                 store.append_note(
                     session,
                     "workflow-hosted-submit-step",
@@ -3720,6 +3840,39 @@ fn workflow_hosted_status(session: &str) -> Result<String> {
             }
         }
     })
+}
+
+fn workflow_hosted_get_output(session: &str, key: &str) -> Result<String> {
+    let (_, _, _, state) = load_hosted_workflow_session(session)?;
+    match state.outputs.get(key) {
+        Some(value) => Ok(value.clone()),
+        None => {
+            let available: Vec<_> = state.outputs.keys().cloned().collect();
+            Err(anyhow::anyhow!(
+                "output key '{}' not found in session '{}'. Available keys: [{}]",
+                key,
+                session,
+                available.join(", ")
+            ))
+        }
+    }
+}
+
+fn workflow_hosted_heartbeat(session: &str, step: &str, hint: Option<&str>) -> Result<String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let hint_str = hint.unwrap_or("in progress");
+    let value = serde_json::json!({
+        "last_active": now,
+        "progress_hint": hint_str,
+        "step": step,
+        "session": session,
+    })
+    .to_string();
+    let heartbeat_key = format!("workflow:sessions:{session}:steps:{step}:heartbeat");
+    memory_write("project", &heartbeat_key, &value).map_err(|e| {
+        anyhow::anyhow!("failed to write heartbeat for step '{}': {}", step, e)
+    })?;
+    Ok(format!("Heartbeat recorded for step '{step}': {hint_str}"))
 }
 
 async fn execute_workflow_session(
@@ -5165,6 +5318,8 @@ mod tests {
             "agent007_workflow_next",
             "agent007_workflow_submit_step",
             "agent007_workflow_status",
+            "agent007_workflow_get_output",
+            "agent007_workflow_heartbeat",
             "agent007_git_status",
             "agent007_git_diff",
             "agent007_git_log",

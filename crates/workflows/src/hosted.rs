@@ -47,6 +47,8 @@ pub struct HostedWorkflowStep {
     pub depends_on: Vec<String>,
     pub step_type: StepType,
     pub requires_approval: bool,
+    /// Session ID injected so the step agent can self-submit without the orchestrator.
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -470,17 +472,40 @@ impl HostedWorkflowEngine {
             }
         }
 
+        let session_id = self.run_id.clone().unwrap_or_default();
+
+        // Append self-submit footer so the step agent can close the loop directly,
+        // surviving an orchestrator context compaction.
+        let self_submit_footer = if session_id.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n---\n\
+                **Self-submit required**: When you finish this step, call `agent007_workflow_submit_step` with:\n\
+                - `session`: `{session_id}`\n\
+                - `step`: `{step_id}`\n\
+                - `output`: your full response\n\n\
+                To fetch prior step outputs without bloating the orchestrating context, use:\n\
+                `agent007_workflow_get_output(session=\"{session_id}\", key=\"<output_key>\")`\n\n\
+                To report progress during long tasks, call:\n\
+                `agent007_workflow_heartbeat(session=\"{session_id}\", step=\"{step_id}\", hint=\"<what you're doing>\")`",
+                session_id = session_id,
+                step_id = step.id,
+            )
+        };
+
         Ok(HostedWorkflowStep {
             id: step.id.clone(),
             agent: step.agent.clone(),
             model_hint,
             system_prompt: persona.map(|persona| persona.system_prompt.clone()),
-            prompt,
+            prompt: format!("{prompt}{self_submit_footer}"),
             output_key: step.output.clone(),
             inputs,
             depends_on: step.depends_on.clone().unwrap_or_default(),
             step_type: step.r#type.clone(),
             requires_approval: step.requires_approval.unwrap_or(false),
+            session_id,
         })
     }
 
