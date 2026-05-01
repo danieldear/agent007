@@ -171,6 +171,22 @@ function fmtMs(ms) {
   return `${Math.round(ms)}ms`
 }
 
+const STALE_SECS = 600 // 10 minutes
+
+function isStaleStep(step) {
+  if (!step.last_heartbeat_at) return false
+  const age = (Date.now() - new Date(step.last_heartbeat_at).getTime()) / 1000
+  return age > STALE_SECS
+}
+
+function heartbeatAge(step) {
+  if (!step.last_heartbeat_at) return ''
+  const secs = Math.floor((Date.now() - new Date(step.last_heartbeat_at).getTime()) / 1000)
+  if (secs < 60) return `${secs}s ago`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m ago`
+}
+
 const recentEvents = computed(() => [...(props.events || [])].reverse().slice(0, 50))
 const selectedWorkflowState = computed(() => selectedRun.value?.workflow_state || null)
 const selectedEvalGateDecision = computed(() => selectedWorkflowState.value?.eval_gate_decision || null)
@@ -860,7 +876,8 @@ async function submitTask() {
                         class="rounded-lg border p-3 transition-colors"
                         :class="{
                           'border-base-300/60': step.status === 'pending',
-                          'border-info/40 bg-info/5': step.status === 'running',
+                          'border-error/60 bg-error/8': step.status === 'running' && isStaleStep(step),
+                          'border-info/40 bg-info/5': step.status === 'running' && !isStaleStep(step),
                           'border-success/40 bg-success/5': step.status === 'completed',
                           'border-error/40 bg-error/5': step.status === 'failed',
                           'border-warning/40 bg-warning/5': step.status === 'awaiting-approval' || step.status === 'skipped',
@@ -868,15 +885,33 @@ async function submitTask() {
                       >
                         <div class="flex items-center justify-between gap-2">
                           <span class="font-mono text-xs font-medium text-base-content/80">{{ step.id }}</span>
-                          <span class="badge badge-xs" :class="{
-                            'badge-ghost': step.status === 'pending',
-                            'badge-info': step.status === 'running',
-                            'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
-                            'badge-success': step.status === 'completed',
-                            'badge-error': step.status === 'failed',
-                          }">{{ step.status }}</span>
+                          <div class="flex items-center gap-1.5">
+                            <span v-if="step.status === 'running' && isStaleStep(step)" class="badge badge-xs badge-error">stale</span>
+                            <span class="badge badge-xs" :class="{
+                              'badge-ghost': step.status === 'pending',
+                              'badge-info': step.status === 'running' && !isStaleStep(step),
+                              'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
+                              'badge-success': step.status === 'completed',
+                              'badge-error': step.status === 'failed' || (step.status === 'running' && isStaleStep(step)),
+                            }">{{ step.status }}</span>
+                          </div>
                         </div>
                         <div class="text-[10px] text-base-content/35 mt-1">{{ step.agent }} · {{ step.attempts }} attempt(s)</div>
+                        <!-- Liveness row for running steps -->
+                        <div v-if="step.status === 'running'" class="mt-2 flex items-center gap-2 flex-wrap">
+                          <template v-if="step.last_heartbeat_hint">
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono"
+                              :class="isStaleStep(step) ? 'bg-error/15 text-error/80' : 'bg-info/15 text-info/80'">
+                              <span class="w-1.5 h-1.5 rounded-full animate-pulse"
+                                :class="isStaleStep(step) ? 'bg-error' : 'bg-info'"></span>
+                              {{ step.last_heartbeat_hint }}
+                            </span>
+                            <span class="text-[10px] font-mono text-base-content/30">{{ heartbeatAge(step) }}</span>
+                          </template>
+                          <template v-else>
+                            <span class="text-[10px] font-mono text-base-content/30 italic">no heartbeat yet</span>
+                          </template>
+                        </div>
                         <div v-if="step.output_preview" class="font-mono text-xs mt-2 whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2">{{ step.output_preview }}</div>
                         <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
                       </div>

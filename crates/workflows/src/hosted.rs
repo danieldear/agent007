@@ -487,8 +487,9 @@ impl HostedWorkflowEngine {
                 - `output`: your full response\n\n\
                 To fetch prior step outputs without bloating the orchestrating context, use:\n\
                 `agent007_workflow_get_output(session=\"{session_id}\", key=\"<output_key>\")`\n\n\
-                To report progress during long tasks, call:\n\
-                `agent007_workflow_heartbeat(session=\"{session_id}\", step=\"{step_id}\", hint=\"<what you're doing>\")`",
+                Call `agent007_workflow_heartbeat` every 3-5 minutes while working to report progress and prove liveness:\n\
+                `agent007_workflow_heartbeat(session=\"{session_id}\", step=\"{step_id}\", hint=\"<what you are currently doing>\")`\n\
+                Skipping heartbeats for >10 min will mark this step as stale in the dashboard.",
                 session_id = session_id,
                 step_id = step.id,
             )

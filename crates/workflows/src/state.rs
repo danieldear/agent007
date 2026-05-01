@@ -62,6 +62,10 @@ pub struct WorkflowStepState {
     pub selected_route: Option<String>,
     pub selected_target: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub last_heartbeat_at: Option<String>,
+    #[serde(default)]
+    pub last_heartbeat_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +352,8 @@ impl From<&StepDef> for WorkflowStepState {
             selected_route: None,
             selected_target: None,
             error: None,
+            last_heartbeat_at: None,
+            last_heartbeat_hint: None,
         }
     }
 }

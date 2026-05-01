@@ -3613,17 +3613,114 @@ fn sync_hosted_run_metadata(
     Ok(())
 }
 
+/// Read the heartbeat memory record for a running step and compute liveness info.
+/// Returns `(hint, age_secs, stale)`. A step is stale if it has been silent for >10 min.
+fn step_liveness(session: &str, step_id: &str, claim_issued_at: Option<&str>) -> serde_json::Value {
+    const STALE_SECS: i64 = 600; // 10 minutes
+
+    let heartbeat_key = format!("workflow:sessions:{session}:steps:{step_id}:heartbeat");
+    if let Ok(Some(raw)) = memory_read("project", &heartbeat_key) {
+        if let Ok(hb) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(last_str) = hb["last_active"].as_str() {
+                if let Ok(last) = chrono::DateTime::parse_from_rfc3339(last_str) {
+                    let age = (chrono::Utc::now()
+                        - last.with_timezone(&chrono::Utc))
+                    .num_seconds();
+                    let hint = hb["progress_hint"]
+                        .as_str()
+                        .unwrap_or("in progress")
+                        .to_string();
+                    return serde_json::json!({
+                        "step": step_id,
+                        "last_heartbeat_hint": hint,
+                        "last_heartbeat_age_secs": age,
+                        "last_heartbeat_ago": fmt_age_secs(age),
+                        "stale": age > STALE_SECS,
+                    });
+                }
+            }
+        }
+    }
+    // No heartbeat yet — use claim issued_at to compute age since dispatch.
+    if let Some(issued_str) = claim_issued_at {
+        if let Ok(issued) = chrono::DateTime::parse_from_rfc3339(issued_str) {
+            let age = (chrono::Utc::now()
+                - issued.with_timezone(&chrono::Utc))
+            .num_seconds();
+            return serde_json::json!({
+                "step": step_id,
+                "last_heartbeat_hint": null,
+                "last_heartbeat_age_secs": null,
+                "dispatched_age_secs": age,
+                "dispatched_ago": fmt_age_secs(age),
+                "stale": age > STALE_SECS,
+            });
+        }
+    }
+    serde_json::json!({ "step": step_id, "last_heartbeat_hint": null, "stale": false })
+}
+
+fn fmt_age_secs(secs: i64) -> String {
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 fn hosted_workflow_response(
     session: &str,
     request: &agent007_workflows::WorkflowRunRequest,
     progress: &agent007_workflows::HostedWorkflowProgress,
     state: &agent007_workflows::WorkflowRunState,
 ) -> Result<String> {
+    // Compute per-step liveness for any running steps.
+    let running_liveness: Vec<serde_json::Value> = progress
+        .running_steps
+        .iter()
+        .map(|step_id| {
+            let claim_key = format!("workflow:sessions:{session}:steps:{step_id}:claim");
+            let issued_at = memory_read("project", &claim_key)
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                .and_then(|v| v["issued_at"].as_str().map(|s| s.to_string()));
+            step_liveness(session, step_id, issued_at.as_deref())
+        })
+        .collect();
+
+    let stale_warnings: Vec<String> = running_liveness
+        .iter()
+        .filter(|l| l["stale"].as_bool().unwrap_or(false))
+        .map(|l| {
+            let step = l["step"].as_str().unwrap_or("?");
+            if let Some(age) = l["last_heartbeat_age_secs"].as_i64() {
+                format!(
+                    "step '{}' has not sent a heartbeat in {} — it may be stuck",
+                    step,
+                    fmt_age_secs(age)
+                )
+            } else if let Some(age) = l["dispatched_age_secs"].as_i64() {
+                format!(
+                    "step '{}' was dispatched {} ago and has never sent a heartbeat — it may be stuck",
+                    step,
+                    fmt_age_secs(age)
+                )
+            } else {
+                format!("step '{step}' may be stale")
+            }
+        })
+        .collect();
+
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "session": session,
         "mode": "hosted-mcp",
         "request": request,
         "progress": progress,
+        "running_step_liveness": running_liveness,
+        "warnings": stale_warnings,
         "workflow_state": state,
         "available_tools": [
             "agent007_workflow_status",
@@ -3887,6 +3984,16 @@ fn workflow_hosted_heartbeat(session: &str, step: &str, hint: Option<&str>) -> R
     memory_write("project", &heartbeat_key, &value).map_err(|e| {
         anyhow::anyhow!("failed to write heartbeat for step '{}': {}", step, e)
     })?;
+    // Persist liveness into workflow-state.json so the dashboard can display it.
+    let _ = with_hosted_session_lock(session, || {
+        let (store, _, _, mut state) = load_hosted_workflow_session(session)?;
+        if let Some(s) = state.steps.iter_mut().find(|s| s.id == step) {
+            s.last_heartbeat_at = Some(now.clone());
+            s.last_heartbeat_hint = Some(hint_str.to_string());
+        }
+        store.write_json_artifact(session, "workflow-state.json", &state)?;
+        Ok::<_, anyhow::Error>(())
+    });
     Ok(format!("Heartbeat recorded for step '{step}': {hint_str}"))
 }
 
