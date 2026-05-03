@@ -1648,6 +1648,33 @@ const WORKFLOW_LOG_ANALYSIS: &str = r#"name: log-analysis
 description: >
   Parallel log analysis team. Specialists run concurrently; the synthesizer
   aggregates all findings into a final report.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: false
+  mode: fail-open
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.15
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: find-errors
@@ -1691,6 +1718,7 @@ steps:
 
   - id: synthesize
     agent: Researcher
+    requires_approval: true
     prompt: |
       You are the lead analyst. Synthesize the specialist reports below into a
       single executive report with:
@@ -1715,6 +1743,33 @@ const WORKFLOW_CODE_REVIEW: &str = r#"name: code-review
 description: >
   Parallel code review team. Security, performance, and style reviewers run
   concurrently; the lead synthesizes findings.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: security-review
@@ -1779,6 +1834,7 @@ steps:
 
   - id: synthesize
     agent: CodeReviewer
+    requires_approval: true
     prompt: |
       Synthesize the three specialist reviews into a final code review report:
 
@@ -1800,6 +1856,33 @@ const WORKFLOW_SECURITY_AUDIT: &str = r#"name: security-audit
 description: >
   Deep security audit pipeline. OWASP, secrets, threat model, and dependency
   scanners run in parallel; the lead synthesizes a severity-ranked report.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: owasp-scan
@@ -1902,6 +1985,7 @@ steps:
 
   - id: synthesize
     agent: SecurityReviewer
+    requires_approval: true
     prompt: |
       Synthesize all security audit findings into a final executive report.
 
@@ -1931,6 +2015,33 @@ const WORKFLOW_SPARC: &str = r#"name: sparc
 description: >
   SPARC methodology pipeline: Spec → Pseudocode → Architecture → Refinement → Completion.
   Each phase feeds into the next.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.12
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: spec
@@ -1987,6 +2098,7 @@ steps:
 
   - id: completion
     agent: ExpertCoder
+    requires_approval: true
     prompt: |
       SPARC Phase 5 — Completion.
       Produce the final deliverable based on:
@@ -2001,6 +2113,33 @@ steps:
 const WORKFLOW_TDD: &str = r#"name: tdd
 description: >
   TDD pipeline: Red (write failing test) → Green (minimal implementation) → Blue (refactor).
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 10000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.12
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2000
+    max_retry_increase: 1.0
 
 steps:
   - id: red
@@ -2029,6 +2168,7 @@ steps:
 
   - id: blue
     agent: ExpertCoder
+    requires_approval: true
     prompt: |
       TDD Blue/Refactor Phase — refactor this implementation for quality:
       {{implementation}}
@@ -2044,6 +2184,33 @@ description: >
   Ideation-to-plan pipeline. Research → human approval → documented ideation →
   PRD → architecture (reads PRD) → documented design → project planning →
   documented milestones. PRD drives architecture so requirements shape the design.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 30
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: research
@@ -2294,6 +2461,33 @@ description: >
   implementation (full context) → human approval gate → parallel review
   (code, security, performance, gap, issues) → rework → test design →
   test coverage review → documentation → release sign-off (approval).
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 30
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: load-context
@@ -2621,6 +2815,33 @@ description: >
   PRD + ideation document written to docs/. Stops before architecture and milestones.
   Use this to capture ideas and produce a PRD before committing to the full ideation workflow.
   The generated docs serve as direct input to /agent007-workflow-ideation or /dev-architect.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: false
+  mode: fail-open
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.15
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: brainstorm

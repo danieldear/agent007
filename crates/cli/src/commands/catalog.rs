@@ -1,6 +1,7 @@
 use super::run::{agent007_global_home, agent007_project_home};
 use crate::config::Config;
 use anyhow::Result;
+use clap::ValueEnum;
 use clap::Subcommand;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -11,6 +12,9 @@ use std::sync::Arc;
 pub enum CatalogAction {
     /// Audit skills, workflows, and personas for collisions and quality-contract gaps
     Audit {
+        /// Scope to audit: project, global, or both
+        #[arg(long, value_enum, default_value_t = CatalogScope::Project)]
+        scope: CatalogScope,
         /// Return machine-readable JSON
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -18,6 +22,23 @@ pub enum CatalogAction {
         #[arg(long, default_value_t = false)]
         fail_on_warn: bool,
     },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CatalogScope {
+    Project,
+    Global,
+    Both,
+}
+
+impl CatalogScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            CatalogScope::Project => "project",
+            CatalogScope::Global => "global",
+            CatalogScope::Both => "both",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,12 +100,16 @@ impl AuditReport {
 
 pub async fn execute(_config: Arc<Config>, action: CatalogAction) -> Result<()> {
     match action {
-        CatalogAction::Audit { json, fail_on_warn } => {
-            let report = build_report();
+        CatalogAction::Audit {
+            scope,
+            json,
+            fail_on_warn,
+        } => {
+            let report = build_report(scope);
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                print_human_report(&report);
+                print_human_report(scope, &report);
             }
 
             let has_errors = report.errors() > 0;
@@ -98,14 +123,26 @@ pub async fn execute(_config: Arc<Config>, action: CatalogAction) -> Result<()> 
     Ok(())
 }
 
-fn configured_dirs(kind: &str) -> Vec<PathBuf> {
+fn configured_dirs_for_scope(kind: &str, scope: CatalogScope) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(project_home) = agent007_project_home() {
-        dirs.push(project_home.join(kind));
-    }
-    let global = agent007_global_home().join(kind);
-    if !dirs.iter().any(|d| d == &global) {
-        dirs.push(global);
+    match scope {
+        CatalogScope::Project => {
+            if let Some(project_home) = agent007_project_home() {
+                dirs.push(project_home.join(kind));
+            }
+        }
+        CatalogScope::Global => {
+            dirs.push(agent007_global_home().join(kind));
+        }
+        CatalogScope::Both => {
+            if let Some(project_home) = agent007_project_home() {
+                dirs.push(project_home.join(kind));
+            }
+            let global = agent007_global_home().join(kind);
+            if !dirs.iter().any(|d| d == &global) {
+                dirs.push(global);
+            }
+        }
     }
     dirs
 }
@@ -135,16 +172,16 @@ fn is_probably_semver(raw: &str) -> bool {
         .all(|p| p.is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())))
 }
 
-fn build_report() -> AuditReport {
+fn build_report(scope: CatalogScope) -> AuditReport {
     let mut report = AuditReport::default();
-    audit_skills(&mut report);
-    audit_workflows(&mut report);
-    audit_personas(&mut report);
+    audit_skills(scope, &mut report);
+    audit_workflows(scope, &mut report);
+    audit_personas(scope, &mut report);
     report
 }
 
-fn audit_skills(report: &mut AuditReport) {
-    let dirs = configured_dirs("skills");
+fn audit_skills(scope: CatalogScope, report: &mut AuditReport) {
+    let dirs = configured_dirs_for_scope("skills", scope);
     let mut trigger_sources: HashMap<String, Vec<String>> = HashMap::new();
 
     for dir in &dirs {
@@ -238,8 +275,8 @@ fn audit_skills(report: &mut AuditReport) {
     }
 }
 
-fn audit_workflows(report: &mut AuditReport) {
-    let dirs = configured_dirs("workflows");
+fn audit_workflows(scope: CatalogScope, report: &mut AuditReport) {
+    let dirs = configured_dirs_for_scope("workflows", scope);
     let mut name_sources: HashMap<String, Vec<String>> = HashMap::new();
 
     for dir in &dirs {
@@ -371,8 +408,8 @@ fn resolve_workflow_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.yaml"))
 }
 
-fn audit_personas(report: &mut AuditReport) {
-    let dirs = configured_dirs("personas");
+fn audit_personas(scope: CatalogScope, report: &mut AuditReport) {
+    let dirs = configured_dirs_for_scope("personas", scope);
     let registry = agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|d| d.as_path()));
     let registry = match registry {
         Ok(r) => r,
@@ -435,9 +472,10 @@ fn audit_personas(report: &mut AuditReport) {
     }
 }
 
-fn print_human_report(report: &AuditReport) {
+fn print_human_report(scope: CatalogScope, report: &AuditReport) {
     println!("agent007 catalog audit");
     println!("────────────────────");
+    println!("scope:            {}", scope.as_str());
     println!("skills loaded:    {}", report.skills_loaded);
     println!("workflows loaded: {}", report.workflows_loaded);
     println!("personas loaded:  {}", report.personas_loaded);
