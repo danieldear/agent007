@@ -124,6 +124,8 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         blocked: bool,
     },
+    /// Audit catalog quality for skills/workflows/personas
+    Catalog(CatalogArgs),
     /// Start the agent007 web dashboard server.
     #[command(name = "serve-web")]
     ServeWeb {
@@ -256,6 +258,12 @@ pub struct WorkflowArgs {
     pub action: WorkflowAction,
 }
 
+#[derive(Parser, Debug)]
+pub struct CatalogArgs {
+    #[command(subcommand)]
+    pub action: commands::catalog::CatalogAction,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -351,6 +359,7 @@ async fn main() -> anyhow::Result<()> {
             path,
             blocked,
         } => commands::audit::execute(config, last, agent, path, blocked).await,
+        Commands::Catalog(c) => commands::catalog::execute(config, c.action).await,
         Commands::ServeWeb { port } => commands::serve_web::execute(config, port).await,
         Commands::Dashboard { port } => {
             let url = format!("http://localhost:{port}");
@@ -409,6 +418,17 @@ mod tests {
     fn parse_run_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "run", "say hello"]).unwrap();
         assert!(matches!(cli.command, Commands::Run { ref task } if task == "say hello"));
+    }
+
+    #[test]
+    fn parse_catalog_audit_subcommand() {
+        let cli = Cli::try_parse_from(["agent007", "catalog", "audit", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Catalog(CatalogArgs {
+                action: commands::catalog::CatalogAction::Audit { json: true, .. }
+            })
+        ));
     }
 
     #[test]

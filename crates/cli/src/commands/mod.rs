@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod bundle;
+pub mod catalog;
 pub mod checkpoint;
 pub mod git;
 pub mod init;
