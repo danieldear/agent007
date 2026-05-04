@@ -2,6 +2,12 @@
 
 use std::path::PathBuf;
 
+fn push_unique(dirs: &mut Vec<PathBuf>, path: PathBuf) {
+    if !dirs.iter().any(|d| d == &path) {
+        dirs.push(path);
+    }
+}
+
 /// Walk up from CWD looking for a `.agent007/` directory (like git finds `.git/`).
 /// Returns `Some(path)` if found, `None` if we hit the filesystem root.
 pub fn agent007_project_home() -> Option<PathBuf> {
@@ -37,49 +43,40 @@ pub fn agent007_home() -> PathBuf {
 /// Return the ordered list of directories to search for skills (project-local first, then global).
 /// Matches the listing behaviour of the web dashboard and the CLI skill commands.
 pub fn skills_search_dirs() -> Vec<PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![PathBuf::from(home).join("skills")];
-    }
     let mut dirs = Vec::new();
-    if let Some(project) = agent007_project_home() {
-        dirs.push(project.join("skills"));
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        push_unique(&mut dirs, PathBuf::from(home).join("skills"));
+    } else if let Some(project) = agent007_project_home() {
+        push_unique(&mut dirs, project.join("skills"));
     }
     let global = agent007_global_home().join("skills");
-    if !dirs.iter().any(|d| d == &global) {
-        dirs.push(global);
-    }
+    push_unique(&mut dirs, global);
     dirs
 }
 
 /// Return the ordered list of directories to search for workflows (project-local first, then global).
 pub fn workflow_search_dirs() -> Vec<PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![PathBuf::from(home).join("workflows")];
-    }
     let mut dirs = Vec::new();
-    if let Some(project) = agent007_project_home() {
-        dirs.push(project.join("workflows"));
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        push_unique(&mut dirs, PathBuf::from(home).join("workflows"));
+    } else if let Some(project) = agent007_project_home() {
+        push_unique(&mut dirs, project.join("workflows"));
     }
     let global = agent007_global_home().join("workflows");
-    if !dirs.iter().any(|d| d == &global) {
-        dirs.push(global);
-    }
+    push_unique(&mut dirs, global);
     dirs
 }
 
 /// Return the ordered list of directories to search for personas (project-local first, then global).
 pub fn persona_search_dirs() -> Vec<PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![PathBuf::from(home).join("personas")];
-    }
     let mut dirs = Vec::new();
-    if let Some(project) = agent007_project_home() {
-        dirs.push(project.join("personas"));
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        push_unique(&mut dirs, PathBuf::from(home).join("personas"));
+    } else if let Some(project) = agent007_project_home() {
+        push_unique(&mut dirs, project.join("personas"));
     }
     let global = agent007_global_home().join("personas");
-    if !dirs.iter().any(|d| d == &global) {
-        dirs.push(global);
-    }
+    push_unique(&mut dirs, global);
     dirs
 }
 

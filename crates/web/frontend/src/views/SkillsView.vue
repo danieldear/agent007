@@ -232,7 +232,7 @@ async function openEdit(skill) {
   // Strip leading "/" for API call
   const triggerParam = skill.trigger.replace(/^\//, '')
   try {
-    const detail = await api.getSkill(triggerParam)
+    const detail = await api.getSkill(triggerParam, skill.path || null)
     if (detail) {
       form.value = {
         name: detail.name || skill.name || '',

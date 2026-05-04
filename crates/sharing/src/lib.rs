@@ -76,6 +76,7 @@ pub struct BundleBuilder {
     skills_dirs: Vec<PathBuf>,
     workflows_dirs: Vec<PathBuf>,
     tools_dirs: Vec<PathBuf>,
+    scripts_dirs: Vec<PathBuf>,
     persona_dirs: Vec<PathBuf>,
 }
 
@@ -93,6 +94,13 @@ impl BundleBuilder {
             .filter_map(|p| p.parent().map(|parent| parent.join("tools")))
             .filter(|p| seen_tools.insert(p.clone()))
             .collect();
+        // Derive scripts dirs from the parent of each skills dir, deduplicated.
+        let mut seen_scripts: HashSet<PathBuf> = HashSet::new();
+        let scripts_dirs: Vec<PathBuf> = skills_dirs
+            .iter()
+            .filter_map(|p| p.parent().map(|parent| parent.join("scripts")))
+            .filter(|p| seen_scripts.insert(p.clone()))
+            .collect();
         // Derive persona dirs from the parent of each skills dir (same home), deduplicated.
         let mut seen_personas: HashSet<PathBuf> = HashSet::new();
         let persona_dirs: Vec<PathBuf> = skills_dirs
@@ -104,6 +112,7 @@ impl BundleBuilder {
             skills_dirs,
             workflows_dirs,
             tools_dirs,
+            scripts_dirs,
             persona_dirs,
         }
     }
@@ -130,11 +139,35 @@ impl BundleBuilder {
         persona_names: &[&str],
         tool_filter: &[&str],
     ) -> Result<Bundle> {
-        let skills = self.collect_skill_assets(skill_triggers)?;
         let workflows = self.collect_workflow_assets(workflow_names)?;
+        let skills = self.collect_skill_assets_with_workflow_deps(skill_triggers, &workflows)?;
         let tools = self.collect_tools_assets(&skills, &workflows, tool_filter)?;
         let personas = self.collect_persona_assets(&skills, &workflows, persona_names)?;
         Ok(Bundle::new(skills, workflows, tools, personas))
+    }
+
+    fn collect_skill_assets_with_workflow_deps(
+        &self,
+        requested_skills: &[&str],
+        workflows: &[BundleAsset],
+    ) -> Result<Vec<BundleAsset>> {
+        let mut filter: HashSet<String> = normalize_skill_filter(requested_skills);
+        for workflow in workflows {
+            let mut refs = HashSet::new();
+            collect_workflow_skill_refs(&workflow.content, &mut refs);
+            for skill_ref in refs {
+                if skill_ref.is_empty() {
+                    continue;
+                }
+                filter.insert(skill_ref.clone());
+                filter.insert(skill_ref.trim_start_matches('/').to_string());
+            }
+        }
+        if filter.is_empty() {
+            return self.collect_skill_assets(&[]);
+        }
+        let refs: Vec<&str> = filter.iter().map(String::as_str).collect();
+        self.collect_skill_assets(&refs)
     }
 
     fn collect_skill_assets(&self, filter: &[&str]) -> Result<Vec<BundleAsset>> {
@@ -265,7 +298,7 @@ impl BundleBuilder {
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
-        if !self.tools_dirs.iter().any(|d| d.exists()) {
+        if !self.tools_dirs.iter().any(|d| d.exists()) && !self.scripts_dirs.iter().any(|d| d.exists()) {
             return Ok(Vec::new());
         }
 
@@ -288,9 +321,12 @@ impl BundleBuilder {
             collect_workflow_skill_refs(&workflow.content, &mut workflow_skill_refs);
         }
 
+        // If nothing was auto-detected and user didn't manually select tools,
+        // there is nothing to export.
         if direct_tool_refs.is_empty()
             && workflow_skill_refs.is_empty()
             && selected_skill_triggers.is_empty()
+            && explicit_filter.is_empty()
         {
             return Ok(Vec::new());
         }
@@ -303,6 +339,20 @@ impl BundleBuilder {
             if let Some(refs) = skill_tool_index.get(trigger) {
                 for tool in refs {
                     direct_tool_refs.insert(tool.clone());
+                }
+            }
+        }
+
+        // Explicit user selections must be honored even when not referenced.
+        // Accept filenames (ml/infer.py), package names (ml), or manifest stems.
+        if !explicit_filter.is_empty() {
+            for selected in &explicit_filter {
+                if selected.is_empty() {
+                    continue;
+                }
+                direct_tool_refs.insert(selected.clone());
+                if !selected.contains('/') {
+                    direct_tool_refs.insert(format!("{selected}/TOOL.yaml"));
                 }
             }
         }
@@ -340,6 +390,23 @@ impl BundleBuilder {
             if seen.contains(&rel_norm) {
                 continue;
             }
+
+            if let Some(script_rel) = rel_norm.strip_prefix("scripts/") {
+                for scripts_dir in &self.scripts_dirs {
+                    let path = scripts_dir.join(script_rel);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    seen.insert(rel_norm.clone());
+                    assets.push(BundleAsset::new(rel_norm.clone(), content));
+                    break;
+                }
+                if seen.contains(&rel_norm) {
+                    continue;
+                }
+            }
+
             // Search all tools dirs in order; use the first match.
             for tools_dir in &self.tools_dirs {
                 let path = tools_dir.join(&safe_rel);
@@ -1310,13 +1377,73 @@ mod tests {
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
         let bundle = builder.build(&["__none__"], &["train"], &[], &[]).unwrap();
 
-        assert!(
-            bundle.skills.is_empty(),
-            "did not select any skills directly"
+        assert_eq!(
+            bundle.skills.len(),
+            1,
+            "workflow export should include dependent skills"
         );
         assert_eq!(bundle.workflows.len(), 1, "expected selected workflow only");
         assert_eq!(bundle.tools.len(), 1, "expected tool from referenced skill");
         assert_eq!(bundle.tools[0].filename, "ml/predict.py");
+    }
+
+    #[test]
+    fn builder_manual_tool_selection_exports_even_without_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("ml")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---\nname: plain\ndescription: d\ntrigger: /plain\nmodel: codex\n---\nNo tool refs.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("ml").join("predict.py"),
+            "print('predict')\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(&["plain"], &["__none__"], &["__none__"], &["ml/predict.py"])
+            .unwrap();
+
+        assert_eq!(bundle.skills.len(), 1);
+        assert!(bundle.workflows.is_empty());
+        assert_eq!(bundle.tools.len(), 1);
+        assert_eq!(bundle.tools[0].filename, "ml/predict.py");
+    }
+
+    #[test]
+    fn builder_exports_scripts_from_home_scripts_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let scripts_dir = dir.path().join("scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("ml-skill.md"),
+            "---\nname: ml\ndescription: d\ntrigger: /ml-skill\nmodel: codex\n---\nRun scripts/ml_monitoring_suite.py on {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            scripts_dir.join("ml_monitoring_suite.py"),
+            "print('monitor')\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder.build(&["ml-skill"], &["__none__"], &[], &[]).unwrap();
+        assert_eq!(bundle.tools.len(), 1);
+        assert_eq!(bundle.tools[0].filename, "scripts/ml_monitoring_suite.py");
     }
 
     #[test]

@@ -75,6 +75,16 @@ const allTools = computed(() => {
                     source: w.source,
                 });
         }
+        for (const sc of w.associations?.scripts || []) {
+            const key = apiPathToBundleKey(sc);
+            if (!seen.has(key))
+                seen.set(key, {
+                    key,
+                    display: sc,
+                    type: "script",
+                    source: w.source,
+                });
+        }
     }
     return [...seen.values()];
 });
@@ -123,6 +133,8 @@ watch(
             if (!selectedWorkflows.value.includes(w.name)) continue;
             for (const t of w.associations?.tools || [])
                 auto.add(apiPathToBundleKey(t));
+            for (const sc of w.associations?.scripts || [])
+                auto.add(apiPathToBundleKey(sc));
         }
         selectedTools.value = [
             ...new Set([
@@ -758,6 +770,15 @@ async function importBundle() {
                             >
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span
+                                        v-if="selectedSkills.length"
+                                        class="badge badge-primary badge-sm font-mono"
+                                        >{{ selectedSkills.length }} skill{{
+                                            selectedSkills.length !== 1
+                                                ? "s"
+                                                : ""
+                                        }}</span
+                                    >
+                                    <span
                                         v-if="selectedWorkflows.length"
                                         class="badge badge-secondary badge-sm font-mono"
                                         >{{
@@ -789,6 +810,7 @@ async function importBundle() {
                                     >
                                     <span
                                         v-if="
+                                            !selectedSkills.length &&
                                             !selectedWorkflows.length &&
                                             !selectedPersonas.length &&
                                             !selectedTools.length

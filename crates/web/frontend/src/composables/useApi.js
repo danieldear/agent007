@@ -47,7 +47,12 @@ export function useApi() {
     // Skills
     listSkills: () => fetchJson('/api/skills'),
     saveSkill: (data) => fetchJson('/api/skills', { method: 'POST', body: JSON.stringify(data) }),
-    getSkill: (trigger) => fetchJson(`/api/skills/detail/${encodeURIComponent(trigger)}`),
+    getSkill: (trigger, path = null) => {
+      const qs = new URLSearchParams()
+      if (path) qs.set('path', path)
+      const suffix = qs.toString() ? `?${qs.toString()}` : ''
+      return fetchJson(`/api/skills/detail/${encodeURIComponent(trigger)}${suffix}`)
+    },
     importSkill: (url) => fetchJson('/api/skills/import', { method: 'POST', body: JSON.stringify({ url }) }),
     deleteSkill: (trigger) => fetchJson(`/api/skills/${encodeURIComponent(trigger.replace(/^\//, ''))}`, { method: 'DELETE' }),
     getRegistry: () => fetchJson('/api/skill-registry'),

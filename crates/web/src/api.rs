@@ -2467,8 +2467,10 @@ pub async fn workflow_template_get_handler(Path(name): Path<String>) -> impl Int
 pub async fn skill_get_handler(
     State(_state): State<AppState>,
     Path(trigger): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let target_trigger = format!("/{trigger}");
+    let target_path = params.get("path").cloned();
 
     // Search project-local first, then global — same order as the list endpoint.
     let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
@@ -2476,6 +2478,35 @@ pub async fn skill_get_handler(
         search_dirs.push(p.join("skills"));
     }
     search_dirs.push(agent007_global_home().join("skills"));
+
+    // If caller provided a concrete path, honor it first to avoid
+    // trigger-collision ambiguity between project/global variants.
+    if let Some(path_hint) = target_path {
+        let normalized_hint = path_hint.replace('\\', "/");
+        for skills_dir in &search_dirs {
+            for skill in load_skills_from_dir(skills_dir) {
+                if skill.trigger() != target_trigger {
+                    continue;
+                }
+                let entry = skill.entry_path().to_string_lossy().replace('\\', "/");
+                if entry != normalized_hint {
+                    continue;
+                }
+                let mut result = skill_json(&skill, "custom");
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "template".to_string(),
+                        serde_json::Value::String(skill.template().to_string()),
+                    );
+                    if skill.is_package() {
+                        let files = list_package_files(skill.entry_path());
+                        obj.insert("files".to_string(), serde_json::json!(files));
+                    }
+                }
+                return Json(result).into_response();
+            }
+        }
+    }
 
     for skills_dir in &search_dirs {
         for skill in load_skills_from_dir(skills_dir) {
