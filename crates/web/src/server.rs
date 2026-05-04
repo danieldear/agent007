@@ -214,6 +214,7 @@ impl WebServer {
             )
             .route("/api/tools/{name}/test", post(api::tool_test_handler))
             .route("/api/tools/{name}/approve", post(api::tool_approve_handler))
+            .route("/api/scripts", get(api::scripts_list_handler))
             .route("/api/bundle/export", get(api::bundle_export_handler))
             .route("/api/bundle/import", post(api::bundle_import_handler))
             // MCP server registry

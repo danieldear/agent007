@@ -8,6 +8,8 @@ const { api } = useApi();
 const skills = ref([]);
 const workflows = ref([]);
 const personas = ref([]);
+const registryTools = ref([]); // tools from the tool registry (ToolsView)
+const registryScripts = ref([]); // script files from .agent007/scripts/
 
 // ─── export state ────────────────────────────────────────────────────────────
 const selectedSkills = ref([]);
@@ -42,6 +44,35 @@ function apiPathToBundleKey(path) {
 
 const allTools = computed(() => {
     const seen = new Map();
+
+    // 1. Registry tools — actual packages/files in .agent007/tools/ (exist on disk).
+    for (const t of registryTools.value) {
+        const key = t.name.toLowerCase();
+        if (!seen.has(key))
+            seen.set(key, {
+                key,
+                display: `${t.name} · ${t.scope}`,
+                type: "tool",
+                realFile: true,
+                source: t.source,
+            });
+    }
+
+    // 2. Registry scripts — actual .py/.sh/etc files in .agent007/scripts/ (exist on disk).
+    for (const s of registryScripts.value) {
+        const key = s.bundle_key; // already "scripts/rel/path.py"
+        if (!seen.has(key))
+            seen.set(key, {
+                key,
+                display: `${s.rel_path} · ${s.scope}`,
+                type: "script",
+                realFile: true,
+                source: s.scope,
+            });
+    }
+
+    // 3. Tools/scripts mentioned in skill/workflow text (may or may not exist on disk).
+    //    These are lower priority — only added if not already covered by real files above.
     for (const s of skills.value) {
         for (const t of s.associations?.tools || []) {
             const key = apiPathToBundleKey(t);
@@ -50,6 +81,7 @@ const allTools = computed(() => {
                     key,
                     display: t,
                     type: "tool",
+                    realFile: false,
                     source: s.source,
                 });
         }
@@ -60,6 +92,7 @@ const allTools = computed(() => {
                     key,
                     display: sc,
                     type: "script",
+                    realFile: false,
                     source: s.source,
                 });
         }
@@ -72,6 +105,7 @@ const allTools = computed(() => {
                     key,
                     display: t,
                     type: "tool",
+                    realFile: false,
                     source: w.source,
                 });
         }
@@ -82,17 +116,24 @@ const allTools = computed(() => {
                     key,
                     display: sc,
                     type: "script",
+                    realFile: false,
                     source: w.source,
                 });
         }
     }
-    return [...seen.values()];
+    // Sort: real files first, then associations
+    return [...seen.values()].sort((a, b) => {
+        if (a.realFile !== b.realFile) return a.realFile ? -1 : 1;
+        return a.key.localeCompare(b.key);
+    });
 });
 
-const allToolsSelected = computed(
-    () =>
-        allTools.value.length > 0 &&
-        selectedTools.value.length === allTools.value.length,
+const allToolsSelected = computed(() => {
+    const keys = allTools.value.map((t) => t.key);
+    return (
+        keys.length > 0 && keys.every((k) => selectedTools.value.includes(k))
+    );
+},
 );
 
 function toggleAllSkills() {
@@ -181,10 +222,12 @@ const isImportDragActive = ref(false);
 
 // ─── load data ────────────────────────────────────────────────────────────────
 onMounted(async () => {
-    const [sk, wf, ps] = await Promise.all([
+    const [sk, wf, ps, tl, sl] = await Promise.all([
         api.listSkills(),
         api.listWorkflows(),
         api.listPersonas(),
+        api.listTools().catch(() => []),
+        api.listScripts().catch(() => []),
     ]);
     if (sk) {
         skills.value = sk;
@@ -197,6 +240,19 @@ onMounted(async () => {
     if (ps) {
         personas.value = ps;
         selectedPersonas.value = ps.map((p) => p.name);
+    }
+    // Auto-select all real tools and scripts that actually exist on disk.
+    const autoToolKeys = [];
+    if (Array.isArray(tl) && tl.length) {
+        registryTools.value = tl;
+        autoToolKeys.push(...tl.map((t) => t.name.toLowerCase()));
+    }
+    if (Array.isArray(sl) && sl.length) {
+        registryScripts.value = sl;
+        autoToolKeys.push(...sl.map((s) => s.bundle_key));
+    }
+    if (autoToolKeys.length) {
+        selectedTools.value = [...new Set([...selectedTools.value, ...autoToolKeys])];
     }
 });
 
@@ -705,7 +761,7 @@ async function importBundle() {
                                     >
                                         <span
                                             class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/45"
-                                            >🛠 Tools</span
+                                            >🛠 Tools &amp; Scripts</span
                                         >
                                         <label
                                             class="flex items-center gap-1.5 cursor-pointer"
@@ -730,7 +786,7 @@ async function importBundle() {
                                             v-if="!allTools.length"
                                             class="text-[11px] text-base-content/30 italic px-3 py-2.5"
                                         >
-                                            No tools detected
+                                            No tools found — import tools in the Tools tab
                                         </div>
                                         <label
                                             v-for="t in allTools"
@@ -744,16 +800,30 @@ async function importBundle() {
                                                 v-model="selectedTools"
                                             />
                                             <div class="flex-1 min-w-0">
-                                                <div
-                                                    class="text-[12px] font-mono truncate"
-                                                    :title="t.key"
-                                                >
-                                                    {{ compactRef(t.key) }}
+                                                <div class="flex items-center gap-1.5 min-w-0">
+                                                    <span
+                                                        class="text-[12px] font-mono truncate"
+                                                        :title="t.key"
+                                                    >{{ compactRef(t.key) }}</span>
+                                                    <span
+                                                        v-if="t.type === 'script'"
+                                                        class="badge badge-xs badge-warning shrink-0"
+                                                    >script</span>
+                                                    <span
+                                                        v-else-if="t.type === 'tool'"
+                                                        class="badge badge-xs badge-info shrink-0"
+                                                    >tool</span>
+                                                    <span
+                                                        v-if="!t.realFile"
+                                                        class="badge badge-xs badge-ghost shrink-0 opacity-50"
+                                                        title="Reference only — file not found on disk"
+                                                    >ref</span>
                                                 </div>
                                                 <div
-                                                    class="text-[10px] text-base-content/45 mt-0.5 truncate"
+                                                    class="text-[10px] mt-0.5 truncate"
+                                                    :class="t.realFile ? 'text-base-content/45' : 'text-warning/60'"
                                                 >
-                                                    {{ t.display }}
+                                                    {{ t.realFile ? t.display : '⚠ file not found on disk' }}
                                                 </div>
                                             </div>
                                         </label>

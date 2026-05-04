@@ -3613,6 +3613,91 @@ pub async fn tools_discover_handler(State(_state): State<AppState>) -> impl Into
     Json(serde_json::json!({ "tools": discovered })).into_response()
 }
 
+/// `GET /api/scripts` — list script files from project and global scripts/ directories.
+/// Returns each script with its relative path (relative to the scripts/ dir) and scope.
+pub async fn scripts_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+
+    let mut script_dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    if let Some(ref ph) = project_home {
+        script_dirs.push(("project".to_string(), ph.join("scripts")));
+    }
+    script_dirs.push(("global".to_string(), global_home.join("scripts")));
+
+    let script_exts: std::collections::HashSet<&str> = [
+        "py", "sh", "bash", "zsh", "rb", "js", "mjs", "cjs", "ts", "pl", "ps1", "bat", "cmd",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (scope, dir) in &script_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        // Walk directory recursively.
+        fn walk(
+            base: &std::path::Path,
+            current: &std::path::Path,
+            scope: &str,
+            exts: &std::collections::HashSet<&str>,
+            seen: &mut std::collections::HashSet<String>,
+            results: &mut Vec<serde_json::Value>,
+        ) {
+            let entries = match std::fs::read_dir(current) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(base, &path, scope, exts, seen, results);
+                } else if path.is_file() {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if !exts.contains(ext.as_str()) {
+                        continue;
+                    }
+                    let rel = match path.strip_prefix(base) {
+                        Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                        Err(_) => continue,
+                    };
+                    // Bundle key is "scripts/<rel>" to match what associations track.
+                    let bundle_key = format!("scripts/{rel}");
+                    if !seen.insert(bundle_key.clone()) {
+                        continue; // project takes precedence over global
+                    }
+                    let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                    results.push(serde_json::json!({
+                        "bundle_key": bundle_key,
+                        "name": path.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+                        "rel_path": rel,
+                        "scope": scope,
+                        "size_bytes": size,
+                    }));
+                }
+            }
+        }
+        walk(dir, dir, scope, &script_exts, &mut seen, &mut results);
+    }
+
+    results.sort_by(|a, b| {
+        a["bundle_key"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["bundle_key"].as_str().unwrap_or_default())
+    });
+
+    Json(serde_json::json!(results)).into_response()
+}
+
 /// `POST /api/tools/import` — import tool wrappers from local paths or remote providers.
 pub async fn tool_import_handler(
     State(_state): State<AppState>,

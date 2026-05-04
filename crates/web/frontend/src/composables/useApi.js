@@ -117,18 +117,26 @@ export function useApi() {
     // Sharing — bundle export (returns raw Response so caller can stream blob)
     exportBundle: (skills, workflows, personas, tools) => {
       const params = new URLSearchParams()
-      // Always include all params so explicit empty selection is preserved.
-      // Backend treats missing params as "include all" for backward compatibility.
       params.set('skills', Array.isArray(skills) ? skills.join(',') : '')
       params.set('workflows', Array.isArray(workflows) ? workflows.join(',') : '')
       params.set('personas', Array.isArray(personas) ? personas.join(',') : '')
-      params.set('tools', Array.isArray(tools) ? tools.join(',') : '')
+      // Only send tools param when the caller has an explicit selection.
+      // Omitting it entirely tells the backend to auto-include all tools on disk
+      // (backward-compatible "include all" path).  Sending an empty string would
+      // be interpreted as __none__ (include nothing), which is wrong for the case
+      // where the user simply hasn't interacted with the tools picker.
+      if (Array.isArray(tools) && tools.length > 0) {
+        params.set('tools', tools.join(','))
+      }
       return fetch(BASE + `/api/bundle/export?${params}`)
     },
 
     // Sharing — bundle import
     importBundle: (bundle, overwrite) =>
       fetchJson('/api/bundle/import', { method: 'POST', body: JSON.stringify({ bundle, overwrite }) }),
+
+    // Scripts (files in .agent007/scripts/)
+    listScripts: () => fetchJson('/api/scripts'),
 
     // Tool Registry
     listTools: () => fetchJson('/api/tools'),
