@@ -6,6 +6,9 @@ import DashboardView from './views/DashboardView.vue'
 import AgentsView from './views/AgentsView.vue'
 import SkillsView from './views/SkillsView.vue'
 import WorkflowsView from './views/WorkflowsView.vue'
+import ToolsView from './views/ToolsView.vue'
+import McpView from './views/McpView.vue'
+import ExtensionsView from './views/ExtensionsView.vue'
 import MemoryView from './views/MemoryView.vue'
 import SharingView from './views/SharingView.vue'
 import HelpView from './views/HelpView.vue'
@@ -18,6 +21,9 @@ const views = {
   agents: AgentsView,
   skills: SkillsView,
   workflows: WorkflowsView,
+  tools: ToolsView,
+  mcp: McpView,
+  extensions: ExtensionsView,
   memory: MemoryView,
   sharing: SharingView,
   help: HelpView,

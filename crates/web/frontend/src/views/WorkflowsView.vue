@@ -27,6 +27,28 @@ const promotingWorkflow = ref(null)
 const deletingWorkflow = ref(null)
 const showNodeGuide = ref(false)
 
+// ── resizable sidebar ────────────────────────────────────────────────────
+const sidebarWidth = ref(224) // default w-56 = 224px
+const isResizing = ref(false)
+
+function startResize(e) {
+  isResizing.value = true
+  const startX = e.clientX
+  const startW = sidebarWidth.value
+
+  function onMove(ev) {
+    const delta = ev.clientX - startX
+    sidebarWidth.value = Math.min(400, Math.max(160, startW + delta))
+  }
+  function onUp() {
+    isResizing.value = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 let wfToastTimer = null
 function showWfToast(message, type = 'success') {
   clearTimeout(wfToastTimer)
@@ -144,6 +166,14 @@ onMounted(async () => {
   if (ps) personas.value = ps
   if (tpl) templates.value = tpl
 })
+
+function workflowScopeChips(item) {
+  const variants = Array.isArray(item?.variants) ? item.variants : []
+  if (!variants.length) {
+    return [item?.source === 'global' ? 'global' : 'proj']
+  }
+  return variants.map(v => (v?.source === 'global' ? 'global' : 'proj'))
+}
 
 onConnect((params) => {
   const sourceNode = nodes.value.find(n => n.id === params.source)
@@ -498,7 +528,7 @@ async function loadTemplate(tplName) {
 </script>
 
 <template>
-  <div class="flex flex-col h-full" @click="hideContextMenu">
+  <div class="flex flex-col h-full" :class="{ 'select-none': isResizing }" @click="hideContextMenu">
     <!-- Toast -->
     <div v-if="wfToast" class="toast toast-top toast-end z-50 pointer-events-none">
       <div class="alert alert-sm shadow-lg" :class="{
@@ -642,31 +672,52 @@ async function loadTemplate(tplName) {
     </div>
 
     <div class="flex flex-1 overflow-hidden">
-      <div class="w-56 bg-base-200 border-r border-base-300 flex flex-col shrink-0 overflow-auto">
+      <!-- resizable sidebar -->
+      <div
+        class="bg-base-200 border-r border-base-300 flex flex-col shrink-0 overflow-auto relative"
+        :style="{ width: sidebarWidth + 'px' }"
+      >
         <div class="p-3 border-b border-base-300">
           <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40 mb-2">Workflows</div>
-          <div class="space-y-1">
-            <div v-for="w in workflows" :key="w.name" class="flex items-center gap-0.5 group/wf">
+          <div class="space-y-0.5">
+            <div v-for="w in workflows" :key="w.name" class="group/wf relative">
               <button
-                class="btn btn-ghost btn-xs justify-start flex-1 font-mono text-xs overflow-hidden"
-                :class="{ 'border-l-2 border-primary text-primary': selectedWorkflow === w.name }"
+                class="w-full text-left px-2 py-2 rounded font-mono text-xs transition-colors"
+                :class="selectedWorkflow === w.name
+                  ? 'bg-primary/10 text-primary border-l-2 border-primary pl-1.5'
+                  : 'hover:bg-base-300/50 text-base-content/80'"
+                :title="w.name"
                 @click="loadWorkflow(w.name)"
-              >{{ w.name }}</button>
-              <button
-                v-if="w.source === 'project'"
-                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-60 hover:!opacity-100 transition-opacity shrink-0 font-mono"
-                :class="{ 'loading loading-spinner': promotingWorkflow === w.name }"
-                :disabled="promotingWorkflow === w.name"
-                title="Copy to global ~/.agent007/workflows/"
-                @click.stop="promoteWorkflow(w.name)"
-              >↑</button>
-              <button
-                class="btn btn-ghost btn-xs px-1 text-xs opacity-0 group-hover/wf:opacity-100 hover:!opacity-100 transition-opacity shrink-0 font-mono text-error/60 hover:text-error"
-                :class="{ 'loading loading-spinner': deletingWorkflow === w.name }"
-                :disabled="deletingWorkflow === w.name"
-                title="Delete this workflow"
-                @click.stop="deleteWorkflow(w.name)"
-              >✕</button>
+              >
+                <!-- name: full, wraps to 2 lines -->
+                <span class="block leading-snug break-all line-clamp-2 pr-8">{{ w.name }}</span>
+                <!-- scope chips on second row -->
+                <span class="flex items-center gap-1 mt-1">
+                  <span
+                    v-for="chip in workflowScopeChips(w)"
+                    :key="`${w.name}:${chip}`"
+                    class="text-[9px] font-mono uppercase tracking-wider px-1 py-0.5 rounded border border-base-content/20 text-base-content/50 bg-base-content/5"
+                  >{{ chip }}</span>
+                </span>
+              </button>
+              <!-- hover actions — top-right corner of the row -->
+              <div class="absolute top-1.5 right-1 flex gap-0.5 opacity-0 group-hover/wf:opacity-100 transition-opacity">
+                <button
+                  v-if="w.source === 'project'"
+                  class="btn btn-ghost btn-xs px-1 font-mono text-base-content/50 hover:text-warning"
+                  :class="{ 'loading loading-spinner': promotingWorkflow === w.name }"
+                  :disabled="promotingWorkflow === w.name"
+                  title="Promote to global ~/.agent007/workflows/"
+                  @click.stop="promoteWorkflow(w.name)"
+                >↑</button>
+                <button
+                  class="btn btn-ghost btn-xs px-1 font-mono text-base-content/40 hover:text-error"
+                  :class="{ 'loading loading-spinner': deletingWorkflow === w.name }"
+                  :disabled="deletingWorkflow === w.name"
+                  title="Delete workflow"
+                  @click.stop="deleteWorkflow(w.name)"
+                >✕</button>
+              </div>
             </div>
           </div>
           <div v-if="!workflows.length" class="text-[11px] font-mono text-base-content/30">no workflows</div>
@@ -710,6 +761,14 @@ async function loadTemplate(tplName) {
           </div>
         </div>
       </div>
+
+      <!-- drag handle -->
+      <div
+        class="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10"
+        :class="isResizing ? 'bg-primary/60' : 'bg-base-300'"
+        @mousedown.prevent="startResize"
+        title="Drag to resize"
+      />
 
       <div class="flex-1 relative">
         <VueFlow

@@ -4,7 +4,7 @@ use axum::{
     extract::Path as AxumPath,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use tokio_util::sync::CancellationToken;
@@ -17,6 +17,7 @@ use agent007_workflows::WorkflowRunner;
 use crate::api;
 use crate::dashboard::{load_dist_file, load_dist_index_html, DASHBOARD_HTML};
 use crate::error::WebError;
+use crate::extensions_api;
 use crate::metrics::{self, MetricsState};
 use crate::ws;
 
@@ -190,6 +191,7 @@ impl WebServer {
                 get(api::workflow_template_get_handler),
             )
             .route("/api/memory/{scope}", get(api::memory_list_handler))
+            .route("/api/memory/{scope}/stats", get(api::memory_stats_handler))
             .route("/api/memory/{scope}/{key}", get(api::memory_get_handler))
             .route(
                 "/api/skills/{trigger}/promote",
@@ -199,8 +201,61 @@ impl WebServer {
                 "/api/workflows/{name}/promote",
                 post(api::workflow_promote_handler),
             )
+            .route(
+                "/api/tools",
+                get(api::tools_list_handler).post(api::tool_save_handler),
+            )
+            .route("/api/tools/search", get(api::tools_search_handler))
+            .route("/api/tools/discover", get(api::tools_discover_handler))
+            .route("/api/tools/import", post(api::tool_import_handler))
+            .route(
+                "/api/tools/{name}",
+                get(api::tool_get_handler).delete(api::tool_delete_handler),
+            )
+            .route("/api/tools/{name}/test", post(api::tool_test_handler))
+            .route("/api/tools/{name}/approve", post(api::tool_approve_handler))
             .route("/api/bundle/export", get(api::bundle_export_handler))
             .route("/api/bundle/import", post(api::bundle_import_handler))
+            // MCP server registry
+            .route(
+                "/api/mcp/servers",
+                get(api::mcp_list_handler).post(api::mcp_add_handler),
+            )
+            .route("/api/mcp/servers/{name}", delete(api::mcp_delete_handler))
+            .route(
+                "/api/mcp/servers/{name}/connect",
+                post(api::mcp_connect_handler),
+            )
+            .route(
+                "/api/mcp/servers/{name}/approve",
+                post(api::mcp_approve_handler),
+            )
+            .route("/api/mcp/servers/{name}/tools", get(api::mcp_tools_handler))
+            // RAG sources
+            .route(
+                "/api/rag/sources",
+                get(api::rag_list_handler).post(api::rag_add_handler),
+            )
+            .route(
+                "/api/rag/sources/{id}/reindex",
+                post(api::rag_reindex_handler),
+            )
+            .route("/api/rag/sources/{id}", delete(api::rag_delete_handler))
+            .route("/api/rag/query", get(api::rag_query_handler))
+            // Extensions
+            .route(
+                "/api/extensions/preview",
+                post(extensions_api::preview_handler),
+            )
+            .route(
+                "/api/extensions/install",
+                post(extensions_api::install_handler),
+            )
+            .route(
+                "/api/extensions/uninstall",
+                post(extensions_api::uninstall_handler),
+            )
+            .route("/api/extensions/list", get(extensions_api::list_handler))
             .route("/assets/{*path}", get(asset_handler))
             .with_state(self.state)
     }

@@ -5,6 +5,7 @@ description: Identify code smells and propose targeted improvements
 model: claude-sonnet-4-6
 category: code
 version: "1.1.0"
+tags: ["refactor", "code-quality", "maintainability"]
 ---
 
 You are reviewing existing code for refactoring opportunities.

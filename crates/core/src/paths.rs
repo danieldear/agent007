@@ -37,7 +37,13 @@ pub fn agent007_home() -> PathBuf {
 /// Return the ordered list of directories to search for skills (project-local first, then global).
 /// Matches the listing behaviour of the web dashboard and the CLI skill commands.
 pub fn skills_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![agent007_write_home().join("skills")];
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![PathBuf::from(home).join("skills")];
+    }
+    let mut dirs = Vec::new();
+    if let Some(project) = agent007_project_home() {
+        dirs.push(project.join("skills"));
+    }
     let global = agent007_global_home().join("skills");
     if !dirs.iter().any(|d| d == &global) {
         dirs.push(global);

@@ -1,7 +1,10 @@
 use crate::commands::slash_commands::sync_claude_slash_commands_for_home;
 use crate::config::Config;
 use crate::BundleAction;
-use agent007_core::paths::{agent007_global_home, agent007_write_home, persona_search_dirs, skills_search_dirs, workflow_search_dirs};
+use agent007_core::paths::{
+    agent007_global_home, agent007_write_home, persona_search_dirs, skills_search_dirs,
+    workflow_search_dirs,
+};
 use agent007_sharing::{Bundle, BundleBuilder, BundleImporter};
 use anyhow::Result;
 use std::sync::Arc;

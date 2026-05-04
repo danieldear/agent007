@@ -1,8 +1,8 @@
 # Product Requirements Document: agent007
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Current State (as-built)  
-**Last Updated:** 2025-07  
+**Last Updated:** 2026-05-03  
 **Owner:** agent007 project maintainers
 
 ---
@@ -44,7 +44,17 @@ agent007 ships as a single Rust binary that acts simultaneously as:
 - A **web dashboard** (port 8007) for real-time monitoring and management
 - An **integration bridge** that auto-configures Claude Code, Cursor, Codex, GitHub Copilot, and Zed
 
-The system is composed of 18 focused crates: `cli`, `core`, `models`, `memory`, `skills`, `hooks`, `learning`, `personas`, `workflows`, `mcp`, `tui`, `web`, `ide-bridge`, `zones`, `git-agent`, `custom-agents`, `testing`, and `simulation`.
+The system is composed of 22 focused crates, including newer extension and collaboration/runtime surfaces (`extensions`, `sharing`, `p2p`, and others in the workspace).
+
+### 2026-05-03 Addendum
+
+Recent baseline additions now included in the product surface:
+
+1. Extension platform (`preview/install/list`) with adapters for local, GitHub, npm MCP, OpenAPI, and marketplace-style sources.
+2. MCP server registry and RAG source management APIs exposed in the dashboard.
+3. Tool registry search/import/test/approve lifecycle.
+4. Memory observability stats endpoint and dashboard visibility.
+5. Runtime learning workers active in both CLI `run` and `serve` flows.
 
 ---
 

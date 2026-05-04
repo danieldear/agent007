@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
+use futures::StreamExt as _;
 use reqwest::blocking::Client as BlockingHttpClient;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +22,10 @@ use agent007_core::types::PromptStore;
 use agent007_hooks::{HookConfig, HookExecutor};
 use agent007_learning::scorer::RewardWeights;
 use agent007_learning::store::LearningStore;
-use agent007_learning::{FeedbackCollector, LearningDispatcher, RewardScorer};
+use agent007_learning::{
+    FeedbackCollector, InsightConfig, InsightGenerator, LearningDispatcher, PromptOptimizer,
+    RewardScorer,
+};
 use agent007_mcp::{McpClient, McpServerConfig};
 use agent007_memory::store::{MemoryEntryType, MemoryMeta, MemoryStore};
 use agent007_memory::vectordb::LanceDBStore;
@@ -32,7 +36,7 @@ use agent007_models::{
     OllamaEmbeddingProvider, OllamaProvider,
 };
 use agent007_personas::PersonaRegistry;
-use agent007_skills::SkillExecutor;
+use agent007_skills::{SkillExecutor, SkillLoader};
 use agent007_tui::{App, EventLoop};
 use agent007_zones::{AuditLogger, ZoneChecker, ZoneConfig};
 
@@ -44,12 +48,15 @@ pub struct Stack {
     pub dispatcher: Arc<LocalDispatcher>,
     pub run_store: Arc<RunStore>,
     pub memory_store: Arc<MemoryStore>,
+    pub learning_store: Arc<LearningStore>,
     pub hook_executor: Arc<HookExecutor>,
     pub mcp_client: Arc<AsyncMutex<McpClient>>,
     pub feedback_collector: Arc<FeedbackCollector>,
     pub learning_dispatcher: Arc<LearningDispatcher>,
+    pub prompt_optimizer: Option<Arc<PromptOptimizer>>,
     pub model_router: Arc<ModelRouter>,
     pub skill_executor: Arc<SkillExecutor>,
+    pub skills_dir: std::path::PathBuf,
     pub rag_warmup_indexed_docs: usize,
     pub persona_registry: Arc<PersonaRegistry>,
     pub orchestrator: Arc<OrchestratorAgent>,
@@ -437,10 +444,15 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     // 5. Learning dispatcher — new() returns Self, wrap in Arc
     let learning_dispatcher = Arc::new(LearningDispatcher::new(512));
 
-    // 6. Learning store — scoped() requires &Arc<MemoryStore>
-    let learning_store = LearningStore::new(memory_store.scoped("learning"));
+    // 6. Learning store shared with runtime workers
+    let learning_store = Arc::new(LearningStore::new(memory_store.scoped("learning")));
 
-    // 7. Reward scorer
+    // 7. ModelRouter — use MockProvider if AGENT007_DRY_RUN=1, else real provider
+    let is_dry_run = is_dry_run();
+    let model_router = build_model_router(config, is_dry_run);
+    let model_router = Arc::new(model_router);
+
+    // 8. Reward scorer
     let reward_weights = RewardWeights {
         completion: config.learning.reward_weights.completion,
         user_rating: config.learning.reward_weights.user_rating,
@@ -449,18 +461,26 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
     };
     let scorer = RewardScorer::new(reward_weights);
 
-    // 8. Feedback collector
-    let feedback_collector = Arc::new(FeedbackCollector::new(
+    // 9. Feedback collector (+ optional auto-insight generation)
+    let mut feedback_collector = FeedbackCollector::new(
         dispatcher.clone() as Arc<dyn agent007_core::dispatcher::Dispatcher>,
-        learning_store,
+        LearningStore::new(memory_store.scoped("learning")),
         scorer,
         learning_dispatcher.clone(),
-    ));
-
-    // 9. ModelRouter — use MockProvider if AGENT007_DRY_RUN=1, else real ClaudeProvider
-    let is_dry_run = is_dry_run();
-    let model_router = build_model_router(config, is_dry_run);
-    let model_router = Arc::new(model_router);
+    );
+    if config.learning.enabled {
+        let insight_cfg = InsightConfig {
+            insight_model: config.learning.optimizer_model.clone(),
+            ..InsightConfig::default()
+        };
+        let insight_generator = Arc::new(InsightGenerator::new(
+            insight_cfg,
+            model_router.clone() as Arc<dyn ModelProvider>,
+            memory_store.scoped("project"),
+        ));
+        feedback_collector = feedback_collector.with_insight_generator(insight_generator);
+    }
+    let feedback_collector = Arc::new(feedback_collector);
 
     // 10. SkillExecutor — needs Retriever (EmbeddingProvider + VectorDB) + ScopedMemoryStore
     let skills_dir = home.join("skills");
@@ -489,6 +509,23 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         .with_router(model_router.clone())
         .with_lsp_categories(lsp_categories);
     let skill_executor = Arc::new(skill_executor);
+
+    // 10b. Prompt optimizer runtime (optional)
+    let prompt_optimizer = if config.learning.enabled {
+        let optimizer = PromptOptimizer::new(
+            agent007_learning::optimizer::OptimizerConfig {
+                threshold: config.learning.optimizer_threshold,
+                trigger_count: config.learning.optimizer_trigger_count,
+                optimizer_model: config.learning.optimizer_model.clone(),
+            },
+            model_router.clone() as Arc<dyn ModelProvider>,
+            learning_dispatcher.clone(),
+        )
+        .with_skills_dir(skills_dir.clone());
+        Some(Arc::new(optimizer))
+    } else {
+        None
+    };
 
     // 11. PersonaRegistry — load built-ins + user overrides from ~/.agent007/personas/
     let persona_registry = Arc::new(configured_persona_registry());
@@ -541,12 +578,15 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         dispatcher,
         run_store,
         memory_store,
+        learning_store,
         hook_executor,
         mcp_client,
         feedback_collector,
         learning_dispatcher,
+        prompt_optimizer,
         model_router,
         skill_executor,
+        skills_dir,
         rag_warmup_indexed_docs,
         persona_registry,
         orchestrator,
@@ -992,6 +1032,219 @@ fn generate_auto_insights(
     }
 }
 
+fn skill_name_aliases(skill_name: &str) -> Vec<String> {
+    let raw = skill_name.trim();
+    let trimmed = raw.trim_start_matches('/');
+    vec![
+        raw.to_string(),
+        trimmed.to_string(),
+        format!("/{trimmed}"),
+        trimmed.replace('_', "-"),
+        trimmed.replace('-', "_"),
+    ]
+}
+
+fn resolve_skill_template(
+    skill_name: &str,
+    preferred_skills_dir: &std::path::Path,
+) -> Option<String> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    dirs.push(preferred_skills_dir.to_path_buf());
+    if let Some(project_home) = agent007_project_home() {
+        let project_dir = project_home.join("skills");
+        if !dirs.iter().any(|d| d == &project_dir) {
+            dirs.push(project_dir);
+        }
+    }
+    let global_dir = agent007_global_home().join("skills");
+    if !dirs.iter().any(|d| d == &global_dir) {
+        dirs.push(global_dir);
+    }
+
+    let aliases = skill_name_aliases(skill_name);
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+        let Ok(skills) = SkillLoader::new(&dir).load_all() else {
+            continue;
+        };
+        for skill in skills {
+            let trigger = skill.trigger();
+            let name = skill.name();
+            if aliases.iter().any(|a| a == trigger || a == name) {
+                return Some(skill.template().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn average_recent_reward(store: &LearningStore, skill_name: &str, sample: usize) -> f32 {
+    let Ok(entries) = store.list_recent_feedback(skill_name, sample) else {
+        return 0.0;
+    };
+    let rewards: Vec<f32> = entries.into_iter().filter_map(|e| e.reward).collect();
+    if rewards.is_empty() {
+        return 0.0;
+    }
+    rewards.iter().sum::<f32>() / rewards.len() as f32
+}
+
+async fn run_prompt_optimizer_pass(
+    optimizer: &PromptOptimizer,
+    store: &LearningStore,
+    learning_dispatcher: &LearningDispatcher,
+    skills_dir: &std::path::Path,
+    project_scope: &agent007_memory::store::ScopedMemoryStore,
+    last_optimized: &mut HashMap<String, Instant>,
+    min_interval: Duration,
+) {
+    let mut skills = match store.list_skill_names() {
+        Ok(skills) => skills,
+        Err(e) => {
+            tracing::warn!(error = %e, "optimizer: failed to list skill names");
+            return;
+        }
+    };
+    skills.sort();
+    skills.dedup();
+
+    let mut optimized = 0usize;
+    let mut scanned = 0usize;
+
+    for skill_name in skills {
+        scanned += 1;
+        if let Some(last) = last_optimized.get(&skill_name) {
+            if last.elapsed() < min_interval {
+                continue;
+            }
+        }
+
+        let Some(prompt) = resolve_skill_template(&skill_name, skills_dir) else {
+            tracing::debug!(skill = skill_name, "optimizer: prompt template not found");
+            continue;
+        };
+
+        let before_versions = store
+            .get_prompt_versions(&skill_name)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let old_reward = average_recent_reward(store, &skill_name, 20);
+
+        match optimizer.maybe_optimize(&skill_name, store, &prompt).await {
+            Ok(()) => {
+                let after_versions = store
+                    .get_prompt_versions(&skill_name)
+                    .map(|v| v.len())
+                    .unwrap_or(before_versions);
+                if after_versions > before_versions {
+                    optimized += 1;
+                    let _ = learning_dispatcher.publish(
+                        agent007_learning::types::LearningEvent::PromptImproved {
+                            skill_name: skill_name.clone(),
+                            old_reward,
+                            // Estimated/placeholder; real uplift is measured on subsequent runs.
+                            new_reward: old_reward,
+                        },
+                    );
+                }
+                last_optimized.insert(skill_name, Instant::now());
+            }
+            Err(e) => tracing::warn!(skill = skill_name, error = %e, "optimizer pass failed"),
+        }
+    }
+
+    let summary = serde_json::json!({
+        "timestamp": Utc::now().to_rfc3339(),
+        "skills_scanned": scanned,
+        "skills_optimized": optimized,
+    })
+    .to_string();
+    let _ = project_scope.write("learning:optimizer_last_pass", &summary);
+}
+
+async fn run_learning_runtime_worker(
+    cancel: CancellationToken,
+    learning_dispatcher: Arc<LearningDispatcher>,
+    learning_store: Arc<LearningStore>,
+    optimizer: Arc<PromptOptimizer>,
+    skills_dir: std::path::PathBuf,
+    project_scope: agent007_memory::store::ScopedMemoryStore,
+    learning_scope: agent007_memory::store::ScopedMemoryStore,
+) {
+    let mut stream = learning_dispatcher.subscribe();
+    let mut interval = tokio::time::interval(Duration::from_secs(90));
+    let mut sweep_interval = tokio::time::interval(Duration::from_secs(300));
+    let mut last_optimized: HashMap<String, Instant> = HashMap::new();
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = interval.tick() => {
+                run_prompt_optimizer_pass(
+                    &optimizer,
+                    &learning_store,
+                    &learning_dispatcher,
+                    &skills_dir,
+                    &project_scope,
+                    &mut last_optimized,
+                    Duration::from_secs(120),
+                ).await;
+            }
+            _ = sweep_interval.tick() => {
+                let removed_learning = learning_scope.purge_expired().unwrap_or(0);
+                let removed_project = project_scope.purge_expired().unwrap_or(0);
+                if removed_learning > 0 || removed_project > 0 {
+                    tracing::info!(
+                        removed_learning,
+                        removed_project,
+                        "learning maintenance removed expired memory entries"
+                    );
+                }
+            }
+            evt = stream.next() => {
+                let Some(evt) = evt else { break };
+                if matches!(evt, agent007_learning::types::LearningEvent::FeedbackRecorded { .. }) {
+                    run_prompt_optimizer_pass(
+                        &optimizer,
+                        &learning_store,
+                        &learning_dispatcher,
+                        &skills_dir,
+                        &project_scope,
+                        &mut last_optimized,
+                        Duration::from_secs(120),
+                    ).await;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn spawn_learning_runtime_workers(stack: &Stack) {
+    let Some(optimizer) = stack.prompt_optimizer.clone() else {
+        return;
+    };
+    let cancel = stack.cancel.clone();
+    let learning_dispatcher = stack.learning_dispatcher.clone();
+    let learning_store = stack.learning_store.clone();
+    let skills_dir = stack.skills_dir.clone();
+    let project_scope = stack.memory_store.scoped("project");
+    let learning_scope = stack.memory_store.scoped("learning");
+    stack.tracker.spawn(async move {
+        run_learning_runtime_worker(
+            cancel,
+            learning_dispatcher,
+            learning_store,
+            optimizer,
+            skills_dir,
+            project_scope,
+            learning_scope,
+        )
+        .await;
+    });
+}
+
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
     let mode = runtime_mode_label(&config);
@@ -1028,6 +1281,7 @@ pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
             tracing::warn!("feedback collector error: {}", e);
         }
     });
+    spawn_learning_runtime_workers(&stack);
 
     // In dry-run or non-interactive shells, skip the TUI and execute synchronously
     // so scripted usage still works and the run trace is persisted before returning.

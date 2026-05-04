@@ -111,6 +111,24 @@ pub struct MemoryStore {
     base_dir: PathBuf,
 }
 
+/// Split a logical memory key into path-safe components.
+///
+/// Supports both legacy `:` separators and slash-separated hierarchical keys
+/// (e.g. `feedback/index/skill-a`) so callers can use whichever format is
+/// most natural for their domain.
+fn split_key_components(key: &str) -> Vec<String> {
+    key.split(|c| c == ':' || c == '/' || c == '\\')
+        .map(|part| {
+            part.replace("..", "")
+                .replace('/', "")
+                .replace('\\', "")
+                .trim()
+                .to_string()
+        })
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
 /// Tokenize text into lowercase words (≥3 chars, alphanumeric only), deduplicated and sorted.
 fn tokenize(text: &str) -> Vec<String> {
     let words: HashSet<String> = text
@@ -130,22 +148,43 @@ impl MemoryStore {
         }
     }
 
-    fn key_path(&self, namespace: &str, key: &str) -> PathBuf {
-        let mut path = if namespace.is_empty() {
+    fn namespace_dir(&self, namespace: &str) -> PathBuf {
+        if namespace.is_empty() {
             self.base_dir.clone()
         } else {
-            // Sanitize namespace just like key components to prevent path traversal
             let safe_ns = namespace
                 .replace("..", "")
                 .replace('/', "")
                 .replace('\\', "");
             self.base_dir.join(safe_ns)
-        };
+        }
+    }
+
+    /// Canonical key-to-path mapping (supports both `:` and `/` separators).
+    fn key_path(&self, namespace: &str, key: &str) -> PathBuf {
+        let mut path = self.namespace_dir(namespace);
+        let parts = split_key_components(key);
+        match parts.split_last() {
+            Some((filename, dirs)) => {
+                for dir in dirs {
+                    path = path.join(dir);
+                }
+                path.join(format!("{}.md", filename))
+            }
+            None => {
+                let safe_key = key.replace("..", "").replace('/', "").replace('\\', "");
+                path.join(format!("{}.md", safe_key))
+            }
+        }
+    }
+
+    /// Legacy mapping kept for backward-compatible reads/migration.
+    fn legacy_key_path(&self, namespace: &str, key: &str) -> PathBuf {
+        let mut path = self.namespace_dir(namespace);
         let parts: Vec<&str> = key.split(':').collect();
         match parts.split_last() {
             Some((filename, dirs)) => {
                 for dir in dirs {
-                    // Sanitize: reject any component that tries to traverse up
                     let safe = dir.replace("..", "").replace('/', "").replace('\\', "");
                     if !safe.is_empty() {
                         path = path.join(safe);
@@ -161,15 +200,47 @@ impl MemoryStore {
         }
     }
 
-    fn namespace_dir(&self, namespace: &str) -> PathBuf {
-        if namespace.is_empty() {
-            self.base_dir.clone()
-        } else {
-            let safe_ns = namespace
-                .replace("..", "")
-                .replace('/', "")
-                .replace('\\', "");
-            self.base_dir.join(safe_ns)
+    fn resolve_existing_key_path(&self, namespace: &str, key: &str) -> PathBuf {
+        let canonical = self.key_path(namespace, key);
+        if canonical.exists() {
+            return canonical;
+        }
+        let legacy = self.legacy_key_path(namespace, key);
+        if legacy.exists() {
+            return legacy;
+        }
+        canonical
+    }
+
+    /// Move a legacy-formatted key file to canonical location when possible.
+    fn maybe_migrate_legacy_key(&self, namespace: &str, key: &str) -> Result<(), MemoryError> {
+        let canonical = self.key_path(namespace, key);
+        let legacy = self.legacy_key_path(namespace, key);
+        if canonical == legacy || canonical.exists() || !legacy.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = canonical.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+        match std::fs::rename(&legacy, &canonical) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                let raw = std::fs::read_to_string(&legacy).map_err(|e| MemoryError::Io {
+                    path: legacy.clone(),
+                    source: e,
+                })?;
+                std::fs::write(&canonical, raw).map_err(|e| MemoryError::Io {
+                    path: canonical.clone(),
+                    source: e,
+                })?;
+                std::fs::remove_file(&legacy).map_err(|e| MemoryError::Io {
+                    path: legacy,
+                    source: e,
+                })
+            }
         }
     }
 
@@ -182,7 +253,7 @@ impl MemoryStore {
     }
 
     fn read_ns(&self, namespace: &str, key: &str) -> Result<Option<String>, MemoryError> {
-        let path = self.key_path(namespace, key);
+        let path = self.resolve_existing_key_path(namespace, key);
         if !path.exists() {
             return Ok(None);
         }
@@ -201,7 +272,7 @@ impl MemoryStore {
         namespace: &str,
         key: &str,
     ) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
-        let path = self.key_path(namespace, key);
+        let path = self.resolve_existing_key_path(namespace, key);
         if !path.exists() {
             return Ok(None);
         }
@@ -215,7 +286,7 @@ impl MemoryStore {
     }
 
     fn touch_ns(&self, namespace: &str, key: &str) -> Result<(), MemoryError> {
-        let path = self.key_path(namespace, key);
+        let path = self.resolve_existing_key_path(namespace, key);
         if !path.exists() {
             return Ok(());
         }
@@ -233,11 +304,7 @@ impl MemoryStore {
     }
 
     fn list_keys_ns(&self, namespace: &str) -> Result<Vec<String>, MemoryError> {
-        let dir = if namespace.is_empty() {
-            self.base_dir.clone()
-        } else {
-            self.base_dir.join(namespace)
-        };
+        let dir = self.namespace_dir(namespace);
         if !dir.exists() {
             return Ok(vec![]);
         }
@@ -245,7 +312,8 @@ impl MemoryStore {
         collect_keys_recursive(&dir, &dir, &mut keys)?;
         // Filter out expired entries
         keys.retain(|k| {
-            if let Ok(path) = std::fs::read_to_string(self.key_path(namespace, k)) {
+            if let Ok(path) = std::fs::read_to_string(self.resolve_existing_key_path(namespace, k))
+            {
                 let (_, meta) = parse_frontmatter(&path);
                 !meta.is_expired()
             } else {
@@ -257,6 +325,7 @@ impl MemoryStore {
     }
 
     fn write_ns(&self, namespace: &str, key: &str, value: &str) -> Result<(), MemoryError> {
+        self.maybe_migrate_legacy_key(namespace, key)?;
         let path = self.key_path(namespace, key);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
@@ -288,22 +357,12 @@ impl MemoryStore {
 
     /// Decay confidence of all keys in namespace by ×0.995, skipping `skip_key` and `repo_brain`.
     fn decay_pass(&self, namespace: &str, skip_key: &str) -> Result<(), MemoryError> {
-        let ns_dir = self.namespace_dir(namespace);
-        let entries = match std::fs::read_dir(&ns_dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()),
-        };
-        for entry in entries.flatten() {
-            let fname = entry.file_name();
-            let fname_str = fname.to_string_lossy();
-            if !fname_str.ends_with(".md") {
-                continue;
-            }
-            let file_key = fname_str.trim_end_matches(".md");
+        let keys = self.list_keys_ns(namespace).unwrap_or_default();
+        for file_key in keys {
             if file_key == skip_key || file_key == "repo_brain" {
                 continue;
             }
-            let path = entry.path();
+            let path = self.resolve_existing_key_path(namespace, &file_key);
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let (content, mut meta) = parse_frontmatter(&raw);
                 meta.confidence = (meta.confidence * 0.995).max(0.0);
@@ -316,24 +375,14 @@ impl MemoryStore {
 
     /// Auto-link temporal co-writes: keys updated within the last 10 minutes get bidirectional related_to edges.
     fn temporal_edge_pass(&self, namespace: &str, new_key: &str) -> Result<(), MemoryError> {
-        let ns_dir = self.namespace_dir(namespace);
-        let entries = match std::fs::read_dir(&ns_dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()),
-        };
         let cutoff = Utc::now() - Duration::minutes(10);
         let mut co_written: Vec<String> = Vec::new();
-        for entry in entries.flatten() {
-            let fname = entry.file_name();
-            let fname_str = fname.to_string_lossy();
-            if !fname_str.ends_with(".md") {
-                continue;
-            }
-            let file_key = fname_str.trim_end_matches(".md").to_string();
+        let keys = self.list_keys_ns(namespace).unwrap_or_default();
+        for file_key in keys {
             if file_key == new_key {
                 continue;
             }
-            let path = entry.path();
+            let path = self.resolve_existing_key_path(namespace, &file_key);
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 let (_, meta) = parse_frontmatter(&raw);
                 if meta.updated_at >= cutoff {
@@ -384,6 +433,7 @@ impl MemoryStore {
         value: &str,
         mut meta: MemoryMeta,
     ) -> Result<(), MemoryError> {
+        self.maybe_migrate_legacy_key(namespace, key)?;
         let path = self.key_path(namespace, key);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
@@ -401,6 +451,32 @@ impl MemoryStore {
         meta.updated_at = Utc::now();
         let file_content = write_frontmatter(&meta, value);
         std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
+    }
+
+    /// Delete expired entries in a namespace and return number removed.
+    fn purge_expired_ns(&self, namespace: &str) -> Result<usize, MemoryError> {
+        let dir = self.namespace_dir(namespace);
+        if !dir.exists() {
+            return Ok(0);
+        }
+        let mut removed = 0usize;
+        let mut keys = Vec::new();
+        collect_keys_recursive(&dir, &dir, &mut keys)?;
+        for key in keys {
+            let path = self.resolve_existing_key_path(namespace, &key);
+            if !path.exists() {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(raw) => raw,
+                Err(_) => continue,
+            };
+            let (_, meta) = parse_frontmatter(&raw);
+            if meta.is_expired() && std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     pub fn scoped(self: &Arc<Self>, namespace: &str) -> ScopedMemoryStore {
@@ -486,6 +562,11 @@ impl ScopedMemoryStore {
     /// List all keys stored in this scope.
     pub fn list_keys(&self) -> Result<Vec<String>, MemoryError> {
         self.inner.list_keys_ns(&self.namespace)
+    }
+
+    /// Remove expired files in this scope from disk.
+    pub fn purge_expired(&self) -> Result<usize, MemoryError> {
+        self.inner.purge_expired_ns(&self.namespace)
     }
 
     /// Read a key plus all entries linked via `related_to` (1-hop graph expansion).
@@ -702,6 +783,39 @@ mod tests {
         let keys = scoped.list_keys().unwrap();
         assert!(keys.contains(&"alpha".to_string()));
         assert!(keys.contains(&"arch:overview".to_string()));
+    }
+
+    #[test]
+    fn slash_keys_roundtrip_and_list_as_colon_paths() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("learning");
+        scoped
+            .write("feedback/index/review-pr", "[\"abc\"]")
+            .unwrap();
+        assert_eq!(
+            scoped.read("feedback/index/review-pr").unwrap(),
+            Some("[\"abc\"]".to_string())
+        );
+        let keys = scoped.list_keys().unwrap();
+        assert!(keys.contains(&"feedback:index:review-pr".to_string()));
+    }
+
+    #[test]
+    fn reading_new_format_can_fallback_to_legacy_flattened_file() {
+        let dir = TempDir::new().unwrap();
+        let scoped_dir = dir.path().join("learning");
+        std::fs::create_dir_all(&scoped_dir).unwrap();
+        // Legacy path produced by pre-fix sanitizer for feedback/index/review-pr
+        let legacy_path = scoped_dir.join("feedbackindexreview-pr.md");
+        std::fs::write(&legacy_path, "legacy-index").unwrap();
+
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("learning");
+        assert_eq!(
+            scoped.read("feedback/index/review-pr").unwrap(),
+            Some("legacy-index".to_string())
+        );
     }
 
     #[test]
@@ -945,5 +1059,28 @@ mod tests {
             alpha_meta.related_to.contains(&"beta".to_string()),
             "alpha should auto-link to beta (backlink from temporal edge)"
         );
+    }
+
+    #[test]
+    fn purge_expired_removes_stale_files() {
+        let dir = TempDir::new().unwrap();
+        let scoped_dir = dir.path().join("project");
+        std::fs::create_dir_all(&scoped_dir).unwrap();
+        let path = scoped_dir.join("old.md");
+        let past = Utc::now() - chrono::Duration::days(40);
+        let meta = MemoryMeta {
+            created_at: past,
+            updated_at: past,
+            expires_after: Some("7d".to_string()),
+            ..MemoryMeta::default()
+        };
+        let yaml = serde_yaml::to_string(&meta).unwrap();
+        std::fs::write(&path, format!("---\n{}---\nexpired", yaml)).unwrap();
+
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        let removed = scoped.purge_expired().unwrap();
+        assert_eq!(removed, 1);
+        assert!(!path.exists());
     }
 }

@@ -5,6 +5,7 @@ description: Product requirements document with user stories and constraints
 model: claude-sonnet-4-6
 category: project
 version: "1.1.0"
+tags: ["product", "requirements", "planning"]
 ---
 
 You are writing a Product Requirements Document for an existing codebase.

@@ -5,6 +5,7 @@ description: Systematic debugging with hypothesis-driven investigation
 model: claude-sonnet-4-6
 category: dev
 version: "1.1.0"
+tags: ["debugging", "incident", "root-cause"]
 ---
 
 You are debugging an issue in an existing codebase.

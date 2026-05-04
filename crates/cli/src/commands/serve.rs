@@ -2897,14 +2897,16 @@ fn load_hook_executor() -> Option<Arc<HookExecutor>> {
     None
 }
 
-/// Fire-and-forget: save a FeedbackEntry to the global learning store.
+/// Fire-and-forget: save a FeedbackEntry to the active project's learning store.
 /// Errors are logged but not propagated — learning is best-effort.
 fn record_feedback_entry(model: &str, skill_hint: Option<&str>) {
     use agent007_core::types::{AgentId, PromptRef};
     use agent007_learning::{FeedbackEntry, LearningStore, Outcome};
     use agent007_memory::store::MemoryStore;
 
-    let mem = Arc::new(MemoryStore::new(agent007_global_home().join("memory")));
+    // Keep learning scoped to the active write-home so projects do not
+    // silently contaminate each other's feedback history.
+    let mem = Arc::new(MemoryStore::new(agent007_write_home().join("memory")));
     let scoped = mem.scoped("learning");
     let store = LearningStore::new(scoped);
     let entry = FeedbackEntry {
@@ -3623,9 +3625,7 @@ fn step_liveness(session: &str, step_id: &str, claim_issued_at: Option<&str>) ->
         if let Ok(hb) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(last_str) = hb["last_active"].as_str() {
                 if let Ok(last) = chrono::DateTime::parse_from_rfc3339(last_str) {
-                    let age = (chrono::Utc::now()
-                        - last.with_timezone(&chrono::Utc))
-                    .num_seconds();
+                    let age = (chrono::Utc::now() - last.with_timezone(&chrono::Utc)).num_seconds();
                     let hint = hb["progress_hint"]
                         .as_str()
                         .unwrap_or("in progress")
@@ -3644,9 +3644,7 @@ fn step_liveness(session: &str, step_id: &str, claim_issued_at: Option<&str>) ->
     // No heartbeat yet — use claim issued_at to compute age since dispatch.
     if let Some(issued_str) = claim_issued_at {
         if let Ok(issued) = chrono::DateTime::parse_from_rfc3339(issued_str) {
-            let age = (chrono::Utc::now()
-                - issued.with_timezone(&chrono::Utc))
-            .num_seconds();
+            let age = (chrono::Utc::now() - issued.with_timezone(&chrono::Utc)).num_seconds();
             return serde_json::json!({
                 "step": step_id,
                 "last_heartbeat_hint": null,
@@ -3865,7 +3863,12 @@ fn workflow_hosted_next(session: &str) -> Result<String> {
     })
 }
 
-fn workflow_hosted_submit_step(session: &str, step: &str, output: &str, tokens: Option<usize>) -> Result<String> {
+fn workflow_hosted_submit_step(
+    session: &str,
+    step: &str,
+    output: &str,
+    tokens: Option<usize>,
+) -> Result<String> {
     with_hosted_session_lock(session, || {
         // Slice 2: verify memory claim before accepting submission.
         let claim_key = format!("workflow:sessions:{session}:steps:{step}:claim");
@@ -3981,9 +3984,8 @@ fn workflow_hosted_heartbeat(session: &str, step: &str, hint: Option<&str>) -> R
     })
     .to_string();
     let heartbeat_key = format!("workflow:sessions:{session}:steps:{step}:heartbeat");
-    memory_write("project", &heartbeat_key, &value).map_err(|e| {
-        anyhow::anyhow!("failed to write heartbeat for step '{}': {}", step, e)
-    })?;
+    memory_write("project", &heartbeat_key, &value)
+        .map_err(|e| anyhow::anyhow!("failed to write heartbeat for step '{}': {}", step, e))?;
     // Persist liveness into workflow-state.json so the dashboard can display it.
     let _ = with_hosted_session_lock(session, || {
         let (store, _, _, mut state) = load_hosted_workflow_session(session)?;
@@ -5061,6 +5063,9 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
 
     let mut shared_dispatcher: Option<Arc<LocalDispatcher>> = None;
     let mut shared_learning: Option<Arc<LearningDispatcher>> = None;
+    // Keep runtime stack alive for the full server lifetime so background
+    // workers (feedback collector, optimizer loop, etc.) are not dropped.
+    let mut _runtime_stack: Option<super::run::Stack> = None;
 
     if !no_dashboard {
         // Guard: if another process already owns the dashboard port AND it's serving the
@@ -5090,6 +5095,8 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
                     tracing::warn!("feedback collector error: {e}");
                 }
             });
+            super::run::spawn_learning_runtime_workers(&stack);
+            _runtime_stack = Some(stack);
         } else {
             // Start the dashboard inline regardless of whether stdin is a terminal.
             // The MCP stdio protocol and the HTTP web server use completely different
@@ -5117,6 +5124,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
                     tracing::warn!("feedback collector error: {e}");
                 }
             });
+            super::run::spawn_learning_runtime_workers(&stack);
 
             let web = agent007_web::WebServer::new(
                 stack.dispatcher.clone(),
@@ -5149,6 +5157,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
             tracing::info!(
                 "agent007 MCP server starting (stdio) + web dashboard on port {dashboard_port}"
             );
+            _runtime_stack = Some(stack);
         } // end else already_running
     } else {
         if let Err(error) = ensure_dashboard_sidecar(dashboard_port).await {
@@ -5901,6 +5910,49 @@ output = "notes"
     }
 
     #[test]
+    fn record_feedback_entry_writes_learning_to_project_write_home() {
+        let _guard = env_lock();
+        let project = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let project_home = project.path().join(".agent007");
+        std::fs::create_dir_all(&project_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("AGENT007_HOME", &project_home);
+        std::env::set_var("HOME", global.path());
+
+        record_feedback_entry("host-llm", Some("/brainstorm"));
+
+        let project_store = std::sync::Arc::new(agent007_memory::store::MemoryStore::new(
+            project_home.join("memory"),
+        ));
+        let project_learning_keys = project_store.scoped("learning").list_keys().unwrap();
+        assert!(
+            !project_learning_keys.is_empty(),
+            "expected learning feedback keys in project memory scope"
+        );
+
+        let global_store = std::sync::Arc::new(agent007_memory::store::MemoryStore::new(
+            global.path().join(".agent007").join("memory"),
+        ));
+        let global_learning_keys = global_store
+            .scoped("learning")
+            .list_keys()
+            .unwrap_or_default();
+        assert!(
+            global_learning_keys.is_empty(),
+            "did not expect passive feedback writes in global learning scope"
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
     fn workflow_list_on_missing_dir_returns_empty() {
         let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
@@ -5953,7 +6005,8 @@ output = "notes"
         assert_eq!(started["progress"]["status"], "ready");
         assert_eq!(started["progress"]["ready_steps"][0]["id"], "research");
 
-        let completed = workflow_hosted_submit_step(&session, "research", "notes v1", None).unwrap();
+        let completed =
+            workflow_hosted_submit_step(&session, "research", "notes v1", None).unwrap();
         let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
         assert_eq!(completed["progress"]["status"], "succeeded");
         assert_eq!(completed["workflow_state"]["outputs"]["notes"], "notes v1");
@@ -6079,7 +6132,8 @@ output = "review_report"
         assert_eq!(status["progress"]["status"], "awaiting-outputs");
         assert_eq!(status["progress"]["running_steps"][0], "synthesize");
 
-        let finished = workflow_hosted_submit_step(&session, "synthesize", "final report", None).unwrap();
+        let finished =
+            workflow_hosted_submit_step(&session, "synthesize", "final report", None).unwrap();
         let finished: serde_json::Value = serde_json::from_str(&finished).unwrap();
         assert_eq!(finished["progress"]["status"], "succeeded");
         assert_eq!(

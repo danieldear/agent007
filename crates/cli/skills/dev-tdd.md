@@ -5,6 +5,7 @@ description: Test-driven development cycle (red-green-refactor)
 model: claude-sonnet-4-6
 category: dev
 version: "1.1.0"
+tags: ["tdd", "testing", "implementation"]
 ---
 
 You are guiding implementation using strict TDD inside an existing codebase.

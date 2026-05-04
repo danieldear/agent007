@@ -109,10 +109,7 @@ impl BundleBuilder {
     }
 
     /// Override the persona search directories (used in tests and when callers need fine control).
-    pub fn with_persona_dirs(
-        mut self,
-        dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
-    ) -> Self {
+    pub fn with_persona_dirs(mut self, dirs: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
         self.persona_dirs = dirs.into_iter().map(|p| p.into()).collect();
         self
     }
@@ -313,6 +310,31 @@ impl BundleBuilder {
         let mut assets = Vec::new();
         let mut seen = HashSet::new();
         for rel in direct_tool_refs {
+            // Named tool reference (e.g. "tool:adb-flash") resolves to tools/<name>/ package.
+            if !rel.contains('/') {
+                for tools_dir in &self.tools_dirs {
+                    let package_dir = tools_dir.join(&rel);
+                    if !package_dir.is_dir() || !has_tool_manifest(&package_dir) {
+                        continue;
+                    }
+                    let mut package_files = Vec::new();
+                    collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
+                    for rel_file in package_files {
+                        if seen.contains(&rel_file) {
+                            continue;
+                        }
+                        let package_file = tools_dir.join(&rel_file);
+                        if !package_file.is_file() {
+                            continue;
+                        }
+                        let package_content = std::fs::read_to_string(&package_file)?;
+                        seen.insert(rel_file.clone());
+                        assets.push(BundleAsset::new(rel_file, package_content));
+                    }
+                    break;
+                }
+                continue;
+            }
             let safe_rel = sanitize_relative_reference(&rel)?;
             let rel_norm = safe_rel.to_string_lossy().replace('\\', "/");
             if seen.contains(&rel_norm) {
@@ -327,12 +349,54 @@ impl BundleBuilder {
                 let content = std::fs::read_to_string(&path)?;
                 seen.insert(rel_norm.clone());
                 assets.push(BundleAsset::new(rel_norm.clone(), content));
+                // If this file is inside a manifest-based tool package (tools/<name>/...),
+                // include sibling package files for dependency closure.
+                if let Some(package_name) = rel_norm.split('/').next() {
+                    if !package_name.is_empty() {
+                        let package_dir = tools_dir.join(package_name);
+                        if package_dir.is_dir() && has_tool_manifest(&package_dir) {
+                            let mut package_files = Vec::new();
+                            collect_files_recursive_paths(
+                                &package_dir,
+                                tools_dir,
+                                &mut package_files,
+                            )?;
+                            for rel_file in package_files {
+                                if seen.contains(&rel_file) {
+                                    continue;
+                                }
+                                let package_file = tools_dir.join(&rel_file);
+                                if !package_file.is_file() {
+                                    continue;
+                                }
+                                let package_content = std::fs::read_to_string(&package_file)?;
+                                seen.insert(rel_file.clone());
+                                assets.push(BundleAsset::new(rel_file, package_content));
+                            }
+                        }
+                    }
+                }
                 break;
             }
         }
         // Apply explicit filter: if non-empty, only keep the listed tools.
         if !explicit_filter.is_empty() {
-            assets.retain(|a| explicit_filter.contains(&a.filename.to_ascii_lowercase()));
+            assets.retain(|a| {
+                let filename = a.filename.to_ascii_lowercase();
+                if explicit_filter.contains(&filename) {
+                    return true;
+                }
+                let stem = std::path::Path::new(&a.filename)
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if !stem.is_empty() && explicit_filter.contains(&stem) {
+                    return true;
+                }
+                let package = filename.split('/').next().unwrap_or_default();
+                !package.is_empty() && explicit_filter.contains(package)
+            });
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
@@ -667,6 +731,20 @@ fn collect_files_recursive_paths(
     Ok(())
 }
 
+fn has_tool_manifest(dir: &Path) -> bool {
+    [
+        "TOOL.yaml",
+        "tool.yaml",
+        "TOOL.yml",
+        "tool.yml",
+        "TOOL.toml",
+        "tool.toml",
+    ]
+    .iter()
+    .map(|name| dir.join(name))
+    .any(|path| path.is_file())
+}
+
 fn normalize_reference_token(raw: &str) -> String {
     let trimmed = raw.trim_matches(|c: char| {
         matches!(
@@ -686,6 +764,13 @@ fn collect_tool_ref_from_token(token: &str, out: &mut HashSet<String>) {
     let normalized = token.trim().trim_start_matches("./");
     if normalized.is_empty() {
         return;
+    }
+
+    if let Some(named) = normalized.strip_prefix("tool:") {
+        let name = named.trim().trim_matches('"').trim_matches('\'');
+        if !name.is_empty() {
+            out.insert(name.to_ascii_lowercase());
+        }
     }
 
     if let Some(idx) = normalized.find(".agent007/") {
@@ -1173,7 +1258,9 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["ml-skill"], &["__none__"], &[], &[]).unwrap();
+        let bundle = builder
+            .build(&["ml-skill"], &["__none__"], &[], &[])
+            .unwrap();
 
         assert_eq!(bundle.skills.len(), 1, "expected only selected skill");
         assert!(
@@ -1259,12 +1346,16 @@ mod tests {
         )
         .unwrap();
 
-        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir])
-            .with_persona_dirs([&personas_dir]);
+        let builder =
+            BundleBuilder::new([&skills_dir], [&workflows_dir]).with_persona_dirs([&personas_dir]);
         let bundle = builder.build(&[], &["review"], &[], &[]).unwrap();
 
         assert_eq!(bundle.workflows.len(), 1);
-        assert_eq!(bundle.personas.len(), 1, "only the referenced persona exported");
+        assert_eq!(
+            bundle.personas.len(),
+            1,
+            "only the referenced persona exported"
+        );
         assert_eq!(bundle.personas[0].filename, "architect.toml");
     }
 

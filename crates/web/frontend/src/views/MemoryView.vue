@@ -22,6 +22,7 @@ const contentError = ref(null)
 const searchQuery = ref('')
 const copyStatus = ref('')
 const contentVisible = ref(false)
+const scopeStats = ref(null)
 
 onMounted(() => loadKeys('project'))
 
@@ -33,7 +34,7 @@ const filteredKeys = computed(() => {
 
 // Split colon-key into visual path segments
 function keySegments(key) {
-  return key.split(':')
+  return key.split(/[:/]/).filter(Boolean)
 }
 
 async function loadKeys(scope) {
@@ -44,8 +45,14 @@ async function loadKeys(scope) {
   contentVisible.value = false
   searchQuery.value = ''
   loadingKeys.value = true
+  scopeStats.value = null
   try {
-    keys.value = (await api.listMemory(scope)) || []
+    const [list, stats] = await Promise.all([
+      api.listMemory(scope).catch(() => []),
+      api.getMemoryStats(scope).catch(() => null),
+    ])
+    keys.value = list || []
+    scopeStats.value = stats
   } catch {
     keys.value = []
   } finally {
@@ -91,6 +98,102 @@ function renderMarkdown(raw) {
     ADD_TAGS: ['pre', 'code'],
     ADD_ATTR: ['class'],
   })
+}
+
+// ── RAG Sources ─────────────────────────────────────────────────────────────
+const memoryTab = ref('memory')  // 'memory' | 'rag'
+
+const ragSources = ref([])
+const ragLoading = ref(false)
+const ragAddForm = ref({ name: '', kind: 'url', source_ref: '', scope: 'project', chunk_size: 512 })
+const ragAddBusy = ref(false)
+const ragQuery   = ref('')
+const ragQueryBusy = ref(false)
+const ragQueryResults = ref(null)
+const ragBusyMap = ref({})
+
+const ragToast = ref(null)
+let ragToastTimer = null
+function showRagToast(msg, type = 'success') {
+  clearTimeout(ragToastTimer)
+  ragToast.value = { msg, type }
+  ragToastTimer = setTimeout(() => { ragToast.value = null }, 3500)
+}
+
+function ragStatusClass(status) {
+  return {
+    ready:    'badge-success',
+    indexing: 'badge-warning',
+    pending:  'badge-ghost',
+    error:    'badge-error',
+  }[status] || 'badge-ghost'
+}
+
+async function loadRagSources() {
+  ragLoading.value = true
+  try {
+    const data = await api.listRagSources()
+    ragSources.value = data?.sources ?? []
+  } catch (e) {
+    showRagToast(e.message, 'error')
+  } finally {
+    ragLoading.value = false
+  }
+}
+
+async function addRagSource() {
+  if (!ragAddForm.value.name.trim() || !ragAddForm.value.source_ref.trim()) {
+    showRagToast('Name and source are required', 'error')
+    return
+  }
+  ragAddBusy.value = true
+  try {
+    const source = await api.addRagSource({ ...ragAddForm.value })
+    ragSources.value.push(source)
+    showRagToast(`${source.name} added — indexing in background`)
+    ragAddForm.value = { name: '', kind: 'url', source_ref: '', scope: 'project', chunk_size: 512 }
+  } catch (e) {
+    showRagToast(e.message, 'error')
+  } finally {
+    ragAddBusy.value = false
+  }
+}
+
+async function reindexRag(id) {
+  ragBusyMap.value[id] = true
+  try {
+    const updated = await api.reindexRagSource(id)
+    const idx = ragSources.value.findIndex(s => s.id === id)
+    if (idx !== -1) ragSources.value[idx] = updated
+    showRagToast(`${id} reindexed`)
+  } catch (e) {
+    showRagToast(e.message, 'error')
+  } finally {
+    delete ragBusyMap.value[id]
+  }
+}
+
+async function deleteRagSource(id) {
+  if (!confirm(`Remove RAG source '${id}'?`)) return
+  try {
+    await api.deleteRagSource(id)
+    ragSources.value = ragSources.value.filter(s => s.id !== id)
+    showRagToast(`${id} removed`)
+  } catch (e) {
+    showRagToast(e.message, 'error')
+  }
+}
+
+async function testRagQuery() {
+  if (!ragQuery.value.trim()) return
+  ragQueryBusy.value = true
+  try {
+    ragQueryResults.value = await api.queryRag(ragQuery.value.trim())
+  } catch (e) {
+    showRagToast(e.message, 'error')
+  } finally {
+    ragQueryBusy.value = false
+  }
 }
 
 // After content renders, find all .language-mermaid blocks and render them as SVG.
@@ -146,8 +249,22 @@ watch(contentVisible, async (visible) => {
       <span class="text-primary font-mono font-bold tracking-widest text-sm uppercase">◈ Memory</span>
       <div class="h-4 w-px bg-base-300"></div>
 
-      <!-- Scope pills -->
-      <div class="flex gap-1">
+      <!-- Main tab switcher -->
+      <div class="flex gap-0.5 bg-base-300/60 rounded p-0.5">
+        <button
+          class="btn btn-xs font-mono rounded px-3"
+          :class="memoryTab === 'memory' ? 'btn-primary shadow-sm' : 'btn-ghost text-base-content/50'"
+          @click="memoryTab = 'memory'"
+        >KV Store</button>
+        <button
+          class="btn btn-xs font-mono rounded px-3"
+          :class="memoryTab === 'rag' ? 'btn-primary shadow-sm' : 'btn-ghost text-base-content/50'"
+          @click="memoryTab = 'rag'; loadRagSources()"
+        >RAG Sources</button>
+      </div>
+
+      <!-- Scope pills — KV tab only -->
+      <div v-if="memoryTab === 'memory'" class="flex gap-1">
         <button
           v-for="s in SCOPES" :key="s"
           class="btn btn-xs font-mono gap-1 rounded-full border border-base-300 bg-base-300/40 text-base-content/50 hover:border-primary/50 hover:text-base-content/80"
@@ -161,14 +278,172 @@ watch(contentVisible, async (visible) => {
 
       <div class="flex-1"></div>
 
-      <!-- Key count badge -->
-      <span class="badge badge-ghost badge-sm font-mono text-base-content/30">
+      <!-- Count badge -->
+      <span v-if="memoryTab === 'memory'" class="badge badge-ghost badge-sm font-mono text-base-content/30">
         {{ loadingKeys ? '…' : `${filteredKeys.length} / ${keys.length}` }}
       </span>
+      <span v-else class="badge badge-ghost badge-sm font-mono text-base-content/30">
+        {{ ragSources.length }} source{{ ragSources.length !== 1 ? 's' : '' }}
+      </span>
+
+      <template v-if="memoryTab === 'memory' && scopeStats">
+        <span class="badge badge-ghost badge-sm font-mono text-base-content/35">
+          Σ {{ scopeStats.total_keys }}
+        </span>
+        <span class="badge badge-ghost badge-sm font-mono text-base-content/35">
+          P {{ scopeStats.procedural_keys }}
+        </span>
+        <span class="badge badge-ghost badge-sm font-mono text-base-content/35">
+          C {{ Number(scopeStats.avg_confidence || 0).toFixed(2) }}
+        </span>
+        <span
+          v-if="activeScope === 'learning' && scopeStats.learning_skill_count != null"
+          class="badge badge-ghost badge-sm font-mono text-base-content/35"
+        >
+          skills {{ scopeStats.learning_skill_count }}
+        </span>
+      </template>
     </div>
 
-    <!-- ── Body ───────────────────────────────────────────────────────── -->
-    <div class="flex flex-1 overflow-hidden">
+    <!-- ── RAG Sources panel ────────────────────────────────────────────── -->
+    <div v-if="memoryTab === 'rag'" class="flex flex-1 overflow-hidden">
+      <div class="flex-1 overflow-y-auto p-6 max-w-4xl">
+
+        <!-- Add source form -->
+        <div class="bg-base-200 rounded-lg border border-base-300/60 p-5 mb-6">
+          <h3 class="font-mono text-xs font-bold text-base-content/60 uppercase tracking-wider mb-4">Add Knowledge Source</h3>
+          <div class="space-y-3">
+            <!-- Row 1: Name full-width -->
+            <div class="form-control gap-1.5">
+              <label class="label py-0"><span class="label-text text-xs font-mono font-semibold text-base-content/60">Name</span></label>
+              <input v-model="ragAddForm.name" type="text" class="input input-bordered input-sm font-mono text-sm w-full"
+                placeholder="project-docs" />
+            </div>
+            <!-- Row 2: Kind + Scope -->
+            <div class="grid grid-cols-2 gap-3">
+              <div class="form-control gap-1.5">
+                <label class="label py-0"><span class="label-text text-xs font-mono font-semibold text-base-content/60">Kind</span></label>
+                <select v-model="ragAddForm.kind" class="select select-bordered select-sm font-mono text-sm w-full">
+                  <option value="url">URL</option>
+                  <option value="file">File</option>
+                  <option value="directory">Directory</option>
+                </select>
+              </div>
+              <div class="form-control gap-1.5">
+                <label class="label py-0"><span class="label-text text-xs font-mono font-semibold text-base-content/60">Scope</span></label>
+                <select v-model="ragAddForm.scope" class="select select-bordered select-sm font-mono text-sm w-full">
+                  <option value="project">project</option>
+                  <option value="global">global</option>
+                </select>
+              </div>
+            </div>
+            <!-- Row 3: Source Ref full-width -->
+            <div class="form-control gap-1.5">
+              <label class="label py-0"><span class="label-text text-xs font-mono font-semibold text-base-content/60">Source</span></label>
+              <input v-model="ragAddForm.source_ref" type="text" class="input input-bordered input-sm font-mono text-sm w-full"
+                :placeholder="ragAddForm.kind === 'url' ? 'https://docs.example.com/api' : ragAddForm.kind === 'file' ? '/path/to/document.md' : '/path/to/docs-directory'" />
+            </div>
+            <!-- Row 4: Chunk Size + hint -->
+            <div class="form-control gap-1.5">
+              <label class="label py-0">
+                <span class="label-text text-xs font-mono font-semibold text-base-content/60">Chunk Size</span>
+                <span class="label-text-alt text-[10px] font-mono text-base-content/30">tokens per chunk · 128–4096</span>
+              </label>
+              <input v-model.number="ragAddForm.chunk_size" type="number" class="input input-bordered input-sm font-mono text-sm w-32"
+                min="128" max="4096" step="128" />
+            </div>
+            <!-- Row 5: Submit right-aligned -->
+            <div class="flex justify-end pt-1">
+              <button class="btn btn-primary btn-sm font-mono px-5"
+                :class="ragAddBusy && 'loading'"
+                :disabled="ragAddBusy || !ragAddForm.name.trim() || !ragAddForm.source_ref.trim()"
+                @click="addRagSource">
+                Add Source
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sources list -->
+        <div v-if="ragLoading" class="text-center py-8 font-mono text-xs text-base-content/30">Loading…</div>
+        <div v-else-if="!ragSources.length" class="text-center py-12 font-mono text-xs text-base-content/30">
+          No RAG sources yet. Add a URL, file, or directory above to index knowledge.
+        </div>
+        <div v-else class="space-y-2.5 mb-6">
+          <div
+            v-for="s in ragSources" :key="s.id"
+            class="bg-base-200 rounded-lg border border-base-300/60 px-4 py-3.5 flex items-start justify-between gap-4"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap mb-1.5">
+                <span class="font-mono text-sm font-semibold text-base-content/90">{{ s.name }}</span>
+                <span class="badge badge-xs badge-outline font-mono">{{ s.kind }}</span>
+                <span class="badge badge-xs font-mono" :class="ragStatusClass(s.status)">{{ s.status }}</span>
+                <span class="badge badge-xs badge-ghost font-mono">{{ s.scope }}</span>
+              </div>
+              <p class="font-mono text-xs text-base-content/50 break-all leading-snug">{{ s.source_ref }}</p>
+              <div v-if="s.chunk_count != null || s.indexed_at" class="flex gap-3 mt-1.5">
+                <span v-if="s.chunk_count != null" class="font-mono text-xs text-base-content/40">{{ s.chunk_count }} chunks</span>
+                <span v-if="s.indexed_at" class="font-mono text-xs text-base-content/30">indexed {{ s.indexed_at.slice(0,10) }}</span>
+              </div>
+              <p v-if="s.error_msg" class="font-mono text-xs text-error/70 mt-1.5">{{ s.error_msg }}</p>
+            </div>
+            <div class="flex gap-1.5 shrink-0 pt-0.5">
+              <button
+                class="btn btn-xs btn-ghost font-mono gap-1"
+                :class="ragBusyMap[s.id] && 'loading'"
+                :disabled="!!ragBusyMap[s.id]"
+                @click="reindexRag(s.id)"
+                title="Reindex"
+              >↺ reindex</button>
+              <button
+                class="btn btn-xs btn-ghost text-error font-mono"
+                @click="deleteRagSource(s.id)"
+                title="Remove"
+              >✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Test query -->
+        <div class="bg-base-200 rounded-lg border border-base-300/60 p-5">
+          <h3 class="font-mono text-xs font-bold text-base-content/60 uppercase tracking-wider mb-3">Test Query</h3>
+          <div class="flex gap-2">
+            <input
+              v-model="ragQuery"
+              type="text"
+              class="input input-bordered input-sm font-mono text-sm flex-1"
+              placeholder="Ask a question or enter a keyword…"
+              @keyup.enter="testRagQuery"
+            />
+            <button
+              class="btn btn-sm btn-outline font-mono shrink-0"
+              :class="ragQueryBusy && 'loading'"
+              :disabled="ragQueryBusy || !ragQuery.trim()"
+              @click="testRagQuery"
+            >Query</button>
+          </div>
+          <div v-if="ragQueryResults" class="mt-4 space-y-2">
+            <p class="font-mono text-xs text-base-content/40">Searched {{ ragQueryResults.sources_searched }} source(s)</p>
+            <div v-if="ragQueryResults.results?.length" class="space-y-1.5">
+              <div
+                v-for="r in ragQueryResults.results" :key="r.id"
+                class="bg-base-300/40 rounded px-3 py-2 font-mono text-xs flex items-center gap-3"
+              >
+                <span class="text-primary font-semibold">{{ r.name }}</span>
+                <span class="badge badge-xs badge-ghost">{{ r.kind }}</span>
+                <span class="text-base-content/40">{{ r.status }}</span>
+              </div>
+            </div>
+            <p v-else class="font-mono text-xs text-base-content/30">No ready sources found — sources must have status "ready" to appear in results.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── KV Memory Body ──────────────────────────────────────────────── -->
+    <div v-if="memoryTab === 'memory'" class="flex flex-1 overflow-hidden">
 
       <!-- Left: key navigator -->
       <div class="w-60 flex-shrink-0 border-r border-base-300 flex flex-col overflow-hidden bg-base-200/50">
@@ -304,12 +579,29 @@ watch(contentVisible, async (visible) => {
 
     </div>
   </div>
+
+  <!-- RAG toast -->
+  <Transition name="toast">
+    <div v-if="ragToast" class="fixed bottom-6 right-6 z-50">
+      <div class="alert shadow-lg py-2 px-4 font-mono text-sm max-w-xs"
+        :class="{
+          'alert-success': ragToast.type === 'success',
+          'alert-error':   ragToast.type === 'error',
+          'alert-warning': ragToast.type === 'warning',
+        }">
+        {{ ragToast.msg }}
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
-/* Vue transition — cannot use utility classes */
+/* Vue transitions — cannot use utility classes */
 .fade-up-enter-active { transition: opacity 0.25s ease, transform 0.25s ease; }
 .fade-up-enter-from   { opacity: 0; transform: translateY(6px); }
+
+.toast-enter-active, .toast-leave-active { transition: all .25s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(8px); }
 
 /* ── Markdown preview — :deep() required for v-html injected content ────
    These styles target marked's standard HTML output and cannot use
@@ -378,4 +670,3 @@ watch(contentVisible, async (visible) => {
 }
 .md-preview :deep(.mermaid-block svg) { max-width: 100%; height: auto; }
 </style>
-

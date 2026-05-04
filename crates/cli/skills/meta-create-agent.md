@@ -5,6 +5,7 @@ description: Guided wizard to create a custom agent persona
 model: claude-sonnet-4-6
 category: meta
 version: "1.1.0"
+tags: ["meta", "persona", "generation"]
 ---
 
 You are an agent007 persona design assistant. Help the user create a custom

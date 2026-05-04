@@ -5,6 +5,7 @@ description: Generate changelogs grouped by type from git history
 model: claude-sonnet-4-6
 category: project
 version: "1.1.0"
+tags: ["release", "changelog", "documentation"]
 ---
 
 You are generating a changelog for an existing project.

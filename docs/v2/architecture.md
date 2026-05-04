@@ -74,3 +74,10 @@ Design principle: extend current crates instead of replacing them.
 - Wave 2: recovery + budget + guardrails.
 - Wave 3: adaptive routing + learning + A/B.
 - Wave 4: local-first p2p collaboration.
+
+## 9. Implementation Addendum (2026-05-03)
+Architecture now includes additional implemented surfaces:
+1. Extension adapter subsystem (`crates/extensions`) feeding dashboard install flows.
+2. MCP registry and RAG source API layers integrated in web server routes.
+3. Runtime learning worker lifecycle wired into both CLI `run` and `serve`.
+4. Memory observability API (`/api/memory/{scope}/stats`) for operational diagnostics.

@@ -5,6 +5,7 @@ description: Generate comprehensive test suites with edge cases
 model: claude-sonnet-4-6
 category: code
 version: "1.1.0"
+tags: ["testing", "coverage", "qa"]
 ---
 
 You are designing tests for existing code in a real repository.

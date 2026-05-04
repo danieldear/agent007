@@ -484,136 +484,124 @@ pub async fn execute(
 
     // ── 3b. Seed built-in skills ─────────────────────────────────────────────
     section("3b. Seeding built-in skills");
-    if global {
-        let skills_dir_seed = home.join("skills");
-        let mut built_in_skill_count = 0usize;
-        for (filename, content) in crate::built_in_skills::ALL_SKILLS {
-            if write_file(
-                &skills_dir_seed.join(filename),
-                content,
-                &format!("skills/{filename}"),
-                force,
-            )? {
-                built_in_skill_count += 1;
-            }
+    let skills_dir_seed = home.join("skills");
+    let mut built_in_skill_count = 0usize;
+    for (filename, content) in crate::built_in_skills::ALL_SKILLS {
+        if write_file(
+            &skills_dir_seed.join(filename),
+            content,
+            &format!("skills/{filename}"),
+            force,
+        )? {
+            built_in_skill_count += 1;
         }
-        if built_in_skill_count > 0 {
-            ok(&format!("{built_in_skill_count} built-in skills seeded"));
-        }
-    } else {
-        info("Skipping project-local built-in skills; project .agent007/ is reserved for overrides and custom skills");
+    }
+    if built_in_skill_count > 0 {
+        ok(&format!("{built_in_skill_count} built-in skills seeded"));
     }
 
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
-    if global {
-        let wf_dir = home.join("workflows");
-        write_file(
-            &wf_dir.join("log-analysis.yaml"),
-            WORKFLOW_LOG_ANALYSIS,
-            "workflows/log-analysis.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("code-review.yaml"),
-            WORKFLOW_CODE_REVIEW,
-            "workflows/code-review.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("security-audit.yaml"),
-            WORKFLOW_SECURITY_AUDIT,
-            "workflows/security-audit.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("sparc.yaml"),
-            WORKFLOW_SPARC,
-            "workflows/sparc.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("tdd.yaml"),
-            WORKFLOW_TDD,
-            "workflows/tdd.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("ideation.yaml"),
-            WORKFLOW_IDEATION,
-            "workflows/ideation.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("feature.yaml"),
-            WORKFLOW_FEATURE,
-            "workflows/feature.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("brainstorm.yaml"),
-            WORKFLOW_BRAINSTORM,
-            "workflows/brainstorm.yaml",
-            force,
-        )?;
-    } else {
-        info("Skipping project-local built-in workflows; project .agent007/ is reserved for overrides and custom workflows");
-    }
+    let wf_dir = home.join("workflows");
+    write_file(
+        &wf_dir.join("log-analysis.yaml"),
+        WORKFLOW_LOG_ANALYSIS,
+        "workflows/log-analysis.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("code-review.yaml"),
+        WORKFLOW_CODE_REVIEW,
+        "workflows/code-review.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("security-audit.yaml"),
+        WORKFLOW_SECURITY_AUDIT,
+        "workflows/security-audit.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("sparc.yaml"),
+        WORKFLOW_SPARC,
+        "workflows/sparc.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("tdd.yaml"),
+        WORKFLOW_TDD,
+        "workflows/tdd.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("ideation.yaml"),
+        WORKFLOW_IDEATION,
+        "workflows/ideation.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("feature.yaml"),
+        WORKFLOW_FEATURE,
+        "workflows/feature.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("brainstorm.yaml"),
+        WORKFLOW_BRAINSTORM,
+        "workflows/brainstorm.yaml",
+        force,
+    )?;
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
-    if global {
-        let personas_dir = home.join("personas");
-        let registry = agent007_personas::PersonaRegistry::built_in();
-        let personas = {
-            use agent007_core::PersonaProvider;
-            registry.list()
-        };
-        let mut persona_count = 0usize;
-        for spec in &personas {
-            let filename = spec
-                .name
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || c == '-' || c == '_' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-                .to_lowercase();
-            let path = personas_dir.join(format!("{filename}.toml"));
-            let tools_str = spec
-                .allowed_tools
-                .iter()
-                .map(|t| format!("\"{}\"", t))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let content = format!(
-                "name            = \"{}\"\n\
-                 description     = \"{}\"\n\
-                 preferred_model = \"{}\"\n\
-                 allowed_tools   = [{}]\n\
-                 \n\
-                 system_prompt   = \"\"\"\n\
-                 {}\n\
-                 \"\"\"\n",
-                spec.name,
-                spec.description.replace('"', "\\\""),
-                spec.preferred_model,
-                tools_str,
-                spec.system_prompt,
-            );
-            if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
-                persona_count += 1;
-            }
+    let personas_dir = home.join("personas");
+    let registry = agent007_personas::PersonaRegistry::built_in();
+    let personas = {
+        use agent007_core::PersonaProvider;
+        registry.list()
+    };
+    let mut persona_count = 0usize;
+    for spec in &personas {
+        let filename = spec
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
+        let path = personas_dir.join(format!("{filename}.toml"));
+        let tools_str = spec
+            .allowed_tools
+            .iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let content = format!(
+            "name            = \"{}\"\n\
+             description     = \"{}\"\n\
+             preferred_model = \"{}\"\n\
+             allowed_tools   = [{}]\n\
+             \n\
+             system_prompt   = \"\"\"\n\
+             {}\n\
+             \"\"\"\n",
+            spec.name,
+            spec.description.replace('"', "\\\""),
+            spec.preferred_model,
+            tools_str,
+            spec.system_prompt,
+        );
+        if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
+            persona_count += 1;
         }
-        if persona_count > 0 {
-            ok(&format!("{persona_count} persona files seeded"));
-        }
-    } else {
-        info("Skipping project-local built-in personas; project .agent007/ is reserved for persona overrides");
+    }
+    if persona_count > 0 {
+        ok(&format!("{persona_count} persona files seeded"));
     }
 
     // ── 5b. Bootstrap global ~/.agent007/ if this is a project-local init ───
@@ -1648,6 +1636,33 @@ const WORKFLOW_LOG_ANALYSIS: &str = r#"name: log-analysis
 description: >
   Parallel log analysis team. Specialists run concurrently; the synthesizer
   aggregates all findings into a final report.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: false
+  mode: fail-open
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.15
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: find-errors
@@ -1691,6 +1706,7 @@ steps:
 
   - id: synthesize
     agent: Researcher
+    requires_approval: true
     prompt: |
       You are the lead analyst. Synthesize the specialist reports below into a
       single executive report with:
@@ -1715,6 +1731,33 @@ const WORKFLOW_CODE_REVIEW: &str = r#"name: code-review
 description: >
   Parallel code review team. Security, performance, and style reviewers run
   concurrently; the lead synthesizes findings.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: security-review
@@ -1779,6 +1822,7 @@ steps:
 
   - id: synthesize
     agent: CodeReviewer
+    requires_approval: true
     prompt: |
       Synthesize the three specialist reviews into a final code review report:
 
@@ -1800,6 +1844,33 @@ const WORKFLOW_SECURITY_AUDIT: &str = r#"name: security-audit
 description: >
   Deep security audit pipeline. OWASP, secrets, threat model, and dependency
   scanners run in parallel; the lead synthesizes a severity-ranked report.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: owasp-scan
@@ -1902,6 +1973,7 @@ steps:
 
   - id: synthesize
     agent: SecurityReviewer
+    requires_approval: true
     prompt: |
       Synthesize all security audit findings into a final executive report.
 
@@ -1931,6 +2003,33 @@ const WORKFLOW_SPARC: &str = r#"name: sparc
 description: >
   SPARC methodology pipeline: Spec → Pseudocode → Architecture → Refinement → Completion.
   Each phase feeds into the next.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.12
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: spec
@@ -1987,6 +2086,7 @@ steps:
 
   - id: completion
     agent: ExpertCoder
+    requires_approval: true
     prompt: |
       SPARC Phase 5 — Completion.
       Produce the final deliverable based on:
@@ -2001,6 +2101,33 @@ steps:
 const WORKFLOW_TDD: &str = r#"name: tdd
 description: >
   TDD pipeline: Red (write failing test) → Green (minimal implementation) → Blue (refactor).
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 10000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.12
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2000
+    max_retry_increase: 1.0
 
 steps:
   - id: red
@@ -2029,6 +2156,7 @@ steps:
 
   - id: blue
     agent: ExpertCoder
+    requires_approval: true
     prompt: |
       TDD Blue/Refactor Phase — refactor this implementation for quality:
       {{implementation}}
@@ -2044,6 +2172,33 @@ description: >
   Ideation-to-plan pipeline. Research → human approval → documented ideation →
   PRD → architecture (reads PRD) → documented design → project planning →
   documented milestones. PRD drives architecture so requirements shape the design.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 30
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: research
@@ -2294,6 +2449,33 @@ description: >
   implementation (full context) → human approval gate → parallel review
   (code, security, performance, gap, issues) → rework → test design →
   test coverage review → documentation → release sign-off (approval).
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: true
+  mode: fail-closed
+  baseline_window: 30
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.1
+    max_cost_usd_increase: 3.0
+    max_latency_ms_increase: 3000
+    max_retry_increase: 1.0
 
 steps:
   - id: load-context
@@ -2621,6 +2803,33 @@ description: >
   PRD + ideation document written to docs/. Stops before architecture and milestones.
   Use this to capture ideas and produce a PRD before committing to the full ideation workflow.
   The generated docs serve as direct input to /agent007-workflow-ideation or /dev-architect.
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 2
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 1
+    degrade_output_chars: 12000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: true
+eval_gate:
+  enabled: true
+  release_class: false
+  mode: fail-open
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.15
+    max_cost_usd_increase: 2.0
+    max_latency_ms_increase: 2500
+    max_retry_increase: 1.0
 
 steps:
   - id: brainstorm

@@ -849,8 +849,8 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
         <div class="feature-title">Skills</div>
-        <div class="feature-desc">Reusable prompt templates stored as Markdown files. Trigger them with <code>/slash-commands</code> from your editor. Install from GitHub or URLs. Share with your team.</div>
-        <span class="feature-tag">15 built-in</span>
+        <div class="feature-desc">Reusable prompt templates in flat Markdown or packaged <code>SKILL.md</code> directories with bundled <code>assets/</code> and <code>scripts/</code>. Trigger with <code>/slash-commands</code> and share across projects.</div>
+        <span class="feature-tag">Package-ready</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🔁</div>
@@ -861,8 +861,8 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">🧠</div>
         <div class="feature-title">Memory</div>
-        <div class="feature-desc">Scoped key-value store with LanceDB vector search. Bounded RAG warmup indexing at startup loads project context automatically. Per-run retrieval telemetry artifacts track hit rate and fallback paths.</div>
-        <span class="feature-tag">RAG-powered</span>
+        <div class="feature-desc">Scoped key-value store with LanceDB vector search, retrieval telemetry, and per-scope stats. The dashboard surfaces key counts, memory type mix, confidence trend, and learning coverage to make memory behavior inspectable.</div>
+        <span class="feature-tag">Observable RAG memory</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🎭</div>
@@ -885,7 +885,7 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">📊</div>
         <div class="feature-title">Web Dashboard</div>
-        <div class="feature-desc">ChatGPT-style chat interface at <code>localhost:8007</code>. Submit tasks with <code>/slash</code> autocomplete for skills and workflows. Accordion run history with inline eval gate results, routing recommendations, and approval controls.</div>
+        <div class="feature-desc">Live operations console at <code>localhost:8007</code> with task execution, run history, tools registry, MCP server management, RAG source controls, extensions import/install, and memory diagnostics.</div>
         <span class="feature-tag">localhost:8007</span>
       </div>
       <div class="feature-card">
@@ -909,8 +909,14 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">📦</div>
         <div class="feature-title">Sharing &amp; Bundles</div>
-        <div class="feature-desc">Pack skills and workflows into SHA-256-verified bundles for export, import, or team distribution. Promote project-local assets to global with one command. Bundle the web dashboard into the binary at install time.</div>
+        <div class="feature-desc">Pack skills, workflows, personas, and tools into SHA-256-verified bundles. Dependency-aware export keeps associated assets together so imported bundles are runnable without manual reconstruction.</div>
         <span class="feature-tag">SHA-256 verified</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⊞</div>
+        <div class="feature-title">Extensions</div>
+        <div class="feature-desc">Import capabilities from local bundles, GitHub, npm MCP packages, OpenAPI specs, and marketplace-style sources through adapter-based normalization, preview, and install flows.</div>
+        <span class="feature-tag">A/B/C compatibility</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🌐</div>
