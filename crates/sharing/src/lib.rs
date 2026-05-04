@@ -296,6 +296,13 @@ impl BundleBuilder {
         let explicit_filter: HashSet<String> = tool_filter
             .iter()
             .map(|s| s.trim().to_ascii_lowercase())
+            .map(|s| {
+                if let Some(rest) = s.strip_prefix("tools/") {
+                    rest.to_string()
+                } else {
+                    s
+                }
+            })
             .filter(|s| !s.is_empty())
             .collect();
         if !self.tools_dirs.iter().any(|d| d.exists()) && !self.scripts_dirs.iter().any(|d| d.exists()) {
@@ -362,25 +369,69 @@ impl BundleBuilder {
         for rel in direct_tool_refs {
             // Named tool reference (e.g. "tool:adb-flash") resolves to tools/<name>/ package.
             if !rel.contains('/') {
+                let mut consumed = false;
                 for tools_dir in &self.tools_dirs {
+                    // 1) Package directory tools/<name>/*
                     let package_dir = tools_dir.join(&rel);
                     if !package_dir.is_dir() || !has_tool_manifest(&package_dir) {
+                        // not a package; try next resolution mode
+                    } else {
+                        let mut package_files = Vec::new();
+                        collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
+                        for rel_file in package_files {
+                            if seen.contains(&rel_file) {
+                                continue;
+                            }
+                            let package_file = tools_dir.join(&rel_file);
+                            if !package_file.is_file() {
+                                continue;
+                            }
+                            let package_content = std::fs::read_to_string(&package_file)?;
+                            seen.insert(rel_file.clone());
+                            assets.push(BundleAsset::new(rel_file, package_content));
+                        }
+                        consumed = true;
+                        break;
+                    }
+                }
+                if consumed {
+                    continue;
+                }
+
+                // 2) Flat file tools/<name> (legacy/non-manifest tool file)
+                for tools_dir in &self.tools_dirs {
+                    let flat_file = tools_dir.join(&rel);
+                    if !flat_file.is_file() {
                         continue;
                     }
-                    let mut package_files = Vec::new();
-                    collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
-                    for rel_file in package_files {
-                        if seen.contains(&rel_file) {
-                            continue;
-                        }
-                        let package_file = tools_dir.join(&rel_file);
-                        if !package_file.is_file() {
-                            continue;
-                        }
-                        let package_content = std::fs::read_to_string(&package_file)?;
-                        seen.insert(rel_file.clone());
-                        assets.push(BundleAsset::new(rel_file, package_content));
+                    let rel_file = rel.replace('\\', "/");
+                    if seen.contains(&rel_file) {
+                        consumed = true;
+                        break;
                     }
+                    let content = std::fs::read_to_string(&flat_file)?;
+                    seen.insert(rel_file.clone());
+                    assets.push(BundleAsset::new(rel_file, content));
+                    consumed = true;
+                    break;
+                }
+                if consumed {
+                    continue;
+                }
+
+                // 3) Flat script file scripts/<name>
+                for scripts_dir in &self.scripts_dirs {
+                    let flat_script = scripts_dir.join(&rel);
+                    if !flat_script.is_file() {
+                        continue;
+                    }
+                    let rel_file = format!("scripts/{}", rel.replace('\\', "/"));
+                    if seen.contains(&rel_file) {
+                        break;
+                    }
+                    let content = std::fs::read_to_string(&flat_script)?;
+                    seen.insert(rel_file.clone());
+                    assets.push(BundleAsset::new(rel_file, content));
                     break;
                 }
                 continue;
@@ -464,9 +515,79 @@ impl BundleBuilder {
                 let package = filename.split('/').next().unwrap_or_default();
                 !package.is_empty() && explicit_filter.contains(package)
             });
+            // Defensive fallback: explicit user selections should never silently
+            // produce an empty tools array because of key-shape drift.
+            if assets.is_empty() {
+                let recovered = self.collect_explicit_tool_assets_fallback(&explicit_filter)?;
+                assets.extend(recovered);
+            }
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
+    }
+
+    fn collect_explicit_tool_assets_fallback(
+        &self,
+        explicit_filter: &HashSet<String>,
+    ) -> Result<Vec<BundleAsset>> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+
+        for selected in explicit_filter {
+            if selected.is_empty() {
+                continue;
+            }
+
+            // Explicit script path: scripts/<name>
+            if let Some(script_rel) = selected.strip_prefix("scripts/") {
+                for scripts_dir in &self.scripts_dirs {
+                    let path = scripts_dir.join(script_rel);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let rel = format!("scripts/{}", script_rel.replace('\\', "/"));
+                    if !seen.insert(rel.clone()) {
+                        break;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    out.push(BundleAsset::new(rel, content));
+                    break;
+                }
+                continue;
+            }
+
+            // Bare path/file lookup in tools/
+            for tools_dir in &self.tools_dirs {
+                let file_path = tools_dir.join(selected);
+                if file_path.is_file() {
+                    let rel = selected.replace('\\', "/");
+                    if seen.insert(rel.clone()) {
+                        let content = std::fs::read_to_string(&file_path)?;
+                        out.push(BundleAsset::new(rel, content));
+                    }
+                    break;
+                }
+                let package_dir = tools_dir.join(selected);
+                if package_dir.is_dir() && has_tool_manifest(&package_dir) {
+                    let mut package_files = Vec::new();
+                    collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
+                    for rel_file in package_files {
+                        if seen.contains(&rel_file) {
+                            continue;
+                        }
+                        let package_file = tools_dir.join(&rel_file);
+                        if !package_file.is_file() {
+                            continue;
+                        }
+                        let content = std::fs::read_to_string(&package_file)?;
+                        seen.insert(rel_file.clone());
+                        out.push(BundleAsset::new(rel_file, content));
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn collect_persona_assets(
@@ -1444,6 +1565,32 @@ mod tests {
         let bundle = builder.build(&["ml-skill"], &["__none__"], &[], &[]).unwrap();
         assert_eq!(bundle.tools.len(), 1);
         assert_eq!(bundle.tools[0].filename, "scripts/ml_monitoring_suite.py");
+    }
+
+    #[test]
+    fn builder_manual_flat_tool_file_selection_exports_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&tools_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---\nname: plain\ndescription: d\ntrigger: /plain\nmodel: codex\n---\nNo refs\n",
+        )
+        .unwrap();
+        std::fs::write(tools_dir.join("quick-tool.py"), "print('ok')\n").unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(&["plain"], &["__none__"], &["__none__"], &["quick-tool.py"])
+            .unwrap();
+
+        assert_eq!(bundle.tools.len(), 1);
+        assert_eq!(bundle.tools[0].filename, "quick-tool.py");
     }
 
     #[test]
