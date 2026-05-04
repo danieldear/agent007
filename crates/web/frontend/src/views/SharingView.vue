@@ -136,12 +136,8 @@ watch(
             for (const sc of w.associations?.scripts || [])
                 auto.add(apiPathToBundleKey(sc));
         }
-        selectedTools.value = [
-            ...new Set([
-                ...selectedTools.value.filter((k) => auto.has(k)),
-                ...auto,
-            ]),
-        ];
+        // Preserve manual tool selections. Auto-detected dependencies are additive.
+        selectedTools.value = [...new Set([...selectedTools.value, ...auto])];
     },
     { deep: true },
 );
