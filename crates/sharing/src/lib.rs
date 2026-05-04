@@ -329,13 +329,14 @@ impl BundleBuilder {
         }
 
         // If nothing was auto-detected and user didn't manually select tools,
-        // there is nothing to export.
+        // fall back to exporting all discovered tools/scripts. This protects
+        // compatibility with stale clients that omit `tools=` in export calls.
         if direct_tool_refs.is_empty()
             && workflow_skill_refs.is_empty()
             && selected_skill_triggers.is_empty()
             && explicit_filter.is_empty()
         {
-            return Ok(Vec::new());
+            return self.collect_all_tool_assets();
         }
 
         let skill_tool_index = self.build_skill_tool_ref_index()?;
@@ -522,6 +523,76 @@ impl BundleBuilder {
                 assets.extend(recovered);
             }
         }
+        assets.sort_by(|a, b| a.filename.cmp(&b.filename));
+        Ok(assets)
+    }
+
+    fn collect_all_tool_assets(&self) -> Result<Vec<BundleAsset>> {
+        let mut assets = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Collect manifest-based tool packages and flat tool files from tools/.
+        for tools_dir in &self.tools_dirs {
+            if !tools_dir.exists() || !tools_dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(tools_dir)?.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if !has_tool_manifest(&path) {
+                        continue;
+                    }
+                    let mut package_files = Vec::new();
+                    collect_files_recursive_paths(&path, tools_dir, &mut package_files)?;
+                    for rel_file in package_files {
+                        if seen.contains(&rel_file) {
+                            continue;
+                        }
+                        let package_file = tools_dir.join(&rel_file);
+                        if !package_file.is_file() {
+                            continue;
+                        }
+                        let content = std::fs::read_to_string(&package_file)?;
+                        seen.insert(rel_file.clone());
+                        assets.push(BundleAsset::new(rel_file, content));
+                    }
+                } else if path.is_file() {
+                    let rel = path
+                        .strip_prefix(tools_dir)
+                        .ok()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or_default()
+                        .replace('\\', "/");
+                    if rel.is_empty() || !seen.insert(rel.clone()) {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    assets.push(BundleAsset::new(rel, content));
+                }
+            }
+        }
+
+        // Collect flat scripts from scripts/.
+        for scripts_dir in &self.scripts_dirs {
+            if !scripts_dir.exists() || !scripts_dir.is_dir() {
+                continue;
+            }
+            let mut script_paths = Vec::new();
+            collect_files_recursive_paths(scripts_dir, scripts_dir, &mut script_paths)?;
+            for rel in script_paths {
+                let rel_norm = format!("scripts/{}", rel.replace('\\', "/"));
+                if !seen.insert(rel_norm.clone()) {
+                    continue;
+                }
+                let path = scripts_dir.join(&rel);
+                if !path.is_file() {
+                    continue;
+                }
+                let content = std::fs::read_to_string(&path)?;
+                assets.push(BundleAsset::new(rel_norm, content));
+            }
+        }
+
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
     }
@@ -1591,6 +1662,94 @@ mod tests {
 
         assert_eq!(bundle.tools.len(), 1);
         assert_eq!(bundle.tools[0].filename, "quick-tool.py");
+    }
+
+    #[test]
+    fn builder_tools_only_selection_exports_scripts_without_skills_or_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let scripts_dir = dir.path().join("scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        std::fs::write(
+            scripts_dir.join("ml_monitoring_suite.py"),
+            "print('monitor')\n",
+        )
+        .unwrap();
+
+        let bundle = BundleBuilder::new([&skills_dir], [&workflows_dir]).build(
+            &["__none__"],
+            &["__none__"],
+            &["__none__"],
+            &["scripts/ml_monitoring_suite.py"],
+        );
+
+        let bundle = bundle.expect("tools-only selection should succeed");
+        assert_eq!(bundle.skills.len(), 0);
+        assert_eq!(bundle.workflows.len(), 0);
+        assert_eq!(bundle.personas.len(), 0);
+        assert_eq!(bundle.tools.len(), 1, "expected script tool to be exported");
+        assert_eq!(bundle.tools[0].filename, "scripts/ml_monitoring_suite.py");
+    }
+
+    #[test]
+    fn builder_tools_only_selection_exports_flat_tool_file_without_skills_or_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::write(tools_dir.join("ftm_excel_report.py"), "print('ok')\n").unwrap();
+
+        let bundle = BundleBuilder::new([&skills_dir], [&workflows_dir]).build(
+            &["__none__"],
+            &["__none__"],
+            &["__none__"],
+            &["ftm_excel_report.py"],
+        );
+
+        let bundle = bundle.expect("tools-only selection should succeed");
+        assert_eq!(bundle.tools.len(), 1, "expected flat tool file export");
+        assert_eq!(bundle.tools[0].filename, "ftm_excel_report.py");
+    }
+
+    #[test]
+    fn builder_legacy_tools_omitted_by_client_falls_back_to_all_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&tools_dir).unwrap();
+        std::fs::write(tools_dir.join("flat_tool.py"), "print('flat')\n").unwrap();
+        let pkg = tools_dir.join("pack");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("TOOL.yaml"),
+            "name: pack\nruntime: shell\nentrypoint: run.sh\n",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("run.sh"), "#!/usr/bin/env sh\necho ok\n").unwrap();
+
+        // Simulate stale client that sends empty tools selection while also
+        // sending explicit empty skills/workflows/personas.
+        let bundle = BundleBuilder::new([&skills_dir], [&workflows_dir]).build(
+            &["__none__"],
+            &["__none__"],
+            &["__none__"],
+            &[],
+        );
+
+        let bundle = bundle.expect("legacy fallback should succeed");
+        let names: HashSet<String> = bundle.tools.iter().map(|a| a.filename.clone()).collect();
+        assert!(names.contains("flat_tool.py"));
+        assert!(names.contains("pack/TOOL.yaml"));
+        assert!(names.contains("pack/run.sh"));
     }
 
     #[test]
