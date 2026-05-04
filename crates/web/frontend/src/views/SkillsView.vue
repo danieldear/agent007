@@ -178,6 +178,20 @@ function compactRef(value) {
   return `${parts[0]}/…/${parts[parts.length - 1]}`
 }
 
+function skillScopeChips(item) {
+  const variants = Array.isArray(item?.variants) ? item.variants : []
+  if (!variants.length) {
+    return [item?.source === 'global' ? 'global' : 'proj']
+  }
+  return variants.map(v => `${v?.source === 'global' ? 'global' : 'proj'}${v?.version ? ` v${v.version}` : ''}`)
+}
+
+function skillHasVersionDrift(item) {
+  const variants = Array.isArray(item?.variants) ? item.variants : []
+  const versions = [...new Set(variants.map(v => (v?.version || '').trim()).filter(Boolean))]
+  return versions.length > 1
+}
+
 const categoryPrefixes = {
   dev: 'dev',
   code: 'code',
@@ -342,7 +356,7 @@ async function importFromUrl() {
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
               <div
                 v-for="s in grouped[cat]"
-                :key="s.trigger"
+                :key="`${s.trigger}:${s.precedence_source || s.source || 'project'}`"
                 class="bg-base-200 border border-base-300 rounded-lg p-4 hover:border-primary/40 transition-colors cursor-pointer group border-l-2 h-full"
                 :class="{
                   'border-l-blue-400/50': cat === 'dev',
@@ -359,15 +373,16 @@ async function importFromUrl() {
                     <div class="flex items-center gap-2 flex-wrap">
                       <div class="font-mono text-sm font-semibold">{{ s.name }}</div>
                       <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ s.trigger }}</span>
-                      <!-- Source badge — always visible -->
                       <span
-                        v-if="s.source === 'global'"
-                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-success/30 text-success/70 bg-success/5"
-                      >global</span>
+                        v-for="chip in skillScopeChips(s)"
+                        :key="`${s.trigger}:${chip}`"
+                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-base-content/25 text-base-content/65 bg-base-content/5"
+                      >{{ chip }}</span>
                       <span
-                        v-else
-                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-warning/30 text-warning/70 bg-warning/5"
-                      >proj</span>
+                        v-if="skillHasVersionDrift(s)"
+                        class="text-[9px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border border-warning/35 text-warning/80 bg-warning/10"
+                        title="Project and global variants have different versions"
+                      >drift</span>
                     </div>
                     <div class="text-[11px] font-mono text-base-content/45 mt-1.5 leading-relaxed">{{ s.description }}</div>
                     <div v-if="hasAssociations(s)" class="mt-2.5 space-y-1.5">
@@ -430,18 +445,30 @@ async function importFromUrl() {
 
       <!-- Tab: Browse Registry -->
       <div v-if="activeTab === 'browse'" class="space-y-4">
-        <div class="form-control">
-          <input
-            v-model="searchQuery"
-            class="input input-sm input-bordered w-full max-w-md font-mono"
-            placeholder="search skills..."
-          />
+        <div class="flex items-center gap-3 flex-wrap">
+          <div class="form-control flex-1 min-w-48">
+            <input
+              v-model="searchQuery"
+              class="input input-sm input-bordered w-full font-mono"
+              placeholder="Filter local registry…"
+            />
+          </div>
+          <div class="flex items-center gap-1.5 text-xs font-mono text-base-content/40">
+            <span>External search:</span>
+            <button
+              class="btn btn-xs btn-ghost font-mono border border-base-300"
+              @click="$emit('navigate-external', 'extensions')"
+              title="Browse npm MCP packages and GitHub extensions"
+            >⊞ Extensions →</button>
+          </div>
         </div>
 
         <div v-if="!registry.length && !loading" class="text-center py-12">
           <div class="text-3xl mb-3 text-base-content/10">⬡</div>
-          <p class="text-sm font-mono text-base-content/40">registry unavailable</p>
-          <p class="text-xs font-mono text-base-content/25 mt-1">use the import tab to add skills from any URL</p>
+          <p class="text-sm font-mono text-base-content/40">local registry unavailable</p>
+          <p class="text-xs font-mono text-base-content/25 mt-1">
+            browse external packages in <strong class="font-mono">Extensions</strong>, or use the Import tab for a direct URL
+          </p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">

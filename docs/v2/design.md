@@ -51,3 +51,11 @@ This design unifies PRD goals with architecture decisions for phased delivery.
 
 ## Decision Rationale
 Prioritizes practical reliability and measurement before deeper adaptive automation.
+
+## Implementation Addendum (2026-05-03)
+Current implementation has also delivered operational foundations used by V2 tracks:
+1. Extension adapters and install APIs.
+2. MCP registry + RAG source management endpoints.
+3. Tool registry import/search/test/approval model.
+4. Always-on learning worker execution in both `run` and `serve`.
+5. Memory stats API and dashboard surfacing for confidence/type distribution visibility.

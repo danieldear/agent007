@@ -119,11 +119,26 @@ impl LearningStore {
     /// Return all skill names that have at least one feedback entry recorded.
     /// Scans the `feedback/index/` key prefix in the learning store.
     pub fn list_skill_names(&self) -> Result<Vec<String>, crate::error::LearningError> {
-        const PREFIX: &str = "feedback/index/";
+        const PREFIX_SLASH: &str = "feedback/index/";
+        const PREFIX_COLON: &str = "feedback:index:";
+        const PREFIX_FLAT: &str = "feedbackindex";
         let keys = self.scoped.list_keys()?;
         Ok(keys
             .into_iter()
-            .filter_map(|k| k.strip_prefix(PREFIX).map(str::to_string))
+            .filter_map(|k| {
+                if let Some(skill) = k.strip_prefix(PREFIX_SLASH) {
+                    return Some(skill.to_string());
+                }
+                if let Some(skill) = k.strip_prefix(PREFIX_COLON) {
+                    return Some(skill.to_string());
+                }
+                if let Some(skill) = k.strip_prefix(PREFIX_FLAT) {
+                    if !skill.is_empty() {
+                        return Some(skill.to_string());
+                    }
+                }
+                None
+            })
             .filter(|s| s != "__none__")
             .collect())
     }
@@ -304,5 +319,39 @@ mod tests {
         let (store, _dir) = make_store();
         let versions = store.get_prompt_versions("nonexistent-skill").unwrap();
         assert!(versions.is_empty());
+    }
+
+    #[test]
+    fn list_skill_names_reads_modern_feedback_index_keys() {
+        let (store, _dir) = make_store();
+        store
+            .record_feedback(&make_entry(Some("code-review")))
+            .unwrap();
+        store
+            .record_feedback(&make_entry(Some("security-audit")))
+            .unwrap();
+        let mut names = store.list_skill_names().unwrap();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["code-review".to_string(), "security-audit".to_string()]
+        );
+    }
+
+    #[test]
+    fn list_skill_names_supports_colon_and_flat_legacy_keys() {
+        let (store, _dir) = make_store();
+        // Simulate legacy key variants.
+        store
+            .scoped
+            .write("feedback:index:legacy-colon", "[\"a\"]")
+            .unwrap();
+        store
+            .scoped
+            .write("feedbackindexlegacy-flat", "[\"b\"]")
+            .unwrap();
+        let names = store.list_skill_names().unwrap();
+        assert!(names.contains(&"legacy-colon".to_string()));
+        assert!(names.contains(&"legacy-flat".to_string()));
     }
 }

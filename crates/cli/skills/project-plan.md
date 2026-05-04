@@ -5,6 +5,7 @@ description: Break features into tasks with estimates and dependencies
 model: claude-sonnet-4-6
 category: project
 version: "1.1.0"
+tags: ["planning", "milestones", "estimation"]
 ---
 
 You are planning implementation work for an existing codebase.

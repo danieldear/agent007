@@ -1,8 +1,9 @@
 # Feature: Tool Registry for Hosted and Local Execution
 
-**Status:** Deferred / Next Plan  
+**Status:** Implemented (V1)  
 **Area:** `crates/cli/`, `crates/skills/`, `crates/web/`, hosted execution flow  
-**Decision date:** 2026-04-14
+**Decision date:** 2026-04-14  
+**Updated:** 2026-05-02
 
 ---
 
@@ -280,51 +281,90 @@ This matters for:
 
 ---
 
-## Suggested V1 Scope
+## Current V1 Implementation
 
-The smallest useful version is:
+Implemented in web/API and sharing layers:
 
 ```text
 1. global + project-local discovery
-2. manifest format
-3. list + inspect + invoke flow
-4. stdout/stderr/exit-code capture
-5. basic safety classification
-6. audit/event recording
+   - ~/.agent007/tools
+   - .agent007/tools
+   - project precedence over global
+
+2. package + legacy discovery
+   - manifest packages (TOOL.yaml / tool.toml, etc.)
+   - legacy flat scripts in tools root
+
+3. web API for management
+   - GET /api/tools
+   - GET /api/tools/:name
+   - POST /api/tools
+   - DELETE /api/tools/:name
+   - POST /api/tools/:name/test
+
+4. deterministic test invocation
+   - runtime dispatch (shell/python/node/binary)
+   - timeout handling
+   - stdout/stderr/exit_code capture
+   - argument validation against manifest schema
+
+5. sharing/export closure improvements
+   - skill/workflow tool references pull associated tool files
+   - supports path refs and named refs (tool:<name>)
 ```
 
-That is enough to make the feature real without over-designing it.
+Dashboard integration now includes a dedicated Tools view for list/create/edit/delete/test flows.
+
+## V2 Additions (Implemented)
+
+```text
+1. Remote registry discovery
+   - crates.io search
+   - npm registry search
+   - GitHub repository search
+
+2. Provider import wrappers
+   - crates import (cargo install wrapper)
+   - npm import (npm install -g wrapper)
+   - github import (git clone wrapper)
+   - local import (copy local binary/script into package)
+
+3. Quarantine + approval gate
+   - imported tools default to quarantined
+   - test execution is blocked until approval
+   - approval endpoint refreshes trust state
+
+4. Hash pinning
+   - imported tools can pin SHA-256
+   - execution verifies hash when pinning enabled
+   - mismatch forces re-approval workflow
+
+5. Optional skill generation
+   - import can auto-create companion `/use-<tool>` skill
+   - generated trigger is persisted in tool state metadata
+```
 
 ---
 
-## Deferred Phasing
+## Next Phasing
 
-### Phase 1 — Registry Foundation
-
-```text
-- .agent007/tools and ~/.agent007/tools discovery
-- manifest parsing
-- precedence rules
-- tool list / inspect APIs
-```
-
-### Phase 2 — Invocation
+### Phase 2 — Hosted Orchestration Integration
 
 ```text
-- execute named tool with validated inputs
-- capture stdout/stderr/exit code
-- surface results to hosted workflows/skills
+- explicit hosted planner support for choosing registry tools
+- tighter policy around when to auto-execute vs ask for approval
+- richer run/audit linking from workflow steps to tool invocations
 ```
 
-### Phase 3 — Sharing
+### Phase 3 — Sharing UX + Packaging
 
 ```text
-- import/export of tool packages
-- team reuse and onboarding
-- package docs and examples
+- stronger bundle UX for tool packages and dependency visibility
+- import/export conflict handling by package version/hash
+- first-party example tool packs
 ```
 
-### Phase 4 — Governance
+### Phase 4 — Governance + Hardening
 
 ```text
 - approval policies
@@ -335,35 +375,17 @@ That is enough to make the feature real without over-designing it.
 
 ---
 
-## Why It Is Deferred
-
-This is a strong feature, but it is not the current highest priority.
-
-Current priority remains:
+## Known Gaps
 
 ```text
-fix product/runtime bugs first
-then expand the reusable execution model
-```
-
-So this should stay documented as a planned feature until the current bug backlog is reduced.
-
----
-
-## Non-goals for Now
-
-```text
-- implementing the registry immediately
-- package version solving
-- remote package distribution design
-- generic plugin system ambitions
-- replacing skills or workflows with tools
+- no remote registry/distribution model (local filesystem only)
+- no package version solver yet
+- trust boundary still depends on local operator discipline
+- hosted workflow auto-tool selection is still heuristic, not policy-learned
 ```
 
 ---
 
 ## Decision
 
-Keep this as a documented next-plan item.
-
-When work begins, build it as a **structured tool registry**, not as an unstructured shared scripts folder.
+V1 is active and usable. Continue hardening through policy, auditability, and better hosted orchestration behavior while keeping the structured package model.

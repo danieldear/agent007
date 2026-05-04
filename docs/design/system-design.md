@@ -13,6 +13,16 @@ server owns 44 tool definitions, routes LLM calls through a multi-provider model
 stores persistent memory on disk and in LanceDB, executes YAML-defined multi-agent workflows,
 and serves a local web dashboard on port 8007.
 
+### 2026-05-03 Addendum
+
+Current system surface also includes:
+
+1. Extension adapters and extension install/list APIs.
+2. MCP registry and RAG source management API routes.
+3. Tool registry import/search/test/approve lifecycle.
+4. Memory stats API (`/api/memory/{scope}/stats`) and dashboard observability.
+5. Runtime learning workers active in both `run` and `serve` code paths.
+
 ### Design philosophy
 
 | Principle | How it is applied |

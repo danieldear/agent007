@@ -1,8 +1,8 @@
 use super::run::{agent007_global_home, agent007_project_home};
 use crate::config::Config;
 use anyhow::Result;
-use clap::ValueEnum;
 use clap::Subcommand;
+use clap::ValueEnum;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -152,10 +152,7 @@ fn is_probably_semver(raw: &str) -> bool {
     if raw.is_empty() {
         return false;
     }
-    let without_build = raw
-        .split_once('+')
-        .map(|(left, _)| left)
-        .unwrap_or(raw);
+    let without_build = raw.split_once('+').map(|(left, _)| left).unwrap_or(raw);
     let core = without_build
         .split_once('-')
         .map(|(left, _)| left)
@@ -240,8 +237,7 @@ fn audit_skills(scope: CatalogScope, report: &mut AuditReport) {
                     }
 
                     let template = skill.template().to_ascii_lowercase();
-                    if !template.contains("return exactly") && !template.contains("output format")
-                    {
+                    if !template.contains("return exactly") && !template.contains("output format") {
                         report.push(
                             Severity::Warn,
                             "skill",
@@ -410,7 +406,8 @@ fn resolve_workflow_path(dir: &Path, name: &str) -> PathBuf {
 
 fn audit_personas(scope: CatalogScope, report: &mut AuditReport) {
     let dirs = configured_dirs_for_scope("personas", scope);
-    let registry = agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|d| d.as_path()));
+    let registry =
+        agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|d| d.as_path()));
     let registry = match registry {
         Ok(r) => r,
         Err(err) => {

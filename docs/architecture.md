@@ -1,6 +1,6 @@
 # Architecture
 
-agent007 is a layered Rust workspace of 21 crates. The CLI binary (`crates/cli`) is the only binary; all other crates are libraries.
+agent007 is a layered Rust workspace of 22 crates. The CLI binary (`crates/cli`) is the only binary; all other crates are libraries.
 
 ---
 
@@ -105,12 +105,14 @@ graph LR
     core --> custom-agents
     core --> simulation
     core --> testing
+    core --> extensions
 
     workflows --> web
     memory --> web
     models --> web
     sharing --> web
     learning --> web
+    extensions --> web
 
     sharing --> p2p
     core --> p2p

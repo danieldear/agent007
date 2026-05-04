@@ -4,7 +4,7 @@
       "args": [
         "serve"
       ],
-      "command": "agent007",
+      "command": "/Users/neo/.cargo/bin/agent007",
       "type": "stdio"
     }
   }

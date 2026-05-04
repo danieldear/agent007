@@ -5,6 +5,7 @@ description: Analyze codebase for tech stack, patterns, and architecture
 model: claude-sonnet-4-6
 category: meta
 version: "1.1.0"
+tags: ["analysis", "architecture", "inventory"]
 ---
 
 You are analyzing an existing codebase for architecture, structure, and project health.

@@ -161,3 +161,12 @@ As a frequent user, I want deterministic tasks handled locally instead of spendi
 2. Shadow mode for routing/eval before enforce mode.
 3. A/B compare against baseline before broad enablement.
 4. Stable GA only after KPI thresholds are sustained.
+
+## 11. Implementation Addendum (2026-05-03)
+Completed in current baseline:
+1. Extension platform baseline (adapters + preview/install/list APIs + dashboard view).
+2. MCP server registry APIs and UI flows.
+3. RAG source CRUD/reindex/query APIs.
+4. Memory observability endpoint (`/api/memory/{scope}/stats`) + dashboard stats.
+5. Runtime learning workers active in both CLI `run` and `serve` paths.
+6. Memory key compatibility hardening for mixed `:` and `/` keys with legacy fallback/migration.

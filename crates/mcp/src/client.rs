@@ -66,14 +66,13 @@ impl McpClient {
 
             // Pipe stderr so the child never blocks on a full pipe buffer.
             // Captured lines are forwarded to tracing for visibility.
-            let (transport, stderr_opt) =
-                TokioChildProcess::builder(cmd)
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| McpError::ServerStartFailed {
-                        name: config.name.clone(),
-                        source: e,
-                    })?;
+            let (transport, stderr_opt) = TokioChildProcess::builder(cmd)
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| McpError::ServerStartFailed {
+                    name: config.name.clone(),
+                    source: e,
+                })?;
 
             if let Some(stderr) = stderr_opt {
                 let server_name = config.name.clone();
@@ -282,25 +281,21 @@ impl McpClient {
                     });
                 }
 
-                let running = match timeout(
-                    CONNECT_TIMEOUT,
-                    ClientInfo::default().serve(transport),
-                )
-                .await
-                {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        last_err = Some(McpError::Sdk(e.to_string()));
-                        continue;
-                    }
-                    Err(_) => {
-                        last_err = Some(McpError::Sdk(format!(
-                            "MCP handshake timed out after {}s",
-                            CONNECT_TIMEOUT.as_secs()
-                        )));
-                        continue;
-                    }
-                };
+                let running =
+                    match timeout(CONNECT_TIMEOUT, ClientInfo::default().serve(transport)).await {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            last_err = Some(McpError::Sdk(e.to_string()));
+                            continue;
+                        }
+                        Err(_) => {
+                            last_err = Some(McpError::Sdk(format!(
+                                "MCP handshake timed out after {}s",
+                                CONNECT_TIMEOUT.as_secs()
+                            )));
+                            continue;
+                        }
+                    };
 
                 let peer = running.peer().clone();
                 let handle_idx = self.handles.len();

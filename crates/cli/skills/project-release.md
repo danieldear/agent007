@@ -5,6 +5,7 @@ description: Version strategy, release notes, and rollback planning
 model: claude-sonnet-4-6
 category: project
 version: "1.1.0"
+tags: ["release", "strategy", "operations"]
 ---
 
 You are planning a release for an existing codebase and delivery process.

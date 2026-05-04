@@ -5,6 +5,11 @@ const activeSection = ref('concepts')
 const sections = [
   { id: 'concepts',   label: 'Core Concepts' },
   { id: 'quickstart', label: 'Quick Start' },
+  { id: 'invoke',     label: 'Invoking Skills & Tools' },
+  { id: 'mcp',        label: 'MCP Servers' },
+  { id: 'extensions', label: 'Extensions' },
+  { id: 'rag',        label: 'RAG Sources' },
+  { id: 'tools',      label: 'Tool Registry' },
   { id: 'nodes',      label: 'Workflow Nodes' },
   { id: 'cli',        label: 'CLI Reference' },
 ]
@@ -450,6 +455,411 @@ const promptVars = [
               </div>
             </div>
 
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             INVOKING SKILLS & TOOLS
+        ════════════════════════════════════════════════════════════ -->
+        <div v-if="activeSection === 'invoke'" class="max-w-4xl space-y-6">
+          <div>
+            <h2 class="text-base font-bold font-mono uppercase tracking-widest text-base-content/70 mb-1">Invoking Skills &amp; Tools</h2>
+            <p class="text-sm text-base-content/50">How to actually call the things you've configured.</p>
+          </div>
+
+          <!-- Invocation methods grid -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            <div class="card bg-base-200 border border-yellow-500/25">
+              <div class="card-body p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="w-6 h-6 rounded bg-yellow-500/15 flex items-center justify-center text-yellow-400 text-sm">⚡</span>
+                  <h3 class="font-bold font-mono text-sm text-yellow-400">Skills — slash commands</h3>
+                </div>
+                <p class="text-xs text-base-content/60 leading-relaxed mb-3">
+                  Type a slash command directly in your editor (Claude, Codex, Cursor). agent007 intercepts it via MCP and runs the skill's prompt template.
+                </p>
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/70 space-y-1">
+                  <div><span class="text-yellow-400">/code-review</span> src/main.rs</div>
+                  <div><span class="text-yellow-400">/dev-tdd</span> implement login feature</div>
+                  <div><span class="text-yellow-400">/my-skill</span> any argument here</div>
+                </div>
+                <p class="text-[10px] font-mono text-base-content/35 mt-2">Skills → Skills tab to create or edit</p>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-primary/25">
+              <div class="card-body p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="w-6 h-6 rounded bg-primary/15 flex items-center justify-center text-primary text-sm">⬡</span>
+                  <h3 class="font-bold font-mono text-sm text-primary">Workflows — MCP tool call</h3>
+                </div>
+                <p class="text-xs text-base-content/60 leading-relaxed mb-3">
+                  Workflows run via the MCP tool <code class="bg-base-300 px-1 rounded">agent007_workflow_run</code>. Call it from any LLM that has the agent007 MCP server connected.
+                </p>
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/70 space-y-1">
+                  <div><span class="text-primary">agent007_workflow_run</span></div>
+                  <div class="pl-2">name=<span class="text-success">"code-review"</span></div>
+                  <div class="pl-2">task=<span class="text-success">"review src/main.rs"</span></div>
+                </div>
+                <p class="text-[10px] font-mono text-base-content/35 mt-2">Workflows → Workflows tab to manage</p>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-teal-500/25">
+              <div class="card-body p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="w-6 h-6 rounded bg-teal-500/15 flex items-center justify-center text-teal-400 text-sm">⬡</span>
+                  <h3 class="font-bold font-mono text-sm text-teal-400">MCP tools — call by name</h3>
+                </div>
+                <p class="text-xs text-base-content/60 leading-relaxed mb-3">
+                  Once an MCP server is <strong class="text-base-content/80">connected</strong> and <strong class="text-base-content/80">approved</strong>, its tools are exposed to the LLM automatically. Ask the LLM to use them by name, or generate a companion skill for one-click invocation.
+                </p>
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/70 space-y-1">
+                  <div class="text-base-content/40"># LLM can call directly:</div>
+                  <div><span class="text-teal-400">read_file</span>({ path: "..." })</div>
+                  <div><span class="text-teal-400">search_github</span>({ q: "..." })</div>
+                  <div class="text-base-content/40 mt-1"># Or via a generated skill:</div>
+                  <div><span class="text-yellow-400">/github-search</span> agent007</div>
+                </div>
+                <p class="text-[10px] font-mono text-base-content/35 mt-2">MCP tab → Connect server → ⚡ skill per tool</p>
+              </div>
+            </div>
+
+            <div class="card bg-base-200 border border-orange-500/25">
+              <div class="card-body p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="w-6 h-6 rounded bg-orange-500/15 flex items-center justify-center text-orange-400 text-sm">🛠</span>
+                  <h3 class="font-bold font-mono text-sm text-orange-400">Local tools — called by the agent</h3>
+                </div>
+                <p class="text-xs text-base-content/60 leading-relaxed mb-3">
+                  Tools (scripts/binaries on PATH or imported via Tools tab) are executed as subprocesses by the agent. Reference them in workflow step prompts or generate a skill to wrap them.
+                </p>
+                <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/70 space-y-1">
+                  <div class="text-base-content/40"># In a workflow prompt:</div>
+                  <div>Run <span class="text-orange-400">my-linter</span> on &#123;&#123;task&#125;&#125;</div>
+                  <div class="text-base-content/40 mt-1"># As a skill:</div>
+                  <div><span class="text-yellow-400">/lint</span> src/main.rs</div>
+                </div>
+                <p class="text-[10px] font-mono text-base-content/35 mt-2">Tools tab → Import to register local binaries</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Flow diagram -->
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Request flow</h3>
+              <div class="flex items-center gap-2 flex-wrap text-xs font-mono text-base-content/60">
+                <span class="bg-base-300 px-2 py-1 rounded">Editor / LLM</span>
+                <span class="text-base-content/30">→ MCP call →</span>
+                <span class="bg-base-300 px-2 py-1 rounded">agent007 server</span>
+                <span class="text-base-content/30">→ resolves skill/workflow →</span>
+                <span class="bg-base-300 px-2 py-1 rounded">persona + prompt</span>
+                <span class="text-base-content/30">→ LLM API →</span>
+                <span class="bg-base-300 px-2 py-1 rounded">result back to editor</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             MCP SERVERS
+        ════════════════════════════════════════════════════════════ -->
+        <div v-if="activeSection === 'mcp'" class="max-w-4xl space-y-6">
+          <div>
+            <h2 class="text-base font-bold font-mono uppercase tracking-widest text-base-content/70 mb-1">MCP Servers</h2>
+            <p class="text-sm text-base-content/50">Model Context Protocol servers extend your AI assistant with external tools.</p>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">What is an MCP server?</h3>
+              <p class="text-xs text-base-content/60 leading-relaxed">
+                An MCP server is a subprocess that speaks the Model Context Protocol. Once connected, it exposes a list of <strong class="text-base-content/80">tools</strong> (functions) that the LLM can call — for example: reading files, querying databases, searching the web, or interacting with APIs. agent007 acts as the broker between your editor's LLM and any number of MCP servers.
+              </p>
+            </div>
+          </div>
+
+          <!-- Steps -->
+          <div class="space-y-3">
+            <div class="card bg-base-200 border border-primary/20">
+              <div class="card-body p-4">
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center text-primary text-xs font-bold shrink-0">1</span>
+                  <div>
+                    <p class="font-bold font-mono text-sm text-base-content/80 mb-1">Register the server</p>
+                    <p class="text-xs text-base-content/55 leading-relaxed mb-2">Go to <strong class="font-mono">MCP → + Add Server</strong>. For npm packages enter the package name and agent007 auto-configures <code class="bg-base-300 px-1 rounded">npx -y &lt;package&gt;</code>. For local binaries, specify the command.</p>
+                    <div class="bg-base-300 rounded p-2 text-[11px] font-mono text-base-content/60">
+                      Source kind: npm · Package: @modelcontextprotocol/server-github
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-primary/20">
+              <div class="card-body p-4">
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center text-primary text-xs font-bold shrink-0">2</span>
+                  <div>
+                    <p class="font-bold font-mono text-sm text-base-content/80 mb-1">Connect to discover tools</p>
+                    <p class="text-xs text-base-content/55 leading-relaxed">Click <strong class="font-mono">⚡ Connect</strong> — agent007 launches the subprocess, performs an MCP handshake, and populates the tools list. Tools are stored in the registry so they survive restarts.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-primary/20">
+              <div class="card-body p-4">
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center text-primary text-xs font-bold shrink-0">3</span>
+                  <div>
+                    <p class="font-bold font-mono text-sm text-base-content/80 mb-1">Approve for LLM use</p>
+                    <p class="text-xs text-base-content/55 leading-relaxed">Review the discovered tools, then click <strong class="font-mono">🛡 Approve</strong>. Only approved servers are made available to the LLM in agent workflows. This prevents accidentally exposing unreviewed tools.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card bg-base-200 border border-primary/20">
+              <div class="card-body p-4">
+                <div class="flex items-start gap-3">
+                  <span class="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center text-primary text-xs font-bold shrink-0">4</span>
+                  <div>
+                    <p class="font-bold font-mono text-sm text-base-content/80 mb-1">Generate skills (optional)</p>
+                    <p class="text-xs text-base-content/55 leading-relaxed">Click <strong class="font-mono">⚡ skill</strong> next to any discovered tool to auto-generate a slash-command skill that wraps it. This gives you one-click invocation from your editor without knowing the tool's schema.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Registry file location</h3>
+              <code class="text-xs font-mono text-primary">~/.agent007/mcp/registry.json</code>
+              <p class="text-xs text-base-content/50 mt-1">JSON array of server entries. Scope "project" servers are also stored in <code class="bg-base-300 px-1 rounded">.agent007/mcp/registry.json</code> inside your project.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             EXTENSIONS
+        ════════════════════════════════════════════════════════════ -->
+        <div v-if="activeSection === 'extensions'" class="max-w-4xl space-y-6">
+          <div>
+            <h2 class="text-base font-bold font-mono uppercase tracking-widest text-base-content/70 mb-1">Extensions</h2>
+            <p class="text-sm text-base-content/50">Bundles that install skills, tools, MCP servers, and RAG sources in one step.</p>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-2">Extensions vs. MCP Servers</h3>
+              <div class="overflow-x-auto">
+                <table class="table table-sm text-xs font-mono">
+                  <thead>
+                    <tr class="text-base-content/40 text-[10px] uppercase tracking-wider">
+                      <th class="bg-transparent"></th>
+                      <th class="bg-transparent">MCP Server</th>
+                      <th class="bg-transparent">Extension</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td class="text-base-content/60">What it is</td>
+                      <td>A single subprocess with tools</td>
+                      <td>A bundle of multiple components</td>
+                    </tr>
+                    <tr>
+                      <td class="text-base-content/60">Can contain</td>
+                      <td>Tools only</td>
+                      <td>Skills + Tools + Workflows + MCP + RAG</td>
+                    </tr>
+                    <tr>
+                      <td class="text-base-content/60">Install via</td>
+                      <td>MCP tab → Add Server</td>
+                      <td>Extensions tab → Browse or Import</td>
+                    </tr>
+                    <tr>
+                      <td class="text-base-content/60">Source</td>
+                      <td>npm, local binary, github</td>
+                      <td>npm, GitHub, local path, OpenAPI, Claude</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-[11px] font-mono text-base-content/40 mt-3">An extension can include MCP servers as one of its components — it handles registering them for you.</p>
+            </div>
+          </div>
+
+          <!-- Component types -->
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Component types</h3>
+              <div class="space-y-2 text-xs font-mono">
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-warning badge-xs shrink-0 mt-0.5">skills</span>
+                  <span class="text-base-content/60">Installed to <code class="bg-base-300 px-1 rounded">~/.agent007/skills/</code> — slash commands in your editor</span>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-info badge-xs shrink-0 mt-0.5">tools</span>
+                  <span class="text-base-content/60">Installed to <code class="bg-base-300 px-1 rounded">~/.agent007/tools/</code> — scripts/binaries callable by agents</span>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-ghost badge-xs shrink-0 mt-0.5">workflows</span>
+                  <span class="text-base-content/60">Installed to <code class="bg-base-300 px-1 rounded">~/.agent007/workflows/</code> — multi-step pipelines</span>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-accent badge-xs shrink-0 mt-0.5">MCP</span>
+                  <span class="text-base-content/60">Registered in the MCP registry — auto-approved if the manifest says so</span>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-success badge-xs shrink-0 mt-0.5">RAG</span>
+                  <span class="text-base-content/60">Registered as RAG sources — indexed automatically after install</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compat grades -->
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Compatibility grades</h3>
+              <div class="space-y-2 text-xs font-mono">
+                <div class="flex items-center gap-3">
+                  <span class="badge badge-success font-bold shrink-0">A</span>
+                  <span class="text-base-content/60">Fully verified — has an <code class="bg-base-300 px-1 rounded">agent007.json</code> manifest and all components are valid</span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="badge badge-warning font-bold shrink-0">B</span>
+                  <span class="text-base-content/60">Compatible but review recommended — npm package or partial manifest</span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="badge badge-error font-bold shrink-0">C</span>
+                  <span class="text-base-content/60">Partial — some components could not be parsed or verified</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             RAG SOURCES
+        ════════════════════════════════════════════════════════════ -->
+        <div v-if="activeSection === 'rag'" class="max-w-4xl space-y-6">
+          <div>
+            <h2 class="text-base font-bold font-mono uppercase tracking-widest text-base-content/70 mb-1">RAG Sources</h2>
+            <p class="text-sm text-base-content/50">Index external knowledge so agents can retrieve it via <code class="bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code>.</p>
+          </div>
+
+          <!-- Status lifecycle -->
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Indexing lifecycle</h3>
+              <div class="flex items-center gap-2 flex-wrap text-xs font-mono">
+                <span class="badge badge-ghost">pending</span>
+                <span class="text-base-content/30">→ added, not yet indexed →</span>
+                <span class="badge badge-warning">indexing</span>
+                <span class="text-base-content/30">→ reading content →</span>
+                <span class="badge badge-success">ready</span>
+                <span class="text-base-content/30">or</span>
+                <span class="badge badge-error">error</span>
+              </div>
+              <p class="text-[11px] font-mono text-base-content/40 mt-3">Only <strong>ready</strong> sources appear in query results and are injected into prompt context. Click <strong>↺ reindex</strong> to re-process after the source content changes.</p>
+            </div>
+          </div>
+
+          <!-- Source kinds -->
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Supported source kinds</h3>
+              <div class="space-y-3 text-xs font-mono">
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-outline badge-xs shrink-0 mt-0.5">url</span>
+                  <div class="text-base-content/60">
+                    HTTP/HTTPS URL. agent007 fetches and chunks the page content. Useful for public documentation, API references, or any web content.
+                    <div class="bg-base-300 rounded px-2 py-1 mt-1 text-[10px]">https://docs.example.com/api</div>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-outline badge-xs shrink-0 mt-0.5">file</span>
+                  <div class="text-base-content/60">
+                    A single file on disk. Supports any text format — Markdown, plain text, code files.
+                    <div class="bg-base-300 rounded px-2 py-1 mt-1 text-[10px]">/path/to/architecture.md</div>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <span class="badge badge-outline badge-xs shrink-0 mt-0.5">directory</span>
+                  <div class="text-base-content/60">
+                    A directory of files. agent007 walks the tree and indexes each readable file as a chunk group. Good for entire docs folders.
+                    <div class="bg-base-300 rounded px-2 py-1 mt-1 text-[10px]">/path/to/docs/</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-2">Using RAG in prompts</h3>
+              <p class="text-xs text-base-content/60 leading-relaxed mb-2">Add <code class="bg-base-300 px-1 rounded">&#123;&#123;rag_context&#125;&#125;</code> to any skill or workflow prompt template. agent007 retrieves the most relevant chunks from ready sources and injects them at that position.</p>
+              <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div>Review the following code:</div>
+                <div class="text-info">&#123;&#123;args&#125;&#125;</div>
+                <div class="mt-1">Relevant project context:</div>
+                <div class="text-success">&#123;&#123;rag_context&#125;&#125;</div>
+              </div>
+              <p class="text-[10px] font-mono text-base-content/35 mt-2">Add sources in Memory → RAG Sources tab. Test with the query box before using in production.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             TOOL REGISTRY
+        ════════════════════════════════════════════════════════════ -->
+        <div v-if="activeSection === 'tools'" class="max-w-4xl space-y-6">
+          <div>
+            <h2 class="text-base font-bold font-mono uppercase tracking-widest text-base-content/70 mb-1">Tool Registry</h2>
+            <p class="text-sm text-base-content/50">Local scripts, binaries, and external APIs that agents can execute as subprocesses.</p>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">PATH discovery</h3>
+              <p class="text-xs text-base-content/60 leading-relaxed">
+                agent007 scans your <code class="bg-base-300 px-1 rounded">$PATH</code> and the project's <code class="bg-base-300 px-1 rounded">.agent007/tools/</code> directory on startup. Any executable found is registered as an available tool. The Tools tab shows all discovered tools grouped by source.
+              </p>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">Importing local scripts</h3>
+              <p class="text-xs text-base-content/60 leading-relaxed mb-3">
+                Use <strong class="font-mono">Tools → Import</strong> to register a local script or binary. Provide a name and path — agent007 copies or symlinks it into <code class="bg-base-300 px-1 rounded">.agent007/tools/</code> and optionally generates a companion skill so it has a slash-command trigger.
+              </p>
+              <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60 space-y-1">
+                <div>Name: <span class="text-primary">my-linter</span></div>
+                <div>Path: <span class="text-success">/usr/local/bin/eslint</span></div>
+                <div>Generate companion skill: <span class="text-warning">✓ yes → /lint</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-200 border border-base-300">
+            <div class="card-body p-4">
+              <h3 class="font-bold font-mono text-xs uppercase tracking-widest text-base-content/50 mb-3">TOOL.yaml manifest</h3>
+              <p class="text-xs text-base-content/60 leading-relaxed mb-2">
+                Tools stored in <code class="bg-base-300 px-1 rounded">.agent007/tools/&lt;name&gt;/TOOL.yaml</code> get a rich manifest with schema validation, argument descriptions, and safety flags. Extensions install tools in this format automatically.
+              </p>
+              <div class="bg-base-300 rounded-lg p-3 text-[11px] font-mono text-base-content/60">
+                <div><span class="text-primary">name</span>: my-linter</div>
+                <div><span class="text-primary">command</span>: eslint</div>
+                <div><span class="text-primary">description</span>: Lint JavaScript files</div>
+                <div><span class="text-primary">args</span>:</div>
+                <div class="pl-2">- name: <span class="text-success">target</span></div>
+                <div class="pl-4">description: File or glob to lint</div>
+                <div class="pl-4">required: <span class="text-warning">true</span></div>
+              </div>
+            </div>
           </div>
         </div>
 

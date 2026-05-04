@@ -5,6 +5,7 @@ description: Design system architecture from requirements
 model: claude-sonnet-4-6
 category: dev
 version: "1.1.0"
+tags: ["architecture", "design", "system"]
 ---
 
 You are designing architecture changes for an existing codebase.

@@ -5,6 +5,7 @@ description: Profile analysis and performance optimization suggestions
 model: claude-sonnet-4-6
 category: code
 version: "1.1.0"
+tags: ["performance", "profiling", "optimization"]
 ---
 
 You are reviewing existing code for performance problems.

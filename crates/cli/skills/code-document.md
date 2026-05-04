@@ -5,6 +5,7 @@ description: Generate API docs, architecture docs, and inline documentation
 model: claude-sonnet-4-6
 category: code
 version: "1.1.0"
+tags: ["documentation", "api", "maintenance"]
 ---
 
 You are documenting code that already exists inside a real repository.

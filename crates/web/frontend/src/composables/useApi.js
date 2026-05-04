@@ -67,6 +67,7 @@ export function useApi() {
 
     // Memory
     listMemory: (scope) => fetchJson(`/api/memory/${encodeURIComponent(scope)}`),
+    getMemoryStats: (scope) => fetchJson(`/api/memory/${encodeURIComponent(scope)}/stats`),
     getMemory: (scope, key) => fetch(`/api/memory/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`).then(r => {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
       return r.text()
@@ -123,6 +124,47 @@ export function useApi() {
     // Sharing — bundle import
     importBundle: (bundle, overwrite) =>
       fetchJson('/api/bundle/import', { method: 'POST', body: JSON.stringify({ bundle, overwrite }) }),
+
+    // Tool Registry
+    listTools: () => fetchJson('/api/tools'),
+    discoverTools: () => fetchJson('/api/tools/discover'),
+    searchTools: (provider = 'all', q = '', limit = 20) =>
+      fetchJson(`/api/tools/search?provider=${encodeURIComponent(provider)}&q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`),
+    importTool: (data) => fetchJson('/api/tools/import', { method: 'POST', body: JSON.stringify(data) }),
+    getTool: (name) => fetchJson(`/api/tools/${encodeURIComponent(name)}`),
+    saveTool: (data) => fetchJson('/api/tools', { method: 'POST', body: JSON.stringify(data) }),
+    deleteTool: (name, scope = 'project') =>
+      fetchJson(`/api/tools/${encodeURIComponent(name)}?scope=${encodeURIComponent(scope)}`, { method: 'DELETE' }),
+    testTool: (name, args = null) =>
+      fetchJson(`/api/tools/${encodeURIComponent(name)}/test`, { method: 'POST', body: JSON.stringify({ args }) }),
+    approveTool: (name, scope = 'project', approvedBy = null) =>
+      fetchJson(`/api/tools/${encodeURIComponent(name)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ scope, approved_by: approvedBy }),
+      }),
+
+    // Skill generation
+    generateSkill: (data) => fetchJson('/api/skills/generate', { method: 'POST', body: JSON.stringify(data) }),
+
+    // Extensions
+    previewExtension: (data) => fetchJson('/api/extensions/preview', { method: 'POST', body: JSON.stringify(data) }),
+    installExtension: (data) => fetchJson('/api/extensions/install', { method: 'POST', body: JSON.stringify(data) }),
+    listExtensions: () => fetchJson('/api/extensions/list'),
+
+    // MCP Server Registry
+    listMcpServers: () => fetchJson('/api/mcp/servers'),
+    addMcpServer: (data) => fetchJson('/api/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+    deleteMcpServer: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    connectMcpServer: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/connect`, { method: 'POST' }),
+    approveMcpServer: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/approve`, { method: 'POST' }),
+    getMcpServerTools: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/tools`),
+
+    // RAG Sources
+    listRagSources: () => fetchJson('/api/rag/sources'),
+    addRagSource: (data) => fetchJson('/api/rag/sources', { method: 'POST', body: JSON.stringify(data) }),
+    deleteRagSource: (id) => fetchJson(`/api/rag/sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    reindexRagSource: (id) => fetchJson(`/api/rag/sources/${encodeURIComponent(id)}/reindex`, { method: 'POST' }),
+    queryRag: (q, limit = 5) => fetchJson(`/api/rag/query?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`),
   }
 
   return { api, loading, error, call }

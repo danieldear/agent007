@@ -5,6 +5,7 @@ description: Security audit covering OWASP, dependencies, and threat modeling
 model: claude-sonnet-4-6
 category: code
 version: "1.1.0"
+tags: ["security", "owasp", "audit"]
 ---
 
 You are auditing existing code for security issues.

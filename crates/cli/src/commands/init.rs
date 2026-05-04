@@ -484,136 +484,124 @@ pub async fn execute(
 
     // ── 3b. Seed built-in skills ─────────────────────────────────────────────
     section("3b. Seeding built-in skills");
-    if global {
-        let skills_dir_seed = home.join("skills");
-        let mut built_in_skill_count = 0usize;
-        for (filename, content) in crate::built_in_skills::ALL_SKILLS {
-            if write_file(
-                &skills_dir_seed.join(filename),
-                content,
-                &format!("skills/{filename}"),
-                force,
-            )? {
-                built_in_skill_count += 1;
-            }
+    let skills_dir_seed = home.join("skills");
+    let mut built_in_skill_count = 0usize;
+    for (filename, content) in crate::built_in_skills::ALL_SKILLS {
+        if write_file(
+            &skills_dir_seed.join(filename),
+            content,
+            &format!("skills/{filename}"),
+            force,
+        )? {
+            built_in_skill_count += 1;
         }
-        if built_in_skill_count > 0 {
-            ok(&format!("{built_in_skill_count} built-in skills seeded"));
-        }
-    } else {
-        info("Skipping project-local built-in skills; project .agent007/ is reserved for overrides and custom skills");
+    }
+    if built_in_skill_count > 0 {
+        ok(&format!("{built_in_skill_count} built-in skills seeded"));
     }
 
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
-    if global {
-        let wf_dir = home.join("workflows");
-        write_file(
-            &wf_dir.join("log-analysis.yaml"),
-            WORKFLOW_LOG_ANALYSIS,
-            "workflows/log-analysis.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("code-review.yaml"),
-            WORKFLOW_CODE_REVIEW,
-            "workflows/code-review.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("security-audit.yaml"),
-            WORKFLOW_SECURITY_AUDIT,
-            "workflows/security-audit.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("sparc.yaml"),
-            WORKFLOW_SPARC,
-            "workflows/sparc.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("tdd.yaml"),
-            WORKFLOW_TDD,
-            "workflows/tdd.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("ideation.yaml"),
-            WORKFLOW_IDEATION,
-            "workflows/ideation.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("feature.yaml"),
-            WORKFLOW_FEATURE,
-            "workflows/feature.yaml",
-            force,
-        )?;
-        write_file(
-            &wf_dir.join("brainstorm.yaml"),
-            WORKFLOW_BRAINSTORM,
-            "workflows/brainstorm.yaml",
-            force,
-        )?;
-    } else {
-        info("Skipping project-local built-in workflows; project .agent007/ is reserved for overrides and custom workflows");
-    }
+    let wf_dir = home.join("workflows");
+    write_file(
+        &wf_dir.join("log-analysis.yaml"),
+        WORKFLOW_LOG_ANALYSIS,
+        "workflows/log-analysis.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("code-review.yaml"),
+        WORKFLOW_CODE_REVIEW,
+        "workflows/code-review.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("security-audit.yaml"),
+        WORKFLOW_SECURITY_AUDIT,
+        "workflows/security-audit.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("sparc.yaml"),
+        WORKFLOW_SPARC,
+        "workflows/sparc.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("tdd.yaml"),
+        WORKFLOW_TDD,
+        "workflows/tdd.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("ideation.yaml"),
+        WORKFLOW_IDEATION,
+        "workflows/ideation.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("feature.yaml"),
+        WORKFLOW_FEATURE,
+        "workflows/feature.yaml",
+        force,
+    )?;
+    write_file(
+        &wf_dir.join("brainstorm.yaml"),
+        WORKFLOW_BRAINSTORM,
+        "workflows/brainstorm.yaml",
+        force,
+    )?;
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
-    if global {
-        let personas_dir = home.join("personas");
-        let registry = agent007_personas::PersonaRegistry::built_in();
-        let personas = {
-            use agent007_core::PersonaProvider;
-            registry.list()
-        };
-        let mut persona_count = 0usize;
-        for spec in &personas {
-            let filename = spec
-                .name
-                .chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || c == '-' || c == '_' {
-                        c
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-                .to_lowercase();
-            let path = personas_dir.join(format!("{filename}.toml"));
-            let tools_str = spec
-                .allowed_tools
-                .iter()
-                .map(|t| format!("\"{}\"", t))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let content = format!(
-                "name            = \"{}\"\n\
-                 description     = \"{}\"\n\
-                 preferred_model = \"{}\"\n\
-                 allowed_tools   = [{}]\n\
-                 \n\
-                 system_prompt   = \"\"\"\n\
-                 {}\n\
-                 \"\"\"\n",
-                spec.name,
-                spec.description.replace('"', "\\\""),
-                spec.preferred_model,
-                tools_str,
-                spec.system_prompt,
-            );
-            if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
-                persona_count += 1;
-            }
+    let personas_dir = home.join("personas");
+    let registry = agent007_personas::PersonaRegistry::built_in();
+    let personas = {
+        use agent007_core::PersonaProvider;
+        registry.list()
+    };
+    let mut persona_count = 0usize;
+    for spec in &personas {
+        let filename = spec
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .to_lowercase();
+        let path = personas_dir.join(format!("{filename}.toml"));
+        let tools_str = spec
+            .allowed_tools
+            .iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let content = format!(
+            "name            = \"{}\"\n\
+             description     = \"{}\"\n\
+             preferred_model = \"{}\"\n\
+             allowed_tools   = [{}]\n\
+             \n\
+             system_prompt   = \"\"\"\n\
+             {}\n\
+             \"\"\"\n",
+            spec.name,
+            spec.description.replace('"', "\\\""),
+            spec.preferred_model,
+            tools_str,
+            spec.system_prompt,
+        );
+        if write_file(&path, &content, &format!("personas/{filename}.toml"), force)? {
+            persona_count += 1;
         }
-        if persona_count > 0 {
-            ok(&format!("{persona_count} persona files seeded"));
-        }
-    } else {
-        info("Skipping project-local built-in personas; project .agent007/ is reserved for persona overrides");
+    }
+    if persona_count > 0 {
+        ok(&format!("{persona_count} persona files seeded"));
     }
 
     // ── 5b. Bootstrap global ~/.agent007/ if this is a project-local init ───

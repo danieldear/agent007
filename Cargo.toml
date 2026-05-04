@@ -21,6 +21,7 @@ members = [
     "crates/lsp-client",
     "crates/sharing",
     "crates/p2p",
+    "crates/extensions",
 ]
 resolver = "2"
 

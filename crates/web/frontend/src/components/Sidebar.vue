@@ -22,7 +22,10 @@ const navItems = [
   { id: 'agents',    label: 'Personas',  symbol: '◉' },
   { id: 'skills',    label: 'Skills',    symbol: '⚡' },
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
-  { id: 'memory',    label: 'Memory',    symbol: '◈' },
+  { id: 'tools',     label: 'Tools',     symbol: '🛠' },
+  { id: 'mcp',        label: 'MCP',        symbol: '⬡' },
+  { id: 'extensions', label: 'Extensions', symbol: '⊞' },
+  { id: 'memory',     label: 'Memory',     symbol: '◈' },
   { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },
   { id: 'help',      label: 'Guide',     symbol: '?' },
 ]
@@ -54,12 +57,13 @@ const navItems = [
         :class="current === item.id
           ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
           : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
+        :title="item.label"
         @click="$emit('navigate', item.id)"
       >
         <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
           {{ item.symbol }}
         </span>
-        <span class="font-mono text-[12px] tracking-wide">{{ item.label }}</span>
+        <span class="font-mono text-[12px] tracking-wide leading-tight line-clamp-2 break-words">{{ item.label }}</span>
       </button>
     </nav>
 

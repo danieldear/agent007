@@ -5,6 +5,7 @@ description: Thorough pull request review with actionable feedback
 model: claude-sonnet-4-6
 category: dev
 version: "1.1.0"
+tags: ["review", "quality", "security"]
 ---
 
 You are reviewing a change in an existing codebase.

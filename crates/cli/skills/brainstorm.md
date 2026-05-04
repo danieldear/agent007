@@ -5,6 +5,7 @@ description: Free-form ideation — explores a problem space, generates 3–5 di
 model: claude-sonnet-4-6
 category: project
 version: "1.1.0"
+tags: ["ideation", "research", "planning"]
 ---
 
 You are a brainstorming specialist and design-thinking facilitator for an active

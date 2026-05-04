@@ -12,6 +12,11 @@ use serde_json::Value;
 use std::path::{Path as FsPath, PathBuf};
 use ts_rs::TS;
 
+use crate::tool_registry::{
+    approve_tool, delete_tool, discover_path_tools, get_tool_by_name, import_tool, list_tools,
+    save_manifest_tool, search_remote_tools, set_auto_skill_trigger, test_tool, ToolImportRequest,
+    ToolManifest, ToolScope,
+};
 use agent007_core::paths::{
     agent007_global_home, agent007_project_home, agent007_write_home, persona_search_dirs,
     skills_search_dirs, workflow_search_dirs,
@@ -36,8 +41,6 @@ fn dashboard_controls_workflow(kind: &str) -> bool {
 fn run_store_for_web() -> agent007_core::RunStore {
     agent007_core::RunStore::new(agent007_write_home().join("sessions"))
 }
-
-
 
 // ── request/response shapes ───────────────────────────────────────────────────
 
@@ -81,6 +84,76 @@ pub struct SkillRunResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolScopeQuery {
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolSaveRequest {
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub manifest: ToolManifest,
+    #[serde(default)]
+    pub entry_content: Option<String>,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolTestRequest {
+    #[serde(default)]
+    pub args: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolSearchQuery {
+    pub provider: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolImportApiRequest {
+    pub provider: String,
+    #[serde(default)]
+    pub package: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub executable: Option<String>,
+    #[serde(default)]
+    pub local_path: Option<String>,
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub safety: Option<String>,
+    #[serde(default)]
+    pub timeout_sec: Option<u64>,
+    #[serde(default)]
+    pub approval_required: Option<bool>,
+    #[serde(default)]
+    pub hash_pinning: Option<bool>,
+    #[serde(default)]
+    pub generate_skill: bool,
+    #[serde(default)]
+    pub skill_category: Option<String>,
+    #[serde(default)]
+    pub skill_model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolApproveRequest {
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub approved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,25 +314,26 @@ pub async fn run_handler(
 /// `GET /api/skills` — list skills from project-local and global `.agent007/skills/`.
 /// Each skill includes a `source` field: `"project"` or `"global"`.
 pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let project_dir = agent007_project_home().map(|p| p.join("skills"));
     let global_dir = agent007_global_home().join("skills");
 
     let mut skills: Vec<Value> = Vec::new();
     let mut index_by_trigger: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
-    let dirs: Vec<(std::path::PathBuf, &str)> = {
-        let mut v: Vec<(std::path::PathBuf, &str)> = Vec::new();
-        if let Some(p) = project_dir {
-            v.push((p, "project"));
-        }
-        v.push((global_dir, "global"));
-        v
-    };
-
-    for (dir, source) in &dirs {
-        for skill in load_skills_from_dir(dir) {
+    for dir in skills_search_dirs() {
+        let source = if dir == global_dir {
+            "global"
+        } else {
+            "project"
+        };
+        for skill in load_skills_from_dir(&dir) {
             let trigger = skill.trigger().to_string();
+            let variant = serde_json::json!({
+                "source": source,
+                "name": skill.name(),
+                "version": skill.version(),
+                "path": skill.entry_path().display().to_string(),
+            });
             if let Some(index) = index_by_trigger.get(&trigger).copied() {
                 if let Some(obj) = skills[index].as_object_mut() {
                     let mut shadowed = obj
@@ -278,9 +352,24 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                         "has_collisions".to_string(),
                         Value::Bool(!shadowed.is_empty()),
                     );
+                    let mut variants = obj
+                        .get("variants")
+                        .and_then(|value| value.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let already_present = variants.iter().any(|entry| {
+                        entry.get("source").and_then(|v| v.as_str()) == Some(source)
+                            && entry.get("path").and_then(|v| v.as_str())
+                                == Some(skill.entry_path().to_string_lossy().as_ref())
+                    });
+                    if !already_present {
+                        variants.push(variant);
+                    }
+                    let variant_count = variants.len().saturating_sub(1) as u64;
+                    obj.insert("variants".to_string(), Value::Array(variants));
                     obj.insert(
                         "collision_count".to_string(),
-                        Value::from(shadowed.len() as u64),
+                        Value::from(std::cmp::max(shadowed.len() as u64, variant_count)),
                     );
                 }
             } else {
@@ -290,6 +379,7 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                         "precedence_source".to_string(),
                         Value::String(source.to_string()),
                     );
+                    obj.insert("variants".to_string(), Value::Array(vec![variant]));
                     obj.insert("shadowed_sources".to_string(), Value::Array(Vec::new()));
                     obj.insert("has_collisions".to_string(), Value::Bool(false));
                     obj.insert("collision_count".to_string(), Value::from(0u64));
@@ -300,6 +390,31 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
         }
     }
 
+    for entry in &mut skills {
+        if let Some(obj) = entry.as_object_mut() {
+            let precedence = obj
+                .get("precedence_source")
+                .and_then(|value| value.as_str())
+                .unwrap_or("project");
+            let shadowed_len = obj
+                .get("shadowed_sources")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            let scope_kind = match (precedence, shadowed_len) {
+                ("global", 0) => "global-skill",
+                ("project", 0) => "project-skill",
+                ("project", _) => "project-override",
+                ("global", _) => "global-override",
+                _ => "project-skill",
+            };
+            obj.insert(
+                "scope_kind".to_string(),
+                Value::String(scope_kind.to_string()),
+            );
+        }
+    }
+
     Json(Value::Array(skills)).into_response()
 }
 
@@ -307,18 +422,11 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
 pub async fn skill_delete_handler(Path(trigger): Path<String>) -> impl IntoResponse {
     let target_trigger = format!("/{}", trigger.trim_start_matches('/'));
 
-    // Search dirs: project-local first, then global.
-    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(p) = agent007_project_home() {
-        dirs.push(p.join("skills"));
-    }
-    dirs.push(agent007_global_home().join("skills"));
-
     // Scan frontmatter to find the file with matching trigger.
     // This handles the case where the filename doesn't match the trigger slug
     // (e.g. senior-ml-engineer.md with trigger: /skill).
-    for dir in &dirs {
-        for skill in load_skills_from_dir(dir) {
+    for dir in skills_search_dirs() {
+        for skill in load_skills_from_dir(&dir) {
             if skill.trigger() == target_trigger {
                 return match remove_skill_entry(&skill) {
                     Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
@@ -1220,9 +1328,9 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
     };
 
     for (dir, source_label) in &sources {
-        if let Ok(registry) = agent007_personas::PersonaRegistry::load_from_dirs(
-            std::iter::once(dir.as_path()),
-        ) {
+        if let Ok(registry) =
+            agent007_personas::PersonaRegistry::load_from_dirs(std::iter::once(dir.as_path()))
+        {
             use agent007_core::PersonaProvider;
             for p in registry.list() {
                 let key = p.name.to_ascii_lowercase();
@@ -1439,6 +1547,11 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                 if ext == Some("yaml") || ext == Some("yml") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         let source = if is_global { "global" } else { "project" };
+                        let variant = serde_json::json!({
+                            "source": source,
+                            "name": stem,
+                            "path": path.display().to_string(),
+                        });
                         if let Some(index) = index_by_name.get(stem).copied() {
                             if let Some(obj) = result[index].as_object_mut() {
                                 let mut shadowed = obj
@@ -1457,9 +1570,27 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                                     "has_collisions".to_string(),
                                     Value::Bool(!shadowed.is_empty()),
                                 );
+                                let mut variants = obj
+                                    .get("variants")
+                                    .and_then(|value| value.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let already_present = variants.iter().any(|entry| {
+                                    entry.get("source").and_then(|v| v.as_str()) == Some(source)
+                                        && entry.get("path").and_then(|v| v.as_str())
+                                            == Some(path.to_string_lossy().as_ref())
+                                });
+                                if !already_present {
+                                    variants.push(variant);
+                                }
+                                let variant_count = variants.len().saturating_sub(1) as u64;
+                                obj.insert("variants".to_string(), Value::Array(variants));
                                 obj.insert(
                                     "collision_count".to_string(),
-                                    Value::from(shadowed.len() as u64),
+                                    Value::from(std::cmp::max(
+                                        shadowed.len() as u64,
+                                        variant_count,
+                                    )),
                                 );
                             }
                         } else {
@@ -1470,6 +1601,7 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                                     "precedence_source".to_string(),
                                     Value::String(source.to_string()),
                                 );
+                                obj.insert("variants".to_string(), Value::Array(vec![variant]));
                                 obj.insert(
                                     "shadowed_sources".to_string(),
                                     Value::Array(Vec::new()),
@@ -1483,6 +1615,30 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                     }
                 }
             }
+        }
+    }
+    for entry in &mut result {
+        if let Some(obj) = entry.as_object_mut() {
+            let precedence = obj
+                .get("precedence_source")
+                .and_then(|value| value.as_str())
+                .unwrap_or("project");
+            let shadowed_len = obj
+                .get("shadowed_sources")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            let scope_kind = match (precedence, shadowed_len) {
+                ("global", 0) => "global-workflow",
+                ("project", 0) => "project-workflow",
+                ("project", _) => "project-override",
+                ("global", _) => "global-override",
+                _ => "project-workflow",
+            };
+            obj.insert(
+                "scope_kind".to_string(),
+                Value::String(scope_kind.to_string()),
+            );
         }
     }
     result.sort_by(|a, b| {
@@ -2161,6 +2317,18 @@ fn web_namespace(scope: &str) -> &str {
     scope
 }
 
+#[derive(Serialize)]
+pub struct MemoryScopeStats {
+    pub scope: String,
+    pub total_keys: usize,
+    pub semantic_keys: usize,
+    pub procedural_keys: usize,
+    pub episodic_keys: usize,
+    pub avg_confidence: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub learning_skill_count: Option<usize>,
+}
+
 // ── Memory list ───────────────────────────────────────────────────────────────
 
 pub async fn memory_list_handler(
@@ -2213,6 +2381,64 @@ pub async fn memory_get_handler(
             (StatusCode::INTERNAL_SERVER_ERROR, "read error").into_response()
         }
     }
+}
+
+pub async fn memory_stats_handler(
+    State(_state): State<AppState>,
+    Path(scope): Path<String>,
+) -> impl IntoResponse {
+    if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid scope"})),
+        )
+            .into_response();
+    }
+
+    let store = memory_store_for_web_scope(&scope);
+    let namespace = web_namespace(&scope);
+    let scoped = store.scoped(namespace);
+    let keys = scoped.list_keys().unwrap_or_default();
+    let mut semantic = 0usize;
+    let mut procedural = 0usize;
+    let mut episodic = 0usize;
+    let mut confidence_sum = 0.0f32;
+    let mut confidence_count = 0usize;
+
+    for key in &keys {
+        let Ok(Some((_value, meta))) = scoped.read_with_meta(key) else {
+            continue;
+        };
+        match meta.entry_type {
+            agent007_memory::store::MemoryEntryType::Semantic => semantic += 1,
+            agent007_memory::store::MemoryEntryType::Procedural => procedural += 1,
+            agent007_memory::store::MemoryEntryType::Episodic => episodic += 1,
+        }
+        confidence_sum += meta.confidence;
+        confidence_count += 1;
+    }
+
+    let learning_skill_count = if scope == "learning" {
+        let learning_store = agent007_learning::store::LearningStore::new(scoped);
+        learning_store.list_skill_names().ok().map(|s| s.len())
+    } else {
+        None
+    };
+
+    Json(MemoryScopeStats {
+        scope,
+        total_keys: keys.len(),
+        semantic_keys: semantic,
+        procedural_keys: procedural,
+        episodic_keys: episodic,
+        avg_confidence: if confidence_count == 0 {
+            0.0
+        } else {
+            confidence_sum / confidence_count as f32
+        },
+        learning_skill_count,
+    })
+    .into_response()
 }
 
 // ── Workflow Templates ────────────────────────────────────────────────────────
@@ -3083,6 +3309,513 @@ pub async fn workflow_delete_handler(Path(name): Path<String>) -> impl IntoRespo
         .into_response()
 }
 
+fn parse_tool_scope(scope: Option<&str>, default_scope: ToolScope) -> Result<ToolScope, String> {
+    match scope.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => ToolScope::parse(value)
+            .ok_or_else(|| format!("invalid scope '{value}' (expected 'project' or 'global')")),
+        None => Ok(default_scope),
+    }
+}
+
+fn scope_home_for_tools(
+    scope: ToolScope,
+    project_home: Option<PathBuf>,
+    global_home: PathBuf,
+) -> Result<PathBuf, String> {
+    match scope {
+        ToolScope::Project => project_home
+            .ok_or_else(|| {
+                "project scope is unavailable: not inside a project with .agent007".to_string()
+            })
+            .map(|home| home.to_path_buf()),
+        ToolScope::Global => Ok(global_home),
+    }
+}
+
+fn build_tool_skill_template(tool_name: &str, safety: &str) -> String {
+    format!(
+        "You are operating the `{tool_name}` tool.\n\nTask:\n{{{{args}}}}\n\nRules:\n1. Decide if `{tool_name}` should be used.\n2. If yes, call it with precise arguments and analyze stdout/stderr.\n3. If tool fails, explain root cause and propose a safe retry.\n4. Treat safety class `{safety}` as strict policy.\n5. Return actionable output, not raw logs unless needed.\n"
+    )
+}
+
+fn generate_tool_skill(
+    tool_name: &str,
+    description: &str,
+    safety: &str,
+    scope: ToolScope,
+    project_home: Option<PathBuf>,
+    global_home: PathBuf,
+    category: Option<String>,
+    model: Option<String>,
+) -> Result<(String, String), String> {
+    let write_home = scope_home_for_tools(scope, project_home, global_home)?;
+    let skills_dir = write_home.join("skills");
+    std::fs::create_dir_all(&skills_dir)
+        .map_err(|e| format!("failed to create {}: {e}", skills_dir.display()))?;
+
+    let trigger =
+        normalize_skill_trigger(&format!("/use-{}", sanitize_file_stem(tool_name, "tool")));
+    let file_stem = trigger
+        .trim_start_matches('/')
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let path = skills_dir.join(format!("{file_stem}.md"));
+    let skill_name = format!("Use {}", tool_name);
+    let skill_desc = if description.trim().is_empty() {
+        format!("Use tool '{}' safely and interpret its results.", tool_name)
+    } else {
+        format!("Use tool '{}': {}", tool_name, description.trim())
+    };
+    let skill_model = model.unwrap_or_else(|| "codex".to_string());
+    let category_ref = category.as_deref().filter(|value| !value.trim().is_empty());
+    let mut frontmatter_yaml = serde_yaml::to_string(&SkillFrontmatter {
+        name: &skill_name,
+        trigger: &trigger,
+        description: &skill_desc,
+        model: &skill_model,
+        category: category_ref,
+    })
+    .map_err(|e| format!("failed to serialize skill frontmatter: {e}"))?;
+    if let Some(stripped) = frontmatter_yaml.strip_prefix("---\n") {
+        frontmatter_yaml = stripped.to_string();
+    }
+
+    let body = build_tool_skill_template(tool_name, safety);
+    let content = format!("---\n{}---\n{}\n", frontmatter_yaml, body.trim_end());
+    std::fs::write(&path, content)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+
+    let _ = sync_claude_slash_commands_for_write_home(&write_home);
+    Ok((trigger, path.display().to_string()))
+}
+
+fn tool_reference_keys(reference: &str) -> Vec<String> {
+    let normalized = reference.trim().trim_start_matches("./").replace('\\', "/");
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut keys = Vec::new();
+    let mut push_unique = |value: String| {
+        if !value.is_empty() && !keys.iter().any(|existing| existing == &value) {
+            keys.push(value);
+        }
+    };
+
+    if let Some(named) = normalized.strip_prefix("tool:") {
+        let named = named.trim().trim_start_matches('/');
+        if named.is_empty() {
+            return Vec::new();
+        }
+        push_unique(named.to_ascii_lowercase());
+        if let Some(first) = named.split('/').next() {
+            push_unique(first.to_ascii_lowercase());
+        }
+        return keys;
+    }
+
+    let trimmed = normalized
+        .strip_prefix("tools/")
+        .unwrap_or(normalized.as_str());
+
+    push_unique(trimmed.to_ascii_lowercase());
+
+    if let Some(first) = trimmed.split('/').next() {
+        push_unique(first.to_ascii_lowercase());
+    }
+
+    if let Some(file_name) = trimmed.split('/').next_back() {
+        if let Some(stem) = file_name.split('.').next() {
+            push_unique(stem.to_ascii_lowercase());
+        }
+    }
+
+    keys
+}
+
+fn compute_tool_association_index() -> std::collections::HashMap<String, serde_json::Value> {
+    let mut associations: std::collections::HashMap<
+        String,
+        (
+            std::collections::BTreeSet<String>,
+            std::collections::BTreeSet<String>,
+        ),
+    > = std::collections::HashMap::new();
+
+    let mut register_refs = |tool_refs: &std::collections::BTreeSet<String>,
+                             skill: Option<&str>,
+                             workflow: Option<&str>| {
+        for reference in tool_refs {
+            for key in tool_reference_keys(reference) {
+                let entry = associations.entry(key).or_default();
+                if let Some(trigger) = skill {
+                    entry.0.insert(trigger.to_string());
+                }
+                if let Some(name) = workflow {
+                    entry.1.insert(name.to_string());
+                }
+            }
+        }
+    };
+
+    for dir in skills_search_dirs() {
+        for skill in load_skills_from_dir(&dir) {
+            let assets = skill_associations(&skill);
+            register_refs(&assets.tools, Some(skill.trigger()), None);
+        }
+    }
+
+    let skill_index = build_skill_association_index();
+    for wf_dir in workflow_search_dirs() {
+        if !wf_dir.exists() {
+            continue;
+        }
+        let loader = WorkflowLoader::new(wf_dir.clone());
+        let Ok(names) = loader.list_names() else {
+            continue;
+        };
+        for name in names {
+            let Ok(def) = loader.load_named(&name) else {
+                continue;
+            };
+            let mut workflow_assets = AssociatedAssets::default();
+            if let Some(description) = &def.description {
+                extract_associations_from_text(description, &mut workflow_assets);
+            }
+            for step in &def.steps {
+                if let Some(prompt) = &step.prompt {
+                    extract_associations_from_text(prompt, &mut workflow_assets);
+                }
+                if let Some(skill_ref) = &step.skill {
+                    let normalized = normalize_skill_key(skill_ref);
+                    if let Some(skill_assets) = skill_index.get(&normalized) {
+                        workflow_assets.merge(skill_assets);
+                    }
+                }
+            }
+            register_refs(&workflow_assets.tools, None, Some(&name));
+        }
+    }
+
+    let mut result = std::collections::HashMap::new();
+    for (key, (skills, workflows)) in associations {
+        result.insert(
+            key,
+            serde_json::json!({
+                "skills": skills.into_iter().collect::<Vec<_>>(),
+                "workflows": workflows.into_iter().collect::<Vec<_>>(),
+            }),
+        );
+    }
+    result
+}
+
+/// `GET /api/tools` — list local tool registry entries (project/global, project precedence).
+pub async fn tools_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    let associations = compute_tool_association_index();
+
+    match list_tools(project_home, global_home) {
+        Ok(tools) => {
+            let enriched: Vec<Value> = tools
+                .into_iter()
+                .map(|tool| {
+                    let key = tool.name.to_ascii_lowercase();
+                    let association = associations.get(&key).cloned().unwrap_or_else(|| {
+                        serde_json::json!({
+                            "skills": Vec::<String>::new(),
+                            "workflows": Vec::<String>::new(),
+                        })
+                    });
+                    let mut value =
+                        serde_json::to_value(tool).unwrap_or_else(|_| serde_json::json!({}));
+                    if let Value::Object(map) = &mut value {
+                        map.insert("associations".to_string(), association);
+                    }
+                    value
+                })
+                .collect();
+            Json(serde_json::json!(enriched)).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/tools/search?provider=...&q=...` — search remote tool sources.
+pub async fn tools_search_handler(
+    State(_state): State<AppState>,
+    Query(query): Query<ToolSearchQuery>,
+) -> impl IntoResponse {
+    let provider = query.provider.unwrap_or_else(|| "all".to_string());
+    let q = query.q.unwrap_or_default();
+    let limit = query.limit.unwrap_or(20).clamp(1, 50);
+    match search_remote_tools(&provider, &q, limit).await {
+        Ok(results) => Json(serde_json::json!({
+            "provider": provider,
+            "query": q,
+            "results": results
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/tools/discover` — scan $PATH for known CLI tools and return what's installed.
+pub async fn tools_discover_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    let discovered = discover_path_tools();
+    Json(serde_json::json!({ "tools": discovered })).into_response()
+}
+
+/// `POST /api/tools/import` — import tool wrappers from local paths or remote providers.
+pub async fn tool_import_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<ToolImportApiRequest>,
+) -> impl IntoResponse {
+    let scope = match parse_tool_scope(payload.scope.as_deref(), ToolScope::Project) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    let import_req = ToolImportRequest {
+        provider: payload.provider.clone(),
+        package: payload.package.clone(),
+        scope: Some(scope.as_str().to_string()),
+        version: payload.version.clone(),
+        executable: payload.executable.clone(),
+        local_path: payload.local_path.clone(),
+        repo_url: payload.repo_url.clone(),
+        entrypoint: payload.entrypoint.clone(),
+        safety: payload.safety.clone(),
+        timeout_sec: payload.timeout_sec,
+        approval_required: payload.approval_required,
+        hash_pinning: payload.hash_pinning,
+    };
+
+    match import_tool(project_home.clone(), global_home.clone(), import_req) {
+        Ok(tool) => {
+            let mut generated_trigger: Option<String> = None;
+            let mut generated_skill_path: Option<String> = None;
+            let mut skill_warning: Option<String> = None;
+            if payload.generate_skill {
+                match generate_tool_skill(
+                    &tool.name,
+                    &tool.description,
+                    &tool.safety,
+                    scope,
+                    project_home.clone(),
+                    global_home.clone(),
+                    payload.skill_category.clone(),
+                    payload.skill_model.clone(),
+                ) {
+                    Ok((trigger, path)) => {
+                        generated_trigger = Some(trigger.clone());
+                        generated_skill_path = Some(path);
+                        if let Err(err) = set_auto_skill_trigger(
+                            project_home.clone(),
+                            global_home.clone(),
+                            &tool.name,
+                            scope,
+                            &trigger,
+                        ) {
+                            skill_warning = Some(format!(
+                                "tool imported but failed to persist skill mapping: {err}"
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        skill_warning = Some(format!(
+                            "tool imported but failed to auto-generate companion skill: {err}"
+                        ));
+                    }
+                }
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "tool": tool,
+                "generated_skill_trigger": generated_trigger,
+                "generated_skill_path": generated_skill_path,
+                "warning": skill_warning,
+            }))
+            .into_response()
+        }
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/tools/:name` — fetch one tool by resolved precedence name.
+pub async fn tool_get_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    match get_tool_by_name(project_home, global_home, &name) {
+        Ok(Some(tool)) => {
+            Json(serde_json::to_value(tool).unwrap_or_else(|_| serde_json::json!({})))
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "tool not found" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/tools` — create/update a manifest-based tool in project/global scope.
+pub async fn tool_save_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<ToolSaveRequest>,
+) -> impl IntoResponse {
+    let scope = match parse_tool_scope(payload.scope.as_deref(), ToolScope::Project) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    match save_manifest_tool(
+        project_home,
+        global_home,
+        scope,
+        payload.manifest,
+        payload.entry_content,
+        payload.overwrite,
+    ) {
+        Ok(tool) => Json(serde_json::json!({ "ok": true, "tool": tool })).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/tools/:name?scope=project|global` — remove a tool from selected scope.
+pub async fn tool_delete_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<ToolScopeQuery>,
+) -> impl IntoResponse {
+    let scope = match parse_tool_scope(query.scope.as_deref(), ToolScope::Project) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    match delete_tool(project_home, global_home, &name, scope) {
+        Ok(true) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "tool not found in selected scope" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/tools/:name/test` — run a bounded test invocation and return stdout/stderr.
+pub async fn tool_test_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<ToolTestRequest>,
+) -> impl IntoResponse {
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    match test_tool(project_home, global_home, &name, payload.args).await {
+        Ok(result) => Json(serde_json::json!(result)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/tools/:name/approve` — approve quarantined tool and refresh hash pin.
+pub async fn tool_approve_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<ToolApproveRequest>,
+) -> impl IntoResponse {
+    let scope = match parse_tool_scope(payload.scope.as_deref(), ToolScope::Project) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+    let project_home = agent007_project_home();
+    let global_home = agent007_global_home();
+    match approve_tool(
+        project_home,
+        global_home,
+        &name,
+        Some(scope),
+        payload.approved_by,
+    ) {
+        Ok(tool) => Json(serde_json::json!({ "ok": true, "tool": tool })).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct BundleExportQuery {
     pub skills: Option<String>,
@@ -3103,8 +3836,9 @@ pub async fn bundle_export_handler(
 
     // Use the same multi-dir search order as the listing APIs so that both
     // project-local and global skills/workflows/personas are found during export.
-    let builder = agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
-        .with_persona_dirs(persona_search_dirs());
+    let builder =
+        agent007_sharing::BundleBuilder::new(skills_search_dirs(), workflow_search_dirs())
+            .with_persona_dirs(persona_search_dirs());
     match builder.build(&skill_filters, &wf_filters, &persona_filters, &tool_filters) {
         Ok(bundle) => match bundle.to_json() {
             Ok(json) => (
@@ -3535,6 +4269,14 @@ fn collect_association_from_ref(reference: &str, assets: &mut AssociatedAssets) 
         return;
     }
 
+    if let Some(named) = normalized.strip_prefix("tool:") {
+        let name = named.trim().trim_start_matches('/');
+        if !name.is_empty() {
+            assets.add_tool(name);
+        }
+        return;
+    }
+
     if let Some(idx) = normalized.find(".agent007/") {
         let nested = &normalized[idx + ".agent007/".len()..];
         collect_association_from_ref(nested, assets);
@@ -3750,7 +4492,213 @@ fn copy_dir_recursive(src: &FsPath, dest: &FsPath) -> std::io::Result<()> {
     Ok(())
 }
 
-/// No-op VectorDB for dry-run skill execution.
+// ── MCP registry handlers ─────────────────────────────────────────────────────
+
+use crate::mcp_registry::{
+    add_mcp_server, approve_mcp_server, connect_mcp_server, delete_mcp_server,
+    get_mcp_server_tools, load_mcp_registry, refresh_mcp_server_statuses, AddMcpServerRequest,
+};
+
+/// `GET /api/mcp/servers`
+pub async fn mcp_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match refresh_mcp_server_statuses(&home).await.or_else(|_| load_mcp_registry(&home)) {
+        Ok(entries) => Json(serde_json::json!({ "servers": entries })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/mcp/servers`
+pub async fn mcp_add_handler(
+    State(_state): State<AppState>,
+    Json(req): Json<AddMcpServerRequest>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match add_mcp_server(&home, req) {
+        Ok(entry) => Json(entry).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/mcp/servers/:name`
+pub async fn mcp_delete_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match delete_mcp_server(&home, &name) {
+        Ok(()) => Json(serde_json::json!({ "deleted": name })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/mcp/servers/:name/connect`
+pub async fn mcp_connect_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match connect_mcp_server(&home, &name).await {
+        Ok(entry) => Json(entry).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/mcp/servers/:name/approve`
+pub async fn mcp_approve_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match approve_mcp_server(&home, &name) {
+        Ok(entry) => Json(entry).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/mcp/servers/:name/tools`
+pub async fn mcp_tools_handler(
+    State(_state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match get_mcp_server_tools(&home, &name) {
+        Ok(tools) => Json(serde_json::json!({ "tools": tools })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+// ── RAG source handlers ───────────────────────────────────────────────────────
+
+use crate::rag_sources::{
+    add_rag_source, delete_rag_source, load_rag_sources, query_rag_sources, reindex_rag_source,
+    AddRagSourceRequest,
+};
+
+#[derive(Deserialize)]
+pub struct RagQueryParams {
+    pub q: String,
+    #[serde(default = "default_rag_limit")]
+    pub limit: usize,
+}
+
+fn default_rag_limit() -> usize {
+    5
+}
+
+/// `GET /api/rag/sources`
+pub async fn rag_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match load_rag_sources(&home) {
+        Ok(sources) => Json(serde_json::json!({ "sources": sources })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/rag/sources`
+pub async fn rag_add_handler(
+    State(_state): State<AppState>,
+    Json(req): Json<AddRagSourceRequest>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match add_rag_source(&home, req) {
+        Ok(source) => {
+            let ph = home.clone();
+            let id = source.id.clone();
+            tokio::spawn(async move {
+                let _ = reindex_rag_source(&ph, &id).await;
+            });
+            Json(source).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/rag/sources/:id/reindex`
+pub async fn rag_reindex_handler(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match reindex_rag_source(&home, &id).await {
+        Ok(source) => Json(source).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /api/rag/sources/:id`
+pub async fn rag_delete_handler(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match delete_rag_source(&home, &id) {
+        Ok(()) => Json(serde_json::json!({ "deleted": id })).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/rag/query?q=&limit=`
+pub async fn rag_query_handler(
+    State(_state): State<AppState>,
+    Query(params): Query<RagQueryParams>,
+) -> impl IntoResponse {
+    let home = agent007_write_home();
+    match query_rag_sources(&home, &params.q, params.limit).await {
+        Ok((context, meta)) => Json(serde_json::json!({
+            "context": context,
+            "meta": meta,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+// ── No-op VectorDB for dry-run skill execution.
 struct NoOpVectorDB;
 
 #[async_trait::async_trait]
@@ -3775,7 +4723,10 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_bundle_selection, EXTERNAL_WORKFLOW_CONTROL_ERROR};
+    use super::{
+        collect_association_from_ref, parse_bundle_selection, tool_reference_keys,
+        EXTERNAL_WORKFLOW_CONTROL_ERROR,
+    };
     use crate::server::WebServer;
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -3822,6 +4773,97 @@ mod tests {
     fn parse_bundle_selection_missing_means_all() {
         let items = parse_bundle_selection(None);
         assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_tool_import_quarantine_approve_and_test_flow() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join(".agent007")).unwrap();
+        let source_tool = project.path().join("demo-tool.sh");
+        std::fs::write(&source_tool, "#!/usr/bin/env sh\necho imported-ok\n").unwrap();
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let ts = test_server();
+
+        let import_res = ts
+            .post("/api/tools/import")
+            .json(&serde_json::json!({
+                "provider": "local",
+                "package": "demo-tool",
+                "scope": "project",
+                "local_path": source_tool.display().to_string(),
+                "generate_skill": true
+            }))
+            .await;
+        import_res.assert_status_ok();
+        let import_body: serde_json::Value = import_res.json();
+        assert_eq!(
+            import_body["tool"]["approved"].as_bool(),
+            Some(false),
+            "imported tool should start quarantined"
+        );
+
+        let test_blocked = ts
+            .post("/api/tools/demo-tool/test")
+            .json(&serde_json::json!({ "args": [] }))
+            .await;
+        assert_eq!(test_blocked.status_code(), StatusCode::BAD_REQUEST);
+        let blocked_body: serde_json::Value = test_blocked.json();
+        assert!(blocked_body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("quarantine"));
+
+        let approve_res = ts
+            .post("/api/tools/demo-tool/approve")
+            .json(&serde_json::json!({ "scope": "project", "approved_by": "test-suite" }))
+            .await;
+        approve_res.assert_status_ok();
+        let approve_body: serde_json::Value = approve_res.json();
+        assert_eq!(approve_body["tool"]["approved"].as_bool(), Some(true));
+        assert_eq!(
+            approve_body["tool"]["approved_by"].as_str(),
+            Some("test-suite")
+        );
+
+        let test_ok = ts
+            .post("/api/tools/demo-tool/test")
+            .json(&serde_json::json!({ "args": [] }))
+            .await;
+        test_ok.assert_status_ok();
+        let test_body: serde_json::Value = test_ok.json();
+        assert_eq!(test_body["ok"].as_bool(), Some(true));
+        assert!(test_body["stdout"]
+            .as_str()
+            .unwrap_or("")
+            .contains("imported-ok"));
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[test]
+    fn tool_reference_keys_support_named_tool_refs() {
+        let keys = tool_reference_keys("tool:adb-flash");
+        assert!(keys.iter().any(|k| k == "adb-flash"));
+    }
+
+    #[test]
+    fn collect_association_supports_named_tool_refs() {
+        let mut assets = super::AssociatedAssets::default();
+        collect_association_from_ref("tool:project-setup", &mut assets);
+        assert!(assets.tools.iter().any(|tool| tool == "project-setup"));
     }
 
     #[tokio::test]
@@ -3905,6 +4947,10 @@ mod tests {
             dupe.get("collision_count").and_then(|v| v.as_u64()),
             Some(1)
         );
+        assert_eq!(
+            dupe.get("scope_kind").and_then(|v| v.as_str()),
+            Some("project-override")
+        );
         let shadowed = dupe
             .get("shadowed_sources")
             .and_then(|v| v.as_array())
@@ -3913,6 +4959,18 @@ mod tests {
         assert!(shadowed
             .iter()
             .any(|entry| entry.as_str() == Some("global")));
+        let variants = dupe
+            .get("variants")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(variants.len(), 2);
+        assert!(variants
+            .iter()
+            .any(|entry| entry.get("source").and_then(|v| v.as_str()) == Some("project")));
+        assert!(variants
+            .iter()
+            .any(|entry| entry.get("source").and_then(|v| v.as_str()) == Some("global")));
 
         std::env::set_current_dir(original_cwd).unwrap();
         if let Some(home) = original_home {
@@ -3959,6 +5017,10 @@ mod tests {
             dupe.get("collision_count").and_then(|v| v.as_u64()),
             Some(1)
         );
+        assert_eq!(
+            dupe.get("scope_kind").and_then(|v| v.as_str()),
+            Some("project-override")
+        );
         let shadowed = dupe
             .get("shadowed_sources")
             .and_then(|v| v.as_array())
@@ -3967,12 +5029,89 @@ mod tests {
         assert!(shadowed
             .iter()
             .any(|entry| entry.as_str() == Some("global")));
+        let variants = dupe
+            .get("variants")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(variants.len(), 2);
+        assert!(variants
+            .iter()
+            .any(|entry| entry.get("source").and_then(|v| v.as_str()) == Some("project")));
+        assert!(variants
+            .iter()
+            .any(|entry| entry.get("source").and_then(|v| v.as_str()) == Some("global")));
 
         std::env::set_current_dir(original_cwd).unwrap();
         if let Some(home) = original_home {
             std::env::set_var("HOME", home);
         } else {
             std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn api_skills_respects_agent007_home_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let override_home = tempfile::tempdir().unwrap();
+
+        write_skill_fixture(
+            project.path(),
+            "project_skill.md",
+            "/project-only",
+            "Project Skill",
+        );
+        write_skill_fixture(
+            home.path(),
+            "global_skill.md",
+            "/global-only",
+            "Global Skill",
+        );
+        write_skill_fixture(
+            override_home.path(),
+            "override_skill.md",
+            "/override-only",
+            "Override Skill",
+        );
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let original_agent_home = std::env::var("AGENT007_HOME").ok();
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var(
+            "AGENT007_HOME",
+            override_home.path().join(".agent007").display().to_string(),
+        );
+
+        let ts = test_server();
+        let response = ts.get("/api/skills").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        let entries = body.as_array().cloned().unwrap_or_default();
+        assert_eq!(entries.len(), 1);
+        let trigger = entries[0]
+            .get("trigger")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert_eq!(trigger, "/override-only");
+        assert_eq!(
+            entries[0].get("scope_kind").and_then(|v| v.as_str()),
+            Some("project-skill")
+        );
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(home) = original_agent_home {
+            std::env::set_var("AGENT007_HOME", home);
+        } else {
+            std::env::remove_var("AGENT007_HOME");
         }
     }
 
@@ -4057,6 +5196,59 @@ mod tests {
         } else {
             std::env::remove_var("HOME");
         }
+    }
+
+    #[tokio::test]
+    async fn api_memory_stats_reports_type_counts_and_learning_skills() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project_home = project.path().join(".agent007");
+        std::fs::create_dir_all(&project_home).unwrap();
+
+        std::env::set_var("AGENT007_HOME", &project_home);
+
+        let store = std::sync::Arc::new(agent007_memory::store::MemoryStore::new(
+            project_home.join("memory"),
+        ));
+        store.scoped("project").write("k1", "v1").unwrap(); // semantic default
+        store
+            .scoped("project")
+            .write_with_meta(
+                "k2",
+                "v2",
+                agent007_memory::store::MemoryMeta {
+                    entry_type: agent007_memory::store::MemoryEntryType::Procedural,
+                    ..agent007_memory::store::MemoryMeta::default()
+                },
+            )
+            .unwrap();
+
+        store
+            .scoped("learning")
+            .write("feedback:index:demo-skill", "[\"abc\"]")
+            .unwrap();
+
+        let ts = test_server();
+        let stats = ts.get("/api/memory/project/stats").await;
+        stats.assert_status_ok();
+        let body: serde_json::Value = stats.json();
+        assert_eq!(body.get("scope").and_then(|v| v.as_str()), Some("project"));
+        assert_eq!(body.get("total_keys").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(body.get("semantic_keys").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            body.get("procedural_keys").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        let lstats = ts.get("/api/memory/learning/stats").await;
+        lstats.assert_status_ok();
+        let lbody: serde_json::Value = lstats.json();
+        assert_eq!(
+            lbody.get("learning_skill_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        std::env::remove_var("AGENT007_HOME");
     }
 
     #[tokio::test]

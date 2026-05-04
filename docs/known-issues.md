@@ -124,3 +124,22 @@ Remaining gap:
 
 - Always send `output` in `agent007_record_tokens` for high-quality memory.
 - Keep hosted responses concise but complete enough to be reused as memory.
+
+---
+
+## Memory visibility and learning liveness were opaque — resolved
+
+**Status:** Fixed (2026-05-03)  
+**Area:** Memory observability, runtime learning workers
+
+Previously, users could not easily see what was stored in memory per scope, and learning optimization behavior could appear inconsistent across command paths.
+
+**Resolution:**
+1. Added `GET /api/memory/{scope}/stats` to expose:
+   - total key count
+   - semantic/procedural/episodic counts
+   - average confidence
+   - learning-scope skill coverage
+2. Dashboard memory view now surfaces these stats.
+3. Learning runtime workers are now spawned in both `run` and `serve` flows so optimizer/insight loops stay active.
+4. Memory key compatibility was hardened for mixed key styles (`:` and `/`) with legacy fallback and migration support.

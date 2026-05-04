@@ -5,7 +5,9 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-agent007-core     = { path = "../core" }
+agent007-core       = { path = "../core" }
+agent007-extensions = { path = "../extensions" }
+agent007-mcp      = { path = "../mcp" }
 agent007-learning = { path = "../learning" }
 agent007-skills   = { path = "../skills" }
 agent007-models   = { path = "../models" }
@@ -23,6 +25,7 @@ tokio-stream      = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
 serde_yaml        = { workspace = true }
+toml             = { workspace = true }
 thiserror         = { workspace = true }
 tracing           = { workspace = true }
 async-trait       = { workspace = true }
@@ -30,6 +33,7 @@ futures           = { workspace = true }
 tempfile          = { workspace = true }
 chrono            = { workspace = true }
 reqwest           = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+sha2              = "0.10"
 ts-rs             = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 anyhow            = { workspace = true }
 include_dir       = "0.7"
