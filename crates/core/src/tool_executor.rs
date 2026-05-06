@@ -1,6 +1,7 @@
 // crates/core/src/tool_executor.rs
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
@@ -113,10 +114,30 @@ impl ToolExecutor {
             .as_ref()
             .ok_or_else(|| CoreError::NotConfigured("MCP client not configured".to_string()))?;
         let locked = client.lock().await;
-        locked
-            .call_tool(tool_name, args)
-            .await
-            .map_err(CoreError::from)
+        let start = Instant::now();
+        let result = locked.call_tool(tool_name, args.clone()).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if let Some(dispatcher) = &self.dispatcher {
+            let (success, error) = match &result {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e.to_string())),
+            };
+            let _ = dispatcher
+                .publish(AgentEvent::ToolCallResult {
+                    agent_id: agent_id.clone(),
+                    tool: ToolCall {
+                        name: tool_name.to_string(),
+                        args,
+                    },
+                    success,
+                    error,
+                    duration_ms: Some(duration_ms),
+                })
+                .await;
+        }
+
+        result.map_err(CoreError::from)
     }
 }
 

@@ -143,6 +143,7 @@ function autogeneratePrompt() {
 // Node editor state
 const showNodeEditor = ref(false)
 const editingNodeId = ref(null)
+const skills = ref([])
 const nodeEditorForm = ref({
   agent: '',
   prompt: '',
@@ -157,14 +158,16 @@ const nodeEditorForm = ref({
 const editingNodeType = ref('agent')
 
 onMounted(async () => {
-  const [wf, ps, tpl] = await Promise.all([
+  const [wf, ps, tpl, sk] = await Promise.all([
     api.listWorkflows(),
     api.listPersonas(),
     api.listTemplates(),
+    api.listSkills(),
   ])
   if (wf) workflows.value = wf
   if (ps) personas.value = ps
   if (tpl) templates.value = tpl
+  if (sk) skills.value = sk
 })
 
 function workflowScopeChips(item) {
@@ -873,6 +876,38 @@ async function loadTemplate(tplName) {
               class="w-full bg-base-200 border border-base-content/15 rounded text-[13px] font-mono text-base-content/80 p-3 h-36 resize-y focus:outline-none focus:border-primary/50 transition-colors leading-relaxed"
               placeholder="Describe what this agent should do. Use {{task}} for the workflow input."
             />
+          </div>
+
+          <!-- Resources: persona details + available skills -->
+          <div v-if="editingNodeType === 'agent' || editingNodeType === 'evaluator' || editingNodeType === 'router'" class="space-y-2 rounded-lg border border-base-content/10 bg-base-200/50 p-4">
+            <div class="text-[10px] font-mono font-bold text-base-content/40 uppercase tracking-wider mb-2">Resources</div>
+            <!-- Persona info -->
+            <template v-if="nodeEditorForm.agent">
+              <div v-for="p in personas.filter(p => p.name === nodeEditorForm.agent)" :key="p.name" class="space-y-1.5">
+                <div class="text-[10px] font-mono text-base-content/50">
+                  <span class="text-base-content/30">Persona:</span> {{ p.name }}
+                  <template v-if="p.preferred_model"> · <span class="text-accent/70">{{ p.preferred_model }}</span></template>
+                </div>
+                <div v-if="p.description" class="text-[10px] font-mono text-base-content/40 italic">{{ p.description }}</div>
+                <div v-if="p.allowed_tools?.length" class="flex flex-wrap gap-1 mt-1">
+                  <span class="text-[9px] font-mono text-base-content/30 mr-1">tools:</span>
+                  <span v-for="t in p.allowed_tools" :key="t"
+                    class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-base-300 text-base-content/55">{{ t }}</span>
+                </div>
+              </div>
+            </template>
+            <div v-else class="text-[10px] font-mono text-base-content/30 italic">Select a persona above to see its details</div>
+            <!-- Skills list -->
+            <div v-if="skills.length" class="mt-2 pt-2 border-t border-base-content/10">
+              <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-wider mb-1.5">Available Skills</div>
+              <div class="flex flex-wrap gap-1">
+                <span v-for="s in skills.slice(0, 20)" :key="s.trigger"
+                  class="px-1.5 py-0.5 rounded text-[9px] font-mono"
+                  :class="s.source === 'project' ? 'bg-primary/10 text-primary/70' : 'bg-base-300 text-base-content/50'"
+                  :title="s.description || s.trigger">{{ s.trigger }}</span>
+                <span v-if="skills.length > 20" class="text-[9px] font-mono text-base-content/30 italic">+{{ skills.length - 20 }} more</span>
+              </div>
+            </div>
           </div>
 
           <!-- Evaluator-specific config -->

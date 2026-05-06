@@ -129,6 +129,7 @@ impl FeedbackCollector {
                     tool: _,
                     success,
                     error,
+                    ..
                 } => {
                     let outcome = if success {
                         crate::types::Outcome::Success
@@ -357,6 +358,7 @@ mod tests {
             tool,
             success: true,
             error: None,
+            duration_ms: None,
         }];
 
         let (ms, _dir) = run_with_events(events).await;
@@ -393,6 +395,7 @@ mod tests {
             tool,
             success: false,
             error: Some("file not found".to_string()),
+            duration_ms: None,
         }];
 
         let (ms, _dir) = run_with_events(events).await;

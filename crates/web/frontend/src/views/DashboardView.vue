@@ -113,6 +113,7 @@ function selectSlashCommand(cmd) {
   slashFilter.value = ''
 }
 let refreshTimer = null
+let detailTimer = null
 
 onMounted(async () => {
   health.value = await api.health()
@@ -122,21 +123,30 @@ onMounted(async () => {
     try {
       metrics.value = await api.getStats() || metrics.value
       await refreshRuns()
-      if (expandedRunId.value) {
-        selectedRun.value = await api.getRunDetail(expandedRunId.value)
-      }
     } catch {
       // Keep the last successful snapshot when background refresh fails.
     }
   }, 5000)
+  detailTimer = setInterval(async () => {
+    if (expandedRunId.value) {
+      try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
+    }
+  }, 1500)
 })
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+  if (detailTimer) clearInterval(detailTimer)
 })
 
 watch(() => props.stats, (v) => {
   if (v) metrics.value = v
+})
+
+watch(() => props.events?.length, async () => {
+  if (expandedRunId.value) {
+    try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
+  }
 })
 
 const m = computed(() => metrics.value || {
@@ -169,6 +179,51 @@ function fmtMs(ms) {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.round(ms)}ms`
+}
+
+function fmtLocalTime(str) {
+  if (!str) return '—'
+  try {
+    return new Date(str).toLocaleString(undefined, {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    })
+  } catch { return str }
+}
+
+function stepDuration(step) {
+  if (!step.started_at) return null
+  const start = new Date(step.started_at).getTime()
+  const end = step.finished_at ? new Date(step.finished_at).getTime() : Date.now()
+  const ms = end - start
+  if (ms < 0) return null
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
+  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`
+}
+
+const SLOW_STEP_MS = 60_000
+
+function isSlowStep(step) {
+  if (!step.started_at || !step.finished_at) return false
+  return new Date(step.finished_at).getTime() - new Date(step.started_at).getTime() > SLOW_STEP_MS
+}
+
+const expandedSteps = ref(new Set())
+
+function toggleStepExpand(stepId) {
+  const next = new Set(expandedSteps.value)
+  if (next.has(stepId)) next.delete(stepId)
+  else next.add(stepId)
+  expandedSteps.value = next
+}
+
+function stepFullOutput(step) {
+  if (step.output_key && selectedWorkflowState.value?.outputs?.[step.output_key]) {
+    return selectedWorkflowState.value.outputs[step.output_key]
+  }
+  return step.output_preview || ''
 }
 
 const STALE_SECS = 600 // 10 minutes
@@ -552,7 +607,7 @@ async function submitTask() {
                   <span v-if="t.tokens > 0">{{ fmtTokens(t.tokens) }}<span v-if="t.agent === 'hosted-mcp'" class="text-base-content/25">~</span></span>
                   <span v-else class="text-base-content/25">—</span>
                 </td>
-                <td class="text-[11px] text-base-content/40 font-mono">{{ t.started_at }}</td>
+                <td class="text-[11px] text-base-content/40 font-mono">{{ fmtLocalTime(t.started_at) }}</td>
               </tr>
             </tbody>
           </table>
@@ -641,7 +696,7 @@ async function submitTask() {
                 </div>
                 <div class="bg-base-200 rounded-lg p-3">
                   <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Started</div>
-                  <div class="font-mono text-xs text-base-content/60">{{ selectedRun.run.metadata.started_at }}</div>
+                  <div class="font-mono text-xs text-base-content/60">{{ fmtLocalTime(selectedRun.run.metadata.started_at) }}</div>
                 </div>
               </div>
 
@@ -887,6 +942,8 @@ async function submitTask() {
                           <span class="font-mono text-xs font-medium text-base-content/80">{{ step.id }}</span>
                           <div class="flex items-center gap-1.5">
                             <span v-if="step.status === 'running' && isStaleStep(step)" class="badge badge-xs badge-error">stale</span>
+                            <span v-if="isSlowStep(step)" class="badge badge-xs badge-warning">slow</span>
+                            <span v-if="stepDuration(step)" class="text-[10px] font-mono text-base-content/40">⏱ {{ stepDuration(step) }}</span>
                             <span class="badge badge-xs" :class="{
                               'badge-ghost': step.status === 'pending',
                               'badge-info': step.status === 'running' && !isStaleStep(step),
@@ -912,7 +969,17 @@ async function submitTask() {
                             <span class="text-[10px] font-mono text-base-content/30 italic">no heartbeat yet</span>
                           </template>
                         </div>
-                        <div v-if="step.output_preview" class="font-mono text-xs mt-2 whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2">{{ step.output_preview }}</div>
+                        <!-- Step output (expandable) -->
+                        <div v-if="step.output_preview" class="mt-2">
+                          <div
+                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2 transition-all"
+                            :class="expandedSteps.has(step.id) ? 'max-h-[500px] overflow-auto' : 'max-h-20 overflow-hidden'"
+                          >{{ expandedSteps.has(step.id) ? stepFullOutput(step) : step.output_preview }}</div>
+                          <button
+                            class="mt-1 text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
+                            @click="toggleStepExpand(step.id)"
+                          >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                        </div>
                         <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
                       </div>
                     </div>
@@ -931,7 +998,7 @@ async function submitTask() {
                   >
                     <div class="flex items-center justify-between gap-2 mb-1">
                       <span class="font-mono text-xs text-base-content/60">{{ entry.kind }}</span>
-                      <span class="text-[10px] text-base-content/30 font-mono">{{ entry.timestamp }}</span>
+                      <span class="text-[10px] text-base-content/30 font-mono">{{ fmtLocalTime(entry.timestamp) }}</span>
                     </div>
                     <div class="font-mono text-[10px] text-base-content/45 whitespace-pre-wrap leading-relaxed">{{ JSON.stringify(entry.payload, null, 2) }}</div>
                   </div>

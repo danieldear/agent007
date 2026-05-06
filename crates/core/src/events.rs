@@ -38,11 +38,14 @@ pub enum AgentEvent {
     },
     /// Emitted after a tool call completes. `success` is false when the tool
     /// returned an error or non-zero exit code. `error` carries the message.
+    /// `duration_ms` is the wall-clock time for the tool call, when measured.
     ToolCallResult {
         agent_id: AgentId,
         tool: ToolCall,
         success: bool,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     MemoryWrite {
         key: String,

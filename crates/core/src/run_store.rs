@@ -1149,6 +1149,7 @@ mod tests {
                     },
                     success: false,
                     error: Some("non-zero exit".to_string()),
+                    duration_ms: None,
                 },
             )
             .unwrap();

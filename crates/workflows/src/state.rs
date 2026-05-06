@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -66,6 +67,10 @@ pub struct WorkflowStepState {
     pub last_heartbeat_at: Option<String>,
     #[serde(default)]
     pub last_heartbeat_hint: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +154,8 @@ impl WorkflowRunState {
         step_state.status = WorkflowStepStatus::Running;
         step_state.attempts = attempts;
         step_state.error = None;
+        step_state.started_at = Some(Utc::now().to_rfc3339());
+        step_state.finished_at = None;
     }
 
     pub fn mark_step_completed(&mut self, step: &StepDef, output: &str) {
@@ -158,6 +165,7 @@ impl WorkflowRunState {
         step_state.output_key = step.output.clone();
         step_state.output_preview = Some(output_preview);
         step_state.error = None;
+        step_state.finished_at = Some(Utc::now().to_rfc3339());
 
         if !self.completed_steps.iter().any(|id| id == &step.id) {
             self.completed_steps.push(step.id.clone());
@@ -272,6 +280,8 @@ impl WorkflowRunState {
             step_state.selected_route = None;
             step_state.selected_target = None;
             step_state.error = None;
+            step_state.started_at = None;
+            step_state.finished_at = None;
         }
         self.routing_recommendations
             .retain(|recommendation| recommendation.step_id != step_id);
@@ -322,6 +332,9 @@ impl WorkflowRunState {
             let step_state = self.step_mut(step_id);
             step_state.status = WorkflowStepStatus::Failed;
             step_state.error = Some(error);
+            if step_state.finished_at.is_none() {
+                step_state.finished_at = Some(Utc::now().to_rfc3339());
+            }
         }
     }
 
@@ -354,12 +367,14 @@ impl From<&StepDef> for WorkflowStepState {
             error: None,
             last_heartbeat_at: None,
             last_heartbeat_hint: None,
+            started_at: None,
+            finished_at: None,
         }
     }
 }
 
 fn preview(text: &str) -> String {
-    const MAX_CHARS: usize = 160;
+    const MAX_CHARS: usize = 2000;
     let preview: String = text.chars().take(MAX_CHARS).collect();
     if text.chars().count() > MAX_CHARS {
         format!("{preview}...")
