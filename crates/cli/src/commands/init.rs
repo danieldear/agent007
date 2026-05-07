@@ -688,15 +688,17 @@ pub async fn execute(
             std::fs::create_dir_all(&agents_dir)?;
             ok("agents/ created");
         }
-        write_if_missing(
+        write_file(
             &agents_dir.join("agent007-architect.md"),
             CLAUDE_AGENT_ARCHITECT,
             "agents/agent007-architect.md",
+            force,
         )?;
-        write_if_missing(
+        write_file(
             &agents_dir.join("agent007-analyst.md"),
             CLAUDE_AGENT_ANALYST,
             "agents/agent007-analyst.md",
+            force,
         )?;
         step += 1;
     }
