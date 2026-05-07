@@ -4199,8 +4199,20 @@ async fn task_submit(config: &Config, task: String, persona: Option<String>) -> 
         let run_id = create_delegate_run("task-submit", &description)?;
         let output = format!(
             "Task accepted in hosted MCP mode. ID: {task_id}\n\
-             Host instruction: execute the task directly and persist important results \
-             with agent007_memory_write.\n\
+             \n\
+             IMPORTANT — hosted-MCP limitation: agent007 cannot spawn background subprocesses \
+             in this mode. No independent worker was dispatched. The task must be executed \
+             inline by the host LLM.\n\
+             \n\
+             Recommended alternatives for true background/parallel execution:\n\
+             1. Use your host environment's native task/agent spawning (e.g. Copilot task tool \
+                with agent_type: general-purpose) and have that agent call \
+                agent007_workflow_submit_step to report results back into the workflow.\n\
+             2. Use a hosted workflow (agent007_workflow_start) which supports parallel steps \
+                via the host LLM's background agent capabilities.\n\
+             \n\
+             Proceeding with inline execution. Persist important results with \
+             agent007_memory_write when complete.\n\
              Task: {description}"
         );
         // task-submit semantics: the submission is the terminal event — finish immediately.

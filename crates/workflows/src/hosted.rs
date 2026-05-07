@@ -302,6 +302,14 @@ impl HostedWorkflowEngine {
             return Ok(self.awaiting_approval_progress(state, "workflow is waiting for approval"));
         }
 
+        // Build step_map early — needed both for re-delivery of running steps
+        // and for the normal ready-step dispatch path below.
+        let step_map: HashMap<String, StepDef> = def
+            .steps
+            .iter()
+            .map(|step| (step.id.clone(), step.clone()))
+            .collect();
+
         let running_steps = state
             .steps
             .iter()
@@ -309,6 +317,34 @@ impl HostedWorkflowEngine {
             .map(|step| step.id.clone())
             .collect::<Vec<_>>();
         if !running_steps.is_empty() {
+            if dispatch_ready {
+                // In hosted-MCP mode "Running" means "dispatched to host LLM, awaiting
+                // workflow_submit_step". If the host calls workflow_next again before
+                // submitting (e.g. it missed the original dispatch response or is
+                // polling), we re-deliver the step prompts so it can continue without
+                // being permanently stuck. This is an idempotent lease renewal.
+                let ready_steps = running_steps
+                    .iter()
+                    .filter_map(|step_id| step_map.get(step_id).cloned())
+                    .map(|step| self.hosted_step(def, state, &step))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(HostedWorkflowProgress {
+                    workflow: state.workflow.clone(),
+                    task: state.task.clone(),
+                    status: HostedWorkflowProgressStatus::Ready,
+                    ready_steps,
+                    running_steps,
+                    completed_steps: state.steps_completed,
+                    total_steps: state.steps_total,
+                    outputs_available: sorted_keys(&state.outputs),
+                    pending_approval: state.pending_approval.clone(),
+                    last_error: state.last_error.clone(),
+                    message: Some(
+                        "re-delivering prompts for in-progress steps (idempotent lease renewal)"
+                            .to_string(),
+                    ),
+                });
+            }
             return Ok(HostedWorkflowProgress {
                 workflow: state.workflow.clone(),
                 task: state.task.clone(),
@@ -347,11 +383,6 @@ impl HostedWorkflowEngine {
         }
 
         let validated = crate::dag::DagValidator::new(def).validate()?;
-        let step_map: HashMap<String, StepDef> = def
-            .steps
-            .iter()
-            .map(|step| (step.id.clone(), step.clone()))
-            .collect();
         let completed = state
             .completed_steps
             .iter()
@@ -1494,5 +1525,59 @@ mod tests {
         std::env::remove_var("AGENT007_RELIABILITY_BUDGET_GOVERNOR");
         std::env::remove_var("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS");
         std::env::remove_var("AGENT007_RELIABILITY_MAX_DEGRADATIONS");
+    }
+
+    // Regression test for the hosted-MCP "stuck Running steps" bug.
+    // Scenario: workflow_start dispatches the first step (marking it Running) but the
+    // host LLM then calls workflow_next again before submitting — e.g. because it polled
+    // for status or the original dispatch response was lost. Previously workflow_next
+    // returned ready_steps: [] (AwaitingOutputs), permanently stranding the workflow.
+    // After the fix, workflow_next re-delivers the running step prompts (idempotent
+    // lease renewal) so the host can recover without any workaround.
+    #[test]
+    fn workflow_next_redelivers_running_steps_when_host_polls_again() {
+        let def = single_step_def();
+        let engine = hosted_engine();
+        let mut state = WorkflowRunState::new(&def, "ship feature");
+
+        // Simulate workflow_start: dispatch marks the step Running and returns it.
+        let first_dispatch = engine.dispatch(&def, &mut state).unwrap();
+        assert_eq!(first_dispatch.status, HostedWorkflowProgressStatus::Ready);
+        assert_eq!(first_dispatch.ready_steps.len(), 1);
+        assert_eq!(first_dispatch.ready_steps[0].id, "research");
+
+        // Step is now Running. Host calls workflow_next again without having submitted.
+        // This should re-deliver the prompt (not return empty ready_steps).
+        let redelivered = engine.dispatch(&def, &mut state).unwrap();
+        assert_eq!(
+            redelivered.status,
+            HostedWorkflowProgressStatus::Ready,
+            "workflow_next must return Ready (not AwaitingOutputs) when steps are Running"
+        );
+        assert_eq!(
+            redelivered.ready_steps.len(),
+            1,
+            "workflow_next must re-deliver the Running step prompt"
+        );
+        assert_eq!(redelivered.ready_steps[0].id, "research");
+        assert!(
+            redelivered
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("re-delivering"),
+            "message should indicate this is a re-delivery"
+        );
+
+        // status() (dispatch_ready=false) should still report AwaitingOutputs.
+        let status = engine.status(&def, &mut state).unwrap();
+        assert_eq!(status.status, HostedWorkflowProgressStatus::AwaitingOutputs);
+        assert_eq!(status.ready_steps.len(), 0);
+
+        // Normal completion path should still work after re-delivery.
+        let done = engine
+            .submit_step_output(&def, &mut state, "research", "final answer")
+            .unwrap();
+        assert_eq!(done.status, HostedWorkflowProgressStatus::Succeeded);
     }
 }
