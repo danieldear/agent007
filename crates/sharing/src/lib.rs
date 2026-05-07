@@ -365,121 +365,36 @@ impl BundleBuilder {
             }
         }
 
-        let mut assets = Vec::new();
-        let mut seen = HashSet::new();
-        for rel in direct_tool_refs {
-            // Named tool reference (e.g. "tool:adb-flash") resolves to tools/<name>/ package.
-            if !rel.contains('/') {
-                let mut consumed = false;
-                for tools_dir in &self.tools_dirs {
-                    // 1) Package directory tools/<name>/*
-                    let package_dir = tools_dir.join(&rel);
-                    if !package_dir.is_dir() || !has_tool_manifest(&package_dir) {
-                        // not a package; try next resolution mode
-                    } else {
-                        let mut package_files = Vec::new();
-                        collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
-                        for rel_file in package_files {
-                            if seen.contains(&rel_file) {
-                                continue;
-                            }
-                            let package_file = tools_dir.join(&rel_file);
-                            if !package_file.is_file() {
-                                continue;
-                            }
-                            let package_content = std::fs::read_to_string(&package_file)?;
-                            seen.insert(rel_file.clone());
-                            assets.push(BundleAsset::new(rel_file, package_content));
-                        }
-                        consumed = true;
-                        break;
-                    }
-                }
-                if consumed {
-                    continue;
-                }
+        let mut assets: Vec<BundleAsset> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        // resolved_refs tracks which refs have been processed to avoid infinite loops.
+        let mut resolved_refs: HashSet<String> = HashSet::new();
+        // Initial work queue from direct_tool_refs; transitive rounds append new refs here.
+        let mut work: Vec<String> = direct_tool_refs.into_iter().collect();
 
-                // 2) Flat file tools/<name> (legacy/non-manifest tool file)
-                for tools_dir in &self.tools_dirs {
-                    let flat_file = tools_dir.join(&rel);
-                    if !flat_file.is_file() {
-                        continue;
-                    }
-                    let rel_file = rel.replace('\\', "/");
-                    if seen.contains(&rel_file) {
-                        consumed = true;
-                        break;
-                    }
-                    let content = std::fs::read_to_string(&flat_file)?;
-                    seen.insert(rel_file.clone());
-                    assets.push(BundleAsset::new(rel_file, content));
-                    consumed = true;
-                    break;
-                }
-                if consumed {
-                    continue;
-                }
-
-                // 3) Flat script file scripts/<name>
-                for scripts_dir in &self.scripts_dirs {
-                    let flat_script = scripts_dir.join(&rel);
-                    if !flat_script.is_file() {
-                        continue;
-                    }
-                    let rel_file = format!("scripts/{}", rel.replace('\\', "/"));
-                    if seen.contains(&rel_file) {
-                        break;
-                    }
-                    let content = std::fs::read_to_string(&flat_script)?;
-                    seen.insert(rel_file.clone());
-                    assets.push(BundleAsset::new(rel_file, content));
-                    break;
-                }
-                continue;
+        // Up to 5 rounds: round 0 = explicit/content refs, rounds 1-4 = transitive.
+        for _depth in 0..=4 {
+            if work.is_empty() {
+                break;
             }
-            let safe_rel = sanitize_relative_reference(&rel)?;
-            let rel_norm = safe_rel.to_string_lossy().replace('\\', "/");
-            if seen.contains(&rel_norm) {
-                continue;
-            }
+            let batch = std::mem::take(&mut work);
+            let prev_len = assets.len();
 
-            if let Some(script_rel) = rel_norm.strip_prefix("scripts/") {
-                for scripts_dir in &self.scripts_dirs {
-                    let path = scripts_dir.join(script_rel);
-                    if !path.is_file() {
-                        continue;
-                    }
-                    let content = std::fs::read_to_string(&path)?;
-                    seen.insert(rel_norm.clone());
-                    assets.push(BundleAsset::new(rel_norm.clone(), content));
-                    break;
+            for rel in batch {
+                if !resolved_refs.insert(rel.clone()) {
+                    continue; // already processed this ref
                 }
-                if seen.contains(&rel_norm) {
-                    continue;
-                }
-            }
-
-            // Search all tools dirs in order; use the first match.
-            for tools_dir in &self.tools_dirs {
-                let path = tools_dir.join(&safe_rel);
-                if !path.is_file() {
-                    continue;
-                }
-                let content = std::fs::read_to_string(&path)?;
-                seen.insert(rel_norm.clone());
-                assets.push(BundleAsset::new(rel_norm.clone(), content));
-                // If this file is inside a manifest-based tool package (tools/<name>/...),
-                // include sibling package files for dependency closure.
-                if let Some(package_name) = rel_norm.split('/').next() {
-                    if !package_name.is_empty() {
-                        let package_dir = tools_dir.join(package_name);
-                        if package_dir.is_dir() && has_tool_manifest(&package_dir) {
+                // Named tool reference (e.g. "tool:adb-flash") resolves to tools/<name>/ package.
+                if !rel.contains('/') {
+                    let mut consumed = false;
+                    for tools_dir in &self.tools_dirs {
+                        // 1) Package directory tools/<name>/*
+                        let package_dir = tools_dir.join(&rel);
+                        if !package_dir.is_dir() || !has_tool_manifest(&package_dir) {
+                            // not a package; try next resolution mode
+                        } else {
                             let mut package_files = Vec::new();
-                            collect_files_recursive_paths(
-                                &package_dir,
-                                tools_dir,
-                                &mut package_files,
-                            )?;
+                            collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
                             for rel_file in package_files {
                                 if seen.contains(&rel_file) {
                                     continue;
@@ -492,35 +407,146 @@ impl BundleBuilder {
                                 seen.insert(rel_file.clone());
                                 assets.push(BundleAsset::new(rel_file, package_content));
                             }
+                            consumed = true;
+                            break;
                         }
                     }
+                    if consumed {
+                        continue;
+                    }
+
+                    // 2) Flat file tools/<name> (legacy/non-manifest tool file, exact match)
+                    for tools_dir in &self.tools_dirs {
+                        let flat_file = tools_dir.join(&rel);
+                        if !flat_file.is_file() {
+                            continue;
+                        }
+                        let rel_file = rel.replace('\\', "/");
+                        if seen.contains(&rel_file) {
+                            consumed = true;
+                            break;
+                        }
+                        let content = std::fs::read_to_string(&flat_file)?;
+                        seen.insert(rel_file.clone());
+                        assets.push(BundleAsset::new(rel_file, content));
+                        consumed = true;
+                        break;
+                    }
+                    if consumed {
+                        continue;
+                    }
+
+                    // 3) Stem-only ref for legacy flat tool: try common script extensions.
+                    //    This handles the case where the registry tool name is the file stem
+                    //    (e.g. "t3") but the actual file is "t3.py" or "t3.sh".
+                    let script_exts = ["py", "sh", "bash", "zsh", "js", "ts", "rb", "ps1"];
+                    'ext_search: for tools_dir in &self.tools_dirs {
+                        for ext in script_exts {
+                            let candidate = tools_dir.join(format!("{rel}.{ext}"));
+                            if !candidate.is_file() {
+                                continue;
+                            }
+                            let rel_file = format!("{rel}.{ext}");
+                            if seen.contains(&rel_file) {
+                                consumed = true;
+                                break 'ext_search;
+                            }
+                            let content = std::fs::read_to_string(&candidate)?;
+                            seen.insert(rel_file.clone());
+                            assets.push(BundleAsset::new(rel_file, content));
+                            consumed = true;
+                            break 'ext_search;
+                        }
+                    }
+                    if consumed {
+                        continue;
+                    }
+
+                    // 4) Flat script file scripts/<name>
+                    for scripts_dir in &self.scripts_dirs {
+                        let flat_script = scripts_dir.join(&rel);
+                        if !flat_script.is_file() {
+                            continue;
+                        }
+                        let rel_file = format!("scripts/{}", rel.replace('\\', "/"));
+                        if seen.contains(&rel_file) {
+                            break;
+                        }
+                        let content = std::fs::read_to_string(&flat_script)?;
+                        seen.insert(rel_file.clone());
+                        assets.push(BundleAsset::new(rel_file, content));
+                        break;
+                    }
+                    continue;
                 }
-                break;
+                let safe_rel = sanitize_relative_reference(&rel)?;
+                let rel_norm = safe_rel.to_string_lossy().replace('\\', "/");
+                if seen.contains(&rel_norm) {
+                    continue;
+                }
+
+                if let Some(script_rel) = rel_norm.strip_prefix("scripts/") {
+                    for scripts_dir in &self.scripts_dirs {
+                        let path = scripts_dir.join(script_rel);
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let content = std::fs::read_to_string(&path)?;
+                        seen.insert(rel_norm.clone());
+                        assets.push(BundleAsset::new(rel_norm.clone(), content));
+                        break;
+                    }
+                    if seen.contains(&rel_norm) {
+                        continue;
+                    }
+                }
+
+                // Search all tools dirs in order; use the first match.
+                for tools_dir in &self.tools_dirs {
+                    let path = tools_dir.join(&safe_rel);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&path)?;
+                    seen.insert(rel_norm.clone());
+                    assets.push(BundleAsset::new(rel_norm.clone(), content));
+                    // If this file is inside a manifest-based tool package (tools/<name>/...),
+                    // include sibling package files for dependency closure.
+                    if let Some(package_name) = rel_norm.split('/').next() {
+                        if !package_name.is_empty() {
+                            let package_dir = tools_dir.join(package_name);
+                            if package_dir.is_dir() && has_tool_manifest(&package_dir) {
+                                let mut package_files = Vec::new();
+                                collect_files_recursive_paths(
+                                    &package_dir,
+                                    tools_dir,
+                                    &mut package_files,
+                                )?;
+                                for rel_file in package_files {
+                                    if seen.contains(&rel_file) {
+                                        continue;
+                                    }
+                                    let package_file = tools_dir.join(&rel_file);
+                                    if !package_file.is_file() {
+                                        continue;
+                                    }
+                                    let package_content = std::fs::read_to_string(&package_file)?;
+                                    seen.insert(rel_file.clone());
+                                    assets.push(BundleAsset::new(rel_file, package_content));
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
             }
-        }
-        // Apply explicit filter: if non-empty, only keep the listed tools.
-        if !explicit_filter.is_empty() {
-            assets.retain(|a| {
-                let filename = a.filename.to_ascii_lowercase();
-                if explicit_filter.contains(&filename) {
-                    return true;
-                }
-                let stem = std::path::Path::new(&a.filename)
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                if !stem.is_empty() && explicit_filter.contains(&stem) {
-                    return true;
-                }
-                let package = filename.split('/').next().unwrap_or_default();
-                !package.is_empty() && explicit_filter.contains(package)
-            });
-            // Defensive fallback: explicit user selections should never silently
-            // produce an empty tools array because of key-shape drift.
-            if assets.is_empty() {
-                let recovered = self.collect_explicit_tool_assets_fallback(&explicit_filter)?;
-                assets.extend(recovered);
+
+            // Scan newly collected tool/script files for transitive tool references.
+            // This ensures that if tool A calls tool B, B is also bundled automatically.
+            for asset in &assets[prev_len..] {
+                let mut transitive = HashSet::new();
+                collect_tool_refs_from_text(&asset.content, &mut transitive);
+                work.extend(transitive.into_iter().filter(|r| !resolved_refs.contains(r)));
             }
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
@@ -595,70 +621,6 @@ impl BundleBuilder {
 
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
         Ok(assets)
-    }
-
-    fn collect_explicit_tool_assets_fallback(
-        &self,
-        explicit_filter: &HashSet<String>,
-    ) -> Result<Vec<BundleAsset>> {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-
-        for selected in explicit_filter {
-            if selected.is_empty() {
-                continue;
-            }
-
-            // Explicit script path: scripts/<name>
-            if let Some(script_rel) = selected.strip_prefix("scripts/") {
-                for scripts_dir in &self.scripts_dirs {
-                    let path = scripts_dir.join(script_rel);
-                    if !path.is_file() {
-                        continue;
-                    }
-                    let rel = format!("scripts/{}", script_rel.replace('\\', "/"));
-                    if !seen.insert(rel.clone()) {
-                        break;
-                    }
-                    let content = std::fs::read_to_string(&path)?;
-                    out.push(BundleAsset::new(rel, content));
-                    break;
-                }
-                continue;
-            }
-
-            // Bare path/file lookup in tools/
-            for tools_dir in &self.tools_dirs {
-                let file_path = tools_dir.join(selected);
-                if file_path.is_file() {
-                    let rel = selected.replace('\\', "/");
-                    if seen.insert(rel.clone()) {
-                        let content = std::fs::read_to_string(&file_path)?;
-                        out.push(BundleAsset::new(rel, content));
-                    }
-                    break;
-                }
-                let package_dir = tools_dir.join(selected);
-                if package_dir.is_dir() && has_tool_manifest(&package_dir) {
-                    let mut package_files = Vec::new();
-                    collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
-                    for rel_file in package_files {
-                        if seen.contains(&rel_file) {
-                            continue;
-                        }
-                        let package_file = tools_dir.join(&rel_file);
-                        if !package_file.is_file() {
-                            continue;
-                        }
-                        let content = std::fs::read_to_string(&package_file)?;
-                        seen.insert(rel_file.clone());
-                        out.push(BundleAsset::new(rel_file, content));
-                    }
-                    break;
-                }
-            }
-        }
-        Ok(out)
     }
 
     fn collect_persona_assets(

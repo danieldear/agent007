@@ -46,8 +46,10 @@ const allTools = computed(() => {
     const seen = new Map();
 
     // 1. Registry tools — actual packages/files in .agent007/tools/ (exist on disk).
+    // Legacy flat tools (format === 'legacy') expose name=stem but the backend resolves
+    // by filename (with extension), so use entrypoint as the key for those.
     for (const t of registryTools.value) {
-        const key = t.name.toLowerCase();
+        const key = t.format === 'legacy' ? t.entrypoint.toLowerCase() : t.name.toLowerCase();
         if (!seen.has(key))
             seen.set(key, {
                 key,
@@ -245,7 +247,7 @@ onMounted(async () => {
     const autoToolKeys = [];
     if (Array.isArray(tl) && tl.length) {
         registryTools.value = tl;
-        autoToolKeys.push(...tl.map((t) => t.name.toLowerCase()));
+        autoToolKeys.push(...tl.map((t) => t.format === 'legacy' ? t.entrypoint.toLowerCase() : t.name.toLowerCase()));
     }
     if (Array.isArray(sl) && sl.length) {
         registryScripts.value = sl;
