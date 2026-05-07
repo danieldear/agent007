@@ -746,7 +746,7 @@ footer {
 <!-- ── Hero ── -->
 <section class="hero">
   <div class="hero-inner">
-    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · 45+ tools</span></div>
+    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · 50+ tools</span></div>
 
     <h1 class="hero-title">
       Your AI editor,<br/>
@@ -819,15 +819,15 @@ footer {
   <div class="section-inner">
     <div class="stats-row reveal">
       <div class="stat-box">
-        <div class="stat-num">45+</div>
+        <div class="stat-num">50+</div>
         <div class="stat-label">MCP Tools</div>
       </div>
       <div class="stat-box">
-        <div class="stat-num">15</div>
+        <div class="stat-num">18</div>
         <div class="stat-label">Built-in Skills</div>
       </div>
       <div class="stat-box">
-        <div class="stat-num">7</div>
+        <div class="stat-num">8</div>
         <div class="stat-label">Workflows</div>
       </div>
       <div class="stat-box">
@@ -885,7 +885,7 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">📊</div>
         <div class="feature-title">Web Dashboard</div>
-        <div class="feature-desc">Live operations console at <code>localhost:8007</code> with task execution, run history, tools registry, MCP server management, RAG source controls, extensions import/install, and memory diagnostics.</div>
+        <div class="feature-desc">Live operations console at <code>localhost:8007</code> with task execution, run history, tools registry, MCP server management, RAG source controls, extensions import/install, and memory diagnostics. Local-timezone timestamps, real-time step updates via WebSocket, and expandable step output panels.</div>
         <span class="feature-tag">localhost:8007</span>
       </div>
       <div class="feature-card">
@@ -909,14 +909,32 @@ footer {
       <div class="feature-card">
         <div class="feature-icon">📦</div>
         <div class="feature-title">Sharing &amp; Bundles</div>
-        <div class="feature-desc">Pack skills, workflows, personas, and tools into SHA-256-verified bundles. Dependency-aware export keeps associated assets together so imported bundles are runnable without manual reconstruction.</div>
-        <span class="feature-tag">SHA-256 verified</span>
+        <div class="feature-desc">Pack skills, workflows, personas, and tools into SHA-256-verified bundles. Transitive dependency detection automatically bundles tool chains (workflow → script A → script B). Auto-selection and manual selection combine seamlessly so no asset is silently dropped.</div>
+        <span class="feature-tag">Transitive deps · SHA-256 verified</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">⊞</div>
         <div class="feature-title">Extensions</div>
         <div class="feature-desc">Import capabilities from local bundles, GitHub, npm MCP packages, OpenAPI specs, and marketplace-style sources through adapter-based normalization, preview, and install flows.</div>
         <span class="feature-tag">A/B/C compatibility</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⏱️</div>
+        <div class="feature-title">Step Timing &amp; Observability</div>
+        <div class="feature-desc">Every tool call and workflow step is timed to the millisecond. Duration badges appear inline on the dashboard so you can instantly spot which tools are bottlenecks in long-running workflows. Click any step to expand the full output.</div>
+        <span class="feature-tag">Per-tool · Per-step</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🪙</div>
+        <div class="feature-title">Token Tracking</div>
+        <div class="feature-desc">Actual LLM token counts are threaded from the skill executor and workflow submit path all the way to the dashboard. See per-step and per-run token totals to understand and control model costs.</div>
+        <span class="feature-tag">Accurate · Not estimates</span>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💓</div>
+        <div class="feature-title">Heartbeat Liveness</div>
+        <div class="feature-desc">Long-running workflow steps emit periodic heartbeats. The dashboard detects stale steps and surfaces staleness warnings so you know immediately when a step is hung, without waiting for a timeout.</div>
+        <span class="feature-tag">Real-time · Stale detection</span>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🌐</div>
@@ -1046,6 +1064,11 @@ footer {
       </thead>
       <tbody>
         <tr>
+          <td><span class="wf-name">brainstorm</span></td>
+          <td class="wf-steps">6</td>
+          <td class="wf-use">Free-form ideation → approval → PRD + ideation doc in <code>docs/</code></td>
+        </tr>
+        <tr>
           <td><span class="wf-name">tdd</span></td>
           <td class="wf-steps">3</td>
           <td class="wf-use">Red → Green → Refactor cycle <span class="wf-badge">parallel</span></td>
@@ -1102,7 +1125,7 @@ footer {
         <div class="arch-box highlight">Zed</div>
       </div>
 
-      <div class="arch-arrow">↕ MCP stdio · 45+ tools</div>
+      <div class="arch-arrow">↕ MCP stdio · 50+ tools</div>
 
       <div class="arch-label">agent007 MCP Server (Rust · 21 crates)</div>
       <div class="arch-row">
@@ -1122,6 +1145,12 @@ footer {
         <div class="arch-box">Persona Manager</div>
         <div class="arch-box">Git Agent</div>
         <div class="arch-box">Run Store</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box highlight">Token Tracker</div>
+        <div class="arch-box highlight">Step Timing</div>
+        <div class="arch-box highlight">Heartbeat Liveness</div>
+        <div class="arch-box">Tool Executor</div>
       </div>
 
       <div class="arch-arrow">↕</div>
@@ -1147,10 +1176,13 @@ footer {
 <section id="skills">
   <div class="section-inner">
     <p class="section-tag reveal">Skills library</p>
-    <h2 class="section-title reveal">15 built-in skills.<br/>Infinitely extensible.</h2>
+    <h2 class="section-title reveal">18 built-in skills.<br/>Infinitely extensible.</h2>
     <p class="section-sub reveal">Every skill is a Markdown file. Write your own, install from GitHub, or share with your team as a bundle.</p>
 
     <div class="features-grid reveal" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+      <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/brainstorm</div><div class="feature-desc" style="font-size:.74rem;">Free-form ideation, trade-off exploration, and structured PRD output</div></div>
+      <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/frontend-designer</div><div class="feature-desc" style="font-size:.74rem;">Production-grade frontend interfaces with distinctive, high-quality design</div></div>
+      <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/senior-ml-engineer</div><div class="feature-desc" style="font-size:.74rem;">MLOps pipelines, model deployment, RAG systems, and LLM cost optimization</div></div>
       <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/code-document</div><div class="feature-desc" style="font-size:.74rem;">Generate API docs, architecture docs, inline documentation</div></div>
       <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/code-optimize</div><div class="feature-desc" style="font-size:.74rem;">Profile analysis and performance optimization suggestions</div></div>
       <div class="feature-card"><div class="feature-title" style="font-size:.85rem; font-family:var(--font-mono); color:var(--amber)">/code-refactor</div><div class="feature-desc" style="font-size:.74rem;">Identify code smells and propose targeted improvements</div></div>
