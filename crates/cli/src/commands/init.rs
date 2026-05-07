@@ -618,7 +618,7 @@ pub async fn execute(
 
     if do_claude {
         section(&format!("{step}. Registering MCP server with Claude Code"));
-        register_mcp_in_settings(&binary_path, &claude_scope_dir, force)?;
+        register_claude_mcp(&binary_path, &claude_scope_dir, &project_dir, global, force)?;
         step += 1;
 
         section(&format!(
@@ -739,9 +739,15 @@ pub async fn execute(
     section(&format!("{step}. Verifying editor integration wiring"));
     verify_binary_target(&binary_path);
     if do_claude {
+        let claude_mcp_path = if global {
+            dirs_home().join(".claude.json")
+        } else {
+            project_dir.join(".mcp.json")
+        };
+        let claude_mcp_label = if global { "~/.claude.json" } else { ".mcp.json" };
         let check = parse_json_command_entry(
-            &claude_scope_dir.join("settings.json"),
-            "Claude Code settings.json",
+            &claude_mcp_path,
+            claude_mcp_label,
             "mcpServers",
         )?;
         print_integration_check(&check);
@@ -880,10 +886,24 @@ pub async fn execute(
 
 /// Write (or merge) the agent007 MCP server entry into <claude_dir>/settings.json.
 /// Uses `cmd` as the command path (preferably the currently running binary path).
-fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result<()> {
-    let settings_path = claude_dir.join("settings.json");
+fn register_claude_mcp(
+    cmd: &str,
+    claude_dir: &Path,
+    project_dir: &Path,
+    global: bool,
+    force: bool,
+) -> Result<()> {
+    // Claude Code now separates MCP config from settings.json:
+    //   - User/global scope  → ~/.claude.json  (mcpServers at root)
+    //   - Project scope      → <project>/.mcp.json  (mcpServers at root, committed to git)
+    let mcp_path = if global {
+        dirs_home().join(".claude.json")
+    } else {
+        project_dir.join(".mcp.json")
+    };
+    let file_label = if global { "~/.claude.json" } else { ".mcp.json" };
 
-    let mut root = load_json_root(&settings_path, "Claude Code settings.json")?;
+    let mut root = load_json_root(&mcp_path, file_label)?;
 
     let servers = root
         .as_object_mut()
@@ -931,7 +951,7 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
             } else {
                 ok(&format!(
                     "agent007 already registered in {}",
-                    settings_path.display()
+                    mcp_path.display()
                 ));
             }
         }
@@ -939,9 +959,34 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
         servers.insert("agent007".to_string(), desired_entry);
     }
 
-    // Wire the statusLine so Claude Code shows live agent007 stats below the prompt.
-    let obj = root.as_object_mut().unwrap();
-    obj.entry("statusLine").or_insert_with(|| {
+    if let Some(parent) = mcp_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    write_json_root(
+        &mcp_path,
+        &root,
+        &format!("mcpServers.agent007 → {cmd}"),
+    )?;
+    ok(&format!("MCP server registered in {file_label}"));
+
+    // Update settings.json: migrate out any old mcpServers.agent007 entry (now in
+    // the new location above), and wire the statusLine so Claude Code shows live
+    // agent007 stats below the prompt.
+    let settings_path = claude_dir.join("settings.json");
+    let mut settings = load_json_root(&settings_path, "Claude Code settings.json")?;
+    let settings_obj = settings.as_object_mut().unwrap();
+
+    // Remove stale mcpServers.agent007 written by older versions of agent007 init
+    if let Some(mcp) = settings_obj
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+    {
+        if mcp.remove("agent007").is_some() {
+            info("Migrated: removed old mcpServers.agent007 from settings.json");
+        }
+    }
+
+    settings_obj.entry("statusLine").or_insert_with(|| {
         serde_json::json!({
             "type": "command",
             "command": "cat ~/.agent007/statusline 2>/dev/null || echo 'agent007 | ready'"
@@ -953,10 +998,11 @@ fn register_mcp_in_settings(cmd: &str, claude_dir: &Path, force: bool) -> Result
     }
     write_json_root(
         &settings_path,
-        &root,
-        &format!("mcpServers.agent007 → {cmd}"),
+        &settings,
+        &format!("statusLine → ~/.agent007/statusline"),
     )?;
     ok("Ensured statusLine → cat ~/.agent007/statusline");
+
     println!();
     warn("Restart Claude Code to activate the MCP server");
     info("New Claude Code windows will pick it up automatically");
@@ -3294,10 +3340,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn claude_settings_preserve_unrelated_keys_and_add_statusline() {
+    fn claude_mcp_written_to_new_location_and_settings_migrated() {
         let temp = tempfile::tempdir().unwrap();
-        let claude_dir = temp.path().join(".claude");
+        let project_dir = temp.path().to_path_buf();
+        let claude_dir = project_dir.join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
+
+        // Simulate old settings.json that has mcpServers.agent007 (pre-migration)
         let settings_path = claude_dir.join("settings.json");
         std::fs::write(
             &settings_path,
@@ -3314,16 +3363,27 @@ mod tests {
         )
         .unwrap();
 
-        register_mcp_in_settings("/new/agent007", &claude_dir, false).unwrap();
+        register_claude_mcp("/new/agent007", &claude_dir, &project_dir, false, false).unwrap();
 
-        let root: JsonValue =
-            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-        assert_eq!(root["theme"], "dark");
+        // MCP entry should now be in .mcp.json at project root
+        let mcp_path = project_dir.join(".mcp.json");
+        let mcp_root: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_path).unwrap()).unwrap();
         assert_eq!(
-            root["mcpServers"]["agent007"]["command"],
-            "/existing/agent007"
+            mcp_root["mcpServers"]["agent007"]["command"],
+            "/new/agent007"
         );
-        assert_eq!(root["statusLine"]["type"], "command");
+
+        // settings.json should have theme preserved, mcpServers removed, statusLine added
+        let settings_root: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings_root["theme"], "dark");
+        assert!(
+            settings_root.get("mcpServers").is_none()
+                || settings_root["mcpServers"]["agent007"].is_null(),
+            "old mcpServers.agent007 should be removed from settings.json"
+        );
+        assert_eq!(settings_root["statusLine"]["type"], "command");
     }
 
     #[test]
