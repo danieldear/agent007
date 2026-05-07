@@ -3271,129 +3271,98 @@ mcp__agent007__agent007_task_submit  persona="Analyst"   → direct analysis
 
 const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
 
-You have access to the **agent007** MCP server via `context_servers.agent007`.
-Always prefer agent007 tools over ad-hoc code generation for complex tasks.
-For non-trivial work, route through `agent007_dispatch` before free-form generation.
-Runtime mode in editor integrations is typically **hosted-mcp**: the host LLM executes
-steps, `agent007` tracks the run, and memory improves over time.
+You have access to the **agent007** MCP server (`context_servers.agent007` in Zed,
+`mcpServers.agent007` in Claude Code / Cursor, `servers.agent007` in VS Code).
+
+**Rule #1:** For any task that is non-trivial, route through agent007 before generating
+free-form code or answers. It has memory, workflows, and specialist agents — use them.
 
 ---
 
-## The Core Cycle
+## When to use agent007 (and how)
 
-```text
-1. TASK
-   -> user asks for work
-
-2. CONTROL
-   -> use agent007_run / agent007_skill_run / agent007_workflow_run
-   -> get a run, prompt, or structured plan
-
-3. WORK
-   -> execute with the normal editor tools
-   -> read files, edit code, run commands, inspect diffs
-
-4. RECORD
-   -> when hosted flows ask for it, call agent007_record_tokens
-   -> this updates dashboard metrics and preserves output in memory
-
-5. LEARN
-   -> future runs can reuse repo brain, memory, and prior outputs
+### Quick task → `agent007_run`
+Single-step work: summarize, explain, rename, small refactor.
+```
+agent007_run("refactor the UserService class to use dependency injection")
 ```
 
-The important rule is:
+### Skill (focused prompt) → `agent007_skill_run`
+Repeatable expert patterns. Call `agent007_skill_list` to discover what's installed.
 
-```text
-for multi-step or high-context work, route through agent007 first
+| Trigger | What it does |
+|---------|-------------|
+| `/dev-architect` | Design system architecture from requirements |
+| `/dev-debug` | Systematic hypothesis-driven debugging |
+| `/dev-pr-review` | Thorough PR review — bugs, security, logic |
+| `/dev-tdd` | TDD red-green-refactor coaching |
+| `/code-refactor` | Identify code smells, propose improvements |
+| `/code-optimize` | Profile analysis, performance suggestions |
+| `/code-security-audit` | OWASP, secrets scan, threat modeling |
+| `/code-test-gen` | Generate test suites with edge cases |
+| `/code-document` | API docs, architecture docs, inline comments |
+| `/meta-analyze-codebase` | Tech stack, patterns, architecture overview |
+| `/project-prd` | Product requirements with user stories |
+| `/project-plan` | Break features into tasks with estimates |
+| `/project-changelog` | Changelog from git history |
+| `/brainstorm` | Explore a problem, generate 3–5 approaches |
+
+### Workflow (multi-agent pipeline) → `agent007_workflow_run`
+Parallel specialist agents for complex work. Call `agent007_workflow_list` to see all.
+
+| Workflow | Use when |
+|----------|----------|
+| `tdd` | Writing a feature test-first (Red → Green → Refactor) |
+| `code-review` | Need security + performance + style reviewed in parallel |
+| `security-audit` | Deep OWASP + secrets + dependency + threat model audit |
+| `feature` | Full delivery: spec → arch → implement → review → docs |
+| `sparc` | Greenfield feature: Spec → Pseudocode → Arch → Refine → Complete |
+| `ideation` | Research → PRD → architecture → project plan |
+| `brainstorm` | Lightweight ideation → PRD (stops before architecture) |
+| `log-analysis` | Analyze logs / traces / errors for root cause |
+
+---
+
+## Context and memory
+
+Before broad edits on an unfamiliar codebase:
+```
+agent007_context_compile(task="<what you're about to do>")
+```
+This pulls repo brain + relevant files + memory notes into a compact context block.
+
+To persist a high-signal finding for future sessions:
+```
+agent007_memory_write(scope="project", key="<topic>", value="<finding>")
+```
+
+To review prior work on this repo:
+```
+agent007_run_history()
 ```
 
 ---
 
-## Core Tools
+## Hosted workflow execution
 
-| Tool | Purpose |
-|------|---------|
-| `agent007_run` | Run a quick task through the full agent stack |
-| `agent007_skill_list` | Discover installed skills |
-| `agent007_skill_run` | Run a named skill by trigger |
-| `agent007_workflow_list` | List available workflows |
-| `agent007_workflow_run` | Run a full workflow synchronously |
-| `agent007_workflow_start` | Start a hosted workflow session |
-| `agent007_workflow_next` | Fetch next ready hosted workflow steps |
-| `agent007_workflow_submit_step` | Submit output for a hosted step |
-| `agent007_workflow_approve` | Record an approval decision |
-| `agent007_record_tokens` | Close the hosted loop and persist output |
-| `agent007_context_compile` | Pull repo brain + memory + relevant files |
-| `agent007_memory_read` | Read saved memory |
-| `agent007_memory_write` | Persist high-signal context |
-| `agent007_run_history` | Review prior runs |
-| `agent007_repo_brain_refresh` | Rebuild project summary memory |
+When running hosted workflows (`agent007_workflow_start` / `agent007_workflow_next`):
 
-If the exact tools differ over time, use `agent007_help`, `agent007_skill_list`,
-and `agent007_workflow_list` as the source of truth.
+1. Fetch next steps with `agent007_workflow_next`
+2. Execute each step's prompt using your normal tools (read files, run commands, edit code)
+3. Submit output with `agent007_workflow_submit_step`
+4. At approval gates, call `agent007_workflow_approve` (decision: approve/deny/edit)
+5. When a step requests token recording, call `agent007_record_tokens` with the output —
+   this keeps dashboard metrics accurate and saves the output to memory
 
 ---
 
-## Routing Guidance
+## Hard rules
 
-```text
-Quick ad-hoc task
-  -> agent007_run
-
-Focused repeatable prompt pattern
-  -> agent007_skill_run
-
-Feature delivery / code review / ideation / security / TDD
-  -> agent007_workflow_run
-
-Unsure what exists
-  -> agent007_skill_list or agent007_workflow_list
-```
-
-Recommended workflow routing:
-
-| Workflow | When to use |
-|----------|-------------|
-| `tdd` | Writing or fixing a feature test-first |
-| `code-review` | Reviewing correctness, security, performance, style |
-| `sparc` | End-to-end feature execution |
-| `feature` | Full delivery with review and approval gates |
-| `ideation` | Research to PRD to architecture to plan |
-| `brainstorm` | Lightweight ideation before committing to architecture |
-| `log-analysis` | Error and incident investigation |
-| `security-audit` | Deep security review |
-
----
-
-## Working Rules
-
-1. For any complex task, prefer `agent007_context_compile` before broad edits.
-2. For hosted workflows, keep the user in the loop at approval points.
-3. When a hosted task asks for `agent007_record_tokens`, include the final output text so
-   memory and dashboard state stay useful.
-4. Treat the dashboard as telemetry and run inspection, not the primary planning brain.
-5. Preserve user-owned project instructions; update only the agent007-managed guidance.
-
----
-
-## Project Context
-
-Fill this section in for the current repository:
-
-- Stack:
-- Key build/test commands:
-- MCP server command:
-- Dashboard URL:
-- Important modules or directories:
-- Delivery constraints:
-- Review standards:
-
-Default local commands:
-
-- LSP server: `agent007 serve-lsp --stdio`
-- MCP server: `agent007 serve`
-- Full MCP + dashboard: `agent007 serve`
-- Web dashboard: `http://localhost:8007`
+- **Never ignore approval gates** — workflows pause at `approval_required` steps intentionally
+- **Prefer `agent007_context_compile` over broad file reads** when context is large
+- **If unsure what's available**, call `agent007_skill_list` or `agent007_workflow_list`
+- **Do not add `--no-dashboard`** to `agent007 serve` — the dashboard is always on
+- **MCP server:** `agent007 serve`  |  **Dashboard:** `http://localhost:8007`
 "#;
 
 #[cfg(test)]
@@ -3541,9 +3510,9 @@ name = "night"
 
         let generated_path = project_dir.join("AGENTS.agent007.generated.md");
         let generated = std::fs::read_to_string(&generated_path).unwrap();
-        assert!(generated.contains("## The Core Cycle"));
+        assert!(generated.contains("## When to use agent007"));
         assert!(generated.contains("agent007_record_tokens"));
-        assert!(generated.contains("## Project Context"));
+        assert!(generated.contains("agent007_workflow_run"));
     }
 }
 
