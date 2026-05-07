@@ -178,7 +178,7 @@ impl DashboardMetrics {
                     agent: format!("{}", agent_id),
                     model: self.model_provider.clone(),
                     tokens: 0,
-                    started_at: Utc::now().format("%H:%M:%S").to_string(),
+                    started_at: Utc::now().to_rfc3339(),
                     finished_at: None,
                 };
                 self.recent_tasks.push_back(entry);
@@ -198,7 +198,7 @@ impl DashboardMetrics {
                     .find(|e| e.id == aid && e.status == "running")
                 {
                     entry.status = "completed".to_string();
-                    entry.finished_at = Some(Utc::now().format("%H:%M:%S").to_string());
+                    entry.finished_at = Some(Utc::now().to_rfc3339());
                 }
             }
             AgentEvent::ModelRequest {
@@ -353,10 +353,10 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
             agent: run.mode.clone(),
             model: provider_label,
             tokens,
-            started_at: run.started_at.format("%H:%M:%S").to_string(),
+            started_at: run.started_at.to_rfc3339(),
             finished_at: run
                 .finished_at
-                .map(|value| value.format("%H:%M:%S").to_string()),
+                .map(|value| value.to_rfc3339()),
         });
         if metrics.recent_tasks.len() > MAX_RECENT_TASKS {
             metrics.recent_tasks.pop_front();
