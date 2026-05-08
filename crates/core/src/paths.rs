@@ -42,11 +42,14 @@ pub fn agent007_home() -> PathBuf {
 
 /// Return the ordered list of directories to search for skills (project-local first, then global).
 /// Matches the listing behaviour of the web dashboard and the CLI skill commands.
+/// When `AGENT007_HOME` is set it acts as a complete replacement — no other dirs are searched.
 pub fn skills_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
         push_unique(&mut dirs, PathBuf::from(home).join("skills"));
-    } else if let Some(project) = agent007_project_home() {
+        return dirs;
+    }
+    if let Some(project) = agent007_project_home() {
         push_unique(&mut dirs, project.join("skills"));
     }
     let global = agent007_global_home().join("skills");
@@ -55,11 +58,14 @@ pub fn skills_search_dirs() -> Vec<PathBuf> {
 }
 
 /// Return the ordered list of directories to search for workflows (project-local first, then global).
+/// When `AGENT007_HOME` is set it acts as a complete replacement — no other dirs are searched.
 pub fn workflow_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
         push_unique(&mut dirs, PathBuf::from(home).join("workflows"));
-    } else if let Some(project) = agent007_project_home() {
+        return dirs;
+    }
+    if let Some(project) = agent007_project_home() {
         push_unique(&mut dirs, project.join("workflows"));
     }
     let global = agent007_global_home().join("workflows");
@@ -68,11 +74,14 @@ pub fn workflow_search_dirs() -> Vec<PathBuf> {
 }
 
 /// Return the ordered list of directories to search for personas (project-local first, then global).
+/// When `AGENT007_HOME` is set it acts as a complete replacement — no other dirs are searched.
 pub fn persona_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
         push_unique(&mut dirs, PathBuf::from(home).join("personas"));
-    } else if let Some(project) = agent007_project_home() {
+        return dirs;
+    }
+    if let Some(project) = agent007_project_home() {
         push_unique(&mut dirs, project.join("personas"));
     }
     let global = agent007_global_home().join("personas");
