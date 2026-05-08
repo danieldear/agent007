@@ -61,4 +61,3 @@ mod tests {
         assert_eq!(out["matches"][1]["value"], "xyz");
     }
 }
-

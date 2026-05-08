@@ -30,4 +30,3 @@ mod tests {
         assert_eq!(out["count"], 2);
     }
 }
-

@@ -1,11 +1,11 @@
-pub mod delta_compare;
+pub mod artifact_read;
 pub mod csv_slice;
+pub mod delta_compare;
 pub mod diff;
 pub mod file_stat;
 pub mod glob;
-pub mod group_count;
 pub mod grep;
-pub mod artifact_read;
+pub mod group_count;
 pub mod join_on_key;
 pub mod json_extract;
 pub mod json_query;
@@ -20,8 +20,8 @@ pub mod table_stats;
 pub mod text_extract;
 pub mod time_window_filter;
 pub mod workflow_outputs_index;
-pub mod workflow_step_health;
 pub mod workflow_status_summary;
+pub mod workflow_step_health;
 
 use anyhow::Result;
 use serde_json::Value;

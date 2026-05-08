@@ -47,7 +47,10 @@ fn load_side(
             .collect::<Vec<_>>());
     }
     let path = input[path_key].as_str().context("path required")?;
-    let format = input.get(format_key).cloned().unwrap_or(Value::String("auto".into()));
+    let format = input
+        .get(format_key)
+        .cloned()
+        .unwrap_or(Value::String("auto".into()));
     let rows = super::table_select::run(&json!({"path":path,"format":format}))?["rows"]
         .as_array()
         .cloned()
@@ -72,4 +75,3 @@ mod tests {
         assert_eq!(out["count"], 1);
     }
 }
-

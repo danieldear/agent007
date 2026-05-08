@@ -4828,7 +4828,11 @@ fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
         });
     }
 
-    Ok(LspConfigResponse { enabled, servers, inject_for_categories })
+    Ok(LspConfigResponse {
+        enabled,
+        servers,
+        inject_for_categories,
+    })
 }
 
 fn write_lsp_config_to_file(payload: &LspConfigResponse) -> Result<(), String> {
@@ -4870,8 +4874,11 @@ fn write_lsp_config_to_file(payload: &LspConfigResponse) -> Result<(), String> {
     );
     root_table.insert("lsp".to_string(), toml::Value::Table(lsp_table));
 
-    std::fs::write(path, toml::to_string_pretty(&root).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        path,
+        toml::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -4887,8 +4894,11 @@ fn clear_lsp_config_from_file() -> Result<(), String> {
         .as_table_mut()
         .ok_or_else(|| "config root must be a TOML table".to_string())?;
     root_table.remove("lsp");
-    std::fs::write(path, toml::to_string_pretty(&root).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        path,
+        toml::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 

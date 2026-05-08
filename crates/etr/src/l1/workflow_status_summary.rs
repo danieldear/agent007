@@ -26,7 +26,12 @@ pub fn run(input: &Value) -> Result<Value> {
     let outputs_available = progress
         .get("outputs_available")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(ToString::to_string).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     Ok(json!({
@@ -73,4 +78,3 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 }
-

@@ -54,4 +54,3 @@ mod tests {
         assert_eq!(out["failed_count"], 1);
     }
 }
-

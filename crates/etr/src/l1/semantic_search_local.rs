@@ -7,7 +7,9 @@ use std::path::Path;
 pub fn run(input: &Value) -> Result<Value> {
     let root = input["root"].as_str().unwrap_or(".");
     let query = input["query"].as_str().context("query required")?;
-    let pattern = input["pattern"].as_str().unwrap_or("**/*.{md,rs,toml,txt,json,yaml,yml}");
+    let pattern = input["pattern"]
+        .as_str()
+        .unwrap_or("**/*.{md,rs,toml,txt,json,yaml,yml}");
     let limit = input["limit"].as_u64().unwrap_or(10) as usize;
 
     let mut b = GlobSetBuilder::new();
@@ -108,4 +110,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
