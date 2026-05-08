@@ -78,7 +78,7 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
         crate::types::ToolManifest {
             name: "etr.math".into(),
             layer: crate::types::ToolLayer::L1,
-            description: "Evaluate a math expression (e.g. '2 + 3 * 4', 'sqrt(16)')".into(),
+            description: "Evaluate a math expression (e.g. '2 + 3 * 4', '2^8', 'math::sqrt(16)', 'math::log(100, 10)')".into(),
             input_schema: serde_json::json!({
                 "expression": "string"
             }),
