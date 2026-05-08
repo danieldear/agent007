@@ -21,7 +21,7 @@ use serde_json::Map;
 
 use super::run::{
     agent007_global_home, agent007_home, agent007_project_home, agent007_write_home, build_stack,
-    runtime_mode_label, selected_runtime_model, selected_runtime_provider,
+    build_stack_for_web, runtime_mode_label, selected_runtime_model, selected_runtime_provider,
     standalone_mode_available,
 };
 use super::skill::SkillSummary;
@@ -5234,7 +5234,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
         if already_running {
             // Still wire up a dispatcher so MCP tool calls publish events — the live
             // dashboard belongs to the first process but run history is shared on disk.
-            let stack = super::run::build_stack(&config).await?;
+            let stack = build_stack_for_web(&config).await?;
             shared_dispatcher = Some(stack.dispatcher.clone());
             shared_learning = Some(stack.learning_dispatcher.clone());
             let collector = stack.feedback_collector.clone();
@@ -5249,7 +5249,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
             // Start the dashboard inline regardless of whether stdin is a terminal.
             // The MCP stdio protocol and the HTTP web server use completely different
             // transports and coexist in the same process without conflict.
-            let stack = super::run::build_stack(&config).await?;
+            let stack = build_stack_for_web(&config).await?;
             let standalone_mode = standalone_mode_available(&config);
             let runtime_mode = runtime_mode_label(&config).to_string();
             let provider_label = match (

@@ -832,14 +832,16 @@ async function submitTask() {
               <!-- Task -->
               <div>
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
-                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed">{{ selectedRun.run.metadata.task }}</div>
-              </div>
+                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed"
+                  v-html="renderMarkdown(selectedRun.run.metadata.task)"
+                /></div>
 
               <!-- Output -->
               <div v-if="selectedRunOutput">
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
-                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed max-h-48 overflow-auto">{{ selectedRunOutput }}</div>
-              </div>
+                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
+                  v-html="renderMarkdown(selectedRunOutput)"
+                /></div>
 
               <!-- Retrieval Telemetry -->
               <div v-if="selectedRetrievalTelemetry">
@@ -1100,10 +1102,11 @@ async function submitTask() {
                         </div>
                         <!-- Step output (expandable — rendered as markdown when expanded) -->
                         <div v-if="step.output_preview" class="mt-2">
-                          <!-- Collapsed: plain-text preview -->
+                          <!-- Collapsed: markdown preview (truncated) -->
                           <div v-if="!expandedSteps.has(step.id)"
-                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2 max-h-20 overflow-hidden"
-                          >{{ step.output_preview }}</div>
+                            class="md-step-output text-xs bg-base-300/20 rounded p-2 max-h-20 overflow-hidden"
+                            v-html="renderMarkdown(step.output_preview)"
+                          />
                           <!-- Expanded raw view -->
                           <div v-else-if="rawStepView.has(step.id)"
                             class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto leading-relaxed"
