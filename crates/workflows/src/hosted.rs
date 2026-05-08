@@ -27,9 +27,6 @@ use crate::runner::{
 use crate::state::{PendingApproval, WorkflowRunState, WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{StepDef, StepType, WorkflowDef};
 
-/// Token threshold (in estimated tokens) above which a step output is stored as a
-/// lazy artifact rather than injected verbatim into downstream prompts.
-const LAZY_TOKEN_THRESHOLD: usize = 4000;
 /// Number of characters to include in the inline preview stub.
 const LAZY_PREVIEW_CHARS: usize = 200;
 /// Prefix used to identify lazy-injection stubs in `state.outputs`.
@@ -837,7 +834,8 @@ impl HostedWorkflowEngine {
         if let Some(output_key) = &step.output {
             // P2: Lazy injection — store large outputs as artifacts, inject a compact stub.
             // This prevents downstream prompts from ballooning due to large step outputs.
-            let stored_value = if estimate_tokens(&final_content) as usize > LAZY_TOKEN_THRESHOLD {
+            let lazy_threshold = reliability_policy.lazy_injection_threshold;
+            let stored_value = if estimate_tokens(&final_content) as usize > lazy_threshold {
                 if let (Some(store), Some(run_id)) = (&self.run_store, &self.run_id) {
                     let artifact_name = lazy_artifact_filename(output_key);
                     if store

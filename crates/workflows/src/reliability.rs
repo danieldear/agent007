@@ -95,6 +95,7 @@ pub struct ReliabilityPolicy {
     pub max_step_retries: u32,
     pub max_degradations_per_run: u32,
     pub degrade_output_chars: usize,
+    pub lazy_injection_threshold: usize,
     pub guardrail_terms: Vec<String>,
     pub confidence_low_terms: Vec<String>,
     pub confidence_missing_requires_approval: bool,
@@ -114,6 +115,10 @@ impl ReliabilityPolicy {
             max_step_retries: env_u32("AGENT007_RELIABILITY_MAX_STEP_RETRIES", 2),
             max_degradations_per_run: env_u32("AGENT007_RELIABILITY_MAX_DEGRADATIONS", 1),
             degrade_output_chars: env_usize("AGENT007_RELIABILITY_DEGRADE_OUTPUT_CHARS", 400),
+            lazy_injection_threshold: env_usize(
+                "AGENT007_RELIABILITY_LAZY_INJECTION_THRESHOLD",
+                4000,
+            ),
             guardrail_terms: env_list(
                 "AGENT007_RELIABILITY_GUARDRAIL_TERMS",
                 DEFAULT_GUARDRAIL_TERMS,
@@ -163,6 +168,9 @@ impl ReliabilityPolicy {
             }
             if let Some(degrade_output_chars) = budget_governor.degrade_output_chars {
                 self.degrade_output_chars = degrade_output_chars;
+            }
+            if let Some(lazy_injection_threshold) = budget_governor.lazy_injection_threshold {
+                self.lazy_injection_threshold = lazy_injection_threshold;
             }
         }
 
@@ -419,6 +427,7 @@ mod tests {
             max_step_retries: 2,
             max_degradations_per_run: 1,
             degrade_output_chars: 10,
+            lazy_injection_threshold: 4000,
             guardrail_terms: vec!["drop table".to_string()],
             confidence_low_terms: vec!["confidence: low".to_string()],
             confidence_missing_requires_approval: false,

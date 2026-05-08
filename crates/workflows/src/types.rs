@@ -193,6 +193,8 @@ pub struct ReliabilityBudgetGovernorConfig {
     pub enabled: Option<bool>,
     pub max_degradations_per_run: Option<u32>,
     pub degrade_output_chars: Option<usize>,
+    /// Optional token threshold for lazy injection stubbing in hosted workflows.
+    pub lazy_injection_threshold: Option<usize>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
