@@ -18,8 +18,8 @@ const THEMES = [
   { id: 'forest',  label: '🌿 Forest',  dark: true  },
   { id: 'ocean',   label: '🌊 Ocean',   dark: true  },
   { id: 'aurora',  label: '✨ Aurora',  dark: true  },
-  { id: 'day',     label: '☀️ Day',     dark: false },
-  { id: 'nord',    label: '❄️ Nord',    dark: false },
+  { id: 'day',        label: '☀️ Day',       dark: false },
+  { id: 'corporate',  label: '💼 Corporate', dark: false },
 ]
 
 function normalizeSaved(t) {
