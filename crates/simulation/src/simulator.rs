@@ -95,7 +95,9 @@ impl Simulator {
 
     /// Validate the raw output string against the template's ValidationConfig.
     ///
-    /// For JSON output the validator attempts to parse and check known fields.
+    /// Checks `assert_contains` / `assert_not_contains` (substring), `max_duration_ms`
+    /// (when a `duration_ms` field is present in JSON output), and `min_quality_score`
+    /// (when a `quality_score` field is present in JSON output).
     /// Returns `Ok(())` if valid or if no validation constraints are set.
     pub fn validate_output(
         &self,
@@ -103,50 +105,50 @@ impl Simulator {
         output: &str,
         config: &ValidationConfig,
     ) -> Result<(), SimulationError> {
-        // Try to parse as JSON for structured validation
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(output) {
-            if let Some(max_err) = config.max_error_m {
-                if let Some(err_m) = v["error_m"].as_f64() {
-                    if err_m > max_err {
-                        return Err(SimulationError::ValidationFailed {
-                            name: scenario_name.to_string(),
-                            reason: format!("error_m {err_m:.2} exceeds max {max_err:.2}"),
-                        });
+        // assert_contains — exact substring match against raw output
+        for needle in &config.assert_contains {
+            if !output.contains(needle.as_str()) {
+                return Err(SimulationError::ValidationFailed {
+                    name: scenario_name.to_string(),
+                    reason: format!("expected substring not found: {needle:?}"),
+                });
+            }
+        }
+
+        // assert_not_contains — must be absent from raw output
+        for needle in &config.assert_not_contains {
+            if output.contains(needle.as_str()) {
+                return Err(SimulationError::ValidationFailed {
+                    name: scenario_name.to_string(),
+                    reason: format!("forbidden substring found: {needle:?}"),
+                });
+            }
+        }
+
+        // JSON-based checks: max_duration_ms and min_quality_score
+        if config.max_duration_ms.is_some() || config.min_quality_score.is_some() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(output) {
+                if let Some(max_dur) = config.max_duration_ms {
+                    if let Some(dur) = v["duration_ms"].as_u64() {
+                        if dur > max_dur {
+                            return Err(SimulationError::ValidationFailed {
+                                name: scenario_name.to_string(),
+                                reason: format!("duration_ms {dur} exceeds max {max_dur}"),
+                            });
+                        }
                     }
                 }
-            }
 
-            if let Some(min_acc) = config.min_accuracy_percent {
-                if let Some(acc) = v["accuracy_percent"].as_f64() {
-                    if acc < min_acc {
-                        return Err(SimulationError::ValidationFailed {
-                            name: scenario_name.to_string(),
-                            reason: format!("accuracy_percent {acc:.1} below minimum {min_acc:.1}"),
-                        });
-                    }
-                }
-            }
-
-            if let Some(max_ho) = config.max_handoff_time_ms {
-                if let Some(ho) = v["handoff_time_ms"].as_u64() {
-                    if ho > max_ho {
-                        return Err(SimulationError::ValidationFailed {
-                            name: scenario_name.to_string(),
-                            reason: format!("handoff_time_ms {ho} exceeds max {max_ho}"),
-                        });
-                    }
-                }
-            }
-
-            if let Some(min_csr) = config.min_connection_success_rate {
-                if let Some(csr) = v["connection_success_rate"].as_f64() {
-                    if csr < min_csr {
-                        return Err(SimulationError::ValidationFailed {
-                            name: scenario_name.to_string(),
-                            reason: format!(
-                                "connection_success_rate {csr:.3} below minimum {min_csr:.3}"
-                            ),
-                        });
+                if let Some(min_qs) = config.min_quality_score {
+                    if let Some(qs) = v["quality_score"].as_f64() {
+                        if qs < min_qs {
+                            return Err(SimulationError::ValidationFailed {
+                                name: scenario_name.to_string(),
+                                reason: format!(
+                                    "quality_score {qs:.3} below minimum {min_qs:.3}"
+                                ),
+                            });
+                        }
                     }
                 }
             }
@@ -218,14 +220,65 @@ mod tests {
     }
 
     #[test]
-    fn validate_fails_on_high_error_m() {
+    fn validate_assert_contains_passes() {
         let sim = Simulator::new();
         let config = ValidationConfig {
-            max_error_m: Some(2.0),
+            assert_contains: vec!["brainstorm".into(), "debug".into()],
+            ..Default::default()
+        };
+        assert!(sim
+            .validate_output("s1", "skills: /brainstorm /debug /architect", &config)
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_assert_contains_fails_missing() {
+        let sim = Simulator::new();
+        let config = ValidationConfig {
+            assert_contains: vec!["/missing-skill".into()],
             ..Default::default()
         };
         let err = sim
-            .validate_output("s1", r#"{"error_m": 5.5}"#, &config)
+            .validate_output("s1", "skills: /brainstorm /debug", &config)
+            .unwrap_err();
+        assert!(matches!(err, SimulationError::ValidationFailed { .. }));
+    }
+
+    #[test]
+    fn validate_assert_not_contains_fails_on_forbidden() {
+        let sim = Simulator::new();
+        let config = ValidationConfig {
+            assert_not_contains: vec!["ERROR".into()],
+            ..Default::default()
+        };
+        let err = sim
+            .validate_output("s1", "output ERROR: something went wrong", &config)
+            .unwrap_err();
+        assert!(matches!(err, SimulationError::ValidationFailed { .. }));
+    }
+
+    #[test]
+    fn validate_max_duration_ms_fails_on_slow() {
+        let sim = Simulator::new();
+        let config = ValidationConfig {
+            max_duration_ms: Some(100),
+            ..Default::default()
+        };
+        let err = sim
+            .validate_output("s1", r#"{"duration_ms": 250}"#, &config)
+            .unwrap_err();
+        assert!(matches!(err, SimulationError::ValidationFailed { .. }));
+    }
+
+    #[test]
+    fn validate_min_quality_score_fails_on_low() {
+        let sim = Simulator::new();
+        let config = ValidationConfig {
+            min_quality_score: Some(0.8),
+            ..Default::default()
+        };
+        let err = sim
+            .validate_output("s1", r#"{"quality_score": 0.5}"#, &config)
             .unwrap_err();
         assert!(matches!(err, SimulationError::ValidationFailed { .. }));
     }
@@ -234,11 +287,16 @@ mod tests {
     fn validate_passes_within_bounds() {
         let sim = Simulator::new();
         let config = ValidationConfig {
-            max_error_m: Some(2.0),
+            max_duration_ms: Some(500),
+            min_quality_score: Some(0.8),
             ..Default::default()
         };
         assert!(sim
-            .validate_output("s1", r#"{"error_m": 1.5}"#, &config)
+            .validate_output(
+                "s1",
+                r#"{"duration_ms": 200, "quality_score": 0.95}"#,
+                &config
+            )
             .is_ok());
     }
 }

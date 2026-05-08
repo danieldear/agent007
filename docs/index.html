@@ -940,6 +940,60 @@ pre .fn  { color: var(--blue); }
 }
 .skill-pill:hover { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.04); }
 
+/* ── Simulate section ── */
+.simulate-section {
+  background: var(--black);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.simulate-glow {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(ellipse 600px 400px at 20% 50%, rgba(245,158,11,.04) 0%, transparent 70%);
+  pointer-events: none;
+}
+.simulate-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  align-items: start;
+}
+@media (max-width: 800px) { .simulate-layout { grid-template-columns: 1fr; gap: 2.5rem; } }
+
+.simulate-point {
+  display: flex;
+  gap: .75rem;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+}
+.simulate-point-icon { font-size: 1rem; margin-top: .1rem; flex-shrink: 0; line-height: 1; }
+.simulate-point-title {
+  font-family: var(--font-sans);
+  font-size: .88rem;
+  font-weight: 700;
+  color: var(--white);
+  margin-bottom: .25rem;
+}
+.simulate-point-desc { font-size: .76rem; color: var(--text2); line-height: 1.6; }
+
+.simulate-badge-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-top: 1.5rem;
+}
+.simulate-badge {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .5rem .9rem;
+  font-size: .72rem;
+  color: var(--amber);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
 /* ── CTA ── */
 .cta-section {
   background: var(--black2);
@@ -1750,6 +1804,86 @@ footer {
   </div>
 </section>
 
+<!-- ── Simulate ── -->
+<section id="simulate" class="simulate-section">
+  <div class="simulate-glow"></div>
+  <div class="section-inner">
+    <p class="section-tag reveal">Quality Assurance · New</p>
+    <h2 class="section-title reveal">Run agent007<br/>against itself.</h2>
+    <p class="section-sub reveal">Define regression scenarios in TOML. Run them against any agent007 binary. Detect regressions automatically — before they reach production.</p>
+
+    <div class="simulate-layout reveal">
+      <div>
+        <div class="simulate-point">
+          <span class="simulate-point-icon">📋</span>
+          <div>
+            <div class="simulate-point-title">TOML-defined scenarios</div>
+            <div class="simulate-point-desc">Each scenario specifies a command to run, what the output must contain, what it must not contain, and optional quality thresholds. No code required.</div>
+          </div>
+        </div>
+        <div class="simulate-point">
+          <span class="simulate-point-icon">🔍</span>
+          <div>
+            <div class="simulate-point-title">Regression detection</div>
+            <div class="simulate-point-desc">Compare runs over time. Failures that are new since the last baseline are flagged as regressions. Pre-existing failures are tracked but not re-reported.</div>
+          </div>
+        </div>
+        <div class="simulate-point">
+          <span class="simulate-point-icon">🧠</span>
+          <div>
+            <div class="simulate-point-title">Real LLM provider</div>
+            <div class="simulate-point-desc">The simulate command uses your configured model provider — the same one <code>agent007 run</code> uses. No mocks, no placeholders. Set <code>AGENT007_DRY_RUN=1</code> for fast offline checks.</div>
+          </div>
+        </div>
+
+        <div class="simulate-badge-grid">
+          <span class="simulate-badge">agent007 simulate list</span>
+          <span class="simulate-badge">agent007 simulate run skills-smoke</span>
+          <span class="simulate-badge">agent007 simulate validate</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="code-block">
+          <div class="code-header">
+            <span class="code-lang">skills-smoke.toml</span>
+          </div>
+          <pre><span class="cm"># Smoke-test that built-in skills are registered</span>
+<span class="kw">name</span> = <span class="str">"skills-smoke"</span>
+<span class="kw">description</span> = <span class="str">"Verify built-in skills are listed"</span>
+
+<span class="kw">[[scenarios]]</span>
+<span class="kw">name</span> = <span class="str">"skill-list-shows-builtins"</span>
+<span class="kw">command</span> = <span class="str">"agent007 skill list"</span>
+
+<span class="kw">[scenarios.validation]</span>
+<span class="kw">assert_contains</span> = [
+  <span class="str">"/brainstorm"</span>,
+  <span class="str">"/dev-architect"</span>,
+  <span class="str">"/code-refactor"</span>,
+]
+<span class="kw">assert_not_contains</span> = [<span class="str">"error"</span>, <span class="str">"panic"</span>]
+<span class="kw">max_duration_ms</span> = <span class="num">5000</span></pre>
+        </div>
+
+        <div class="code-block" style="margin-top: 1rem;">
+          <div class="code-header">
+            <span class="code-lang">Running a simulation</span>
+          </div>
+          <pre><span class="cm"># Run built-in smoke tests</span>
+$ <span class="fn">agent007 simulate run skills-smoke</span>
+
+<span class="cm"># Run all templates and detect regressions</span>
+$ <span class="fn">agent007 simulate run --all --report</span>
+
+<span class="cm"># Validate a custom template</span>
+$ <span class="fn">agent007 simulate validate my-scenario.toml</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── Install ── -->
 <section id="install" class="install-section">
   <div class="section-inner">
@@ -1842,6 +1976,7 @@ footer {
     <li><a href="#token-savings">Token Savings</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#skills">Skills</a></li>
+    <li><a href="#simulate">Simulate</a></li>
     <li><a href="#workflows">Workflows</a></li>
     <li><a href="https://github.com/danieldear/agent007/blob/main/docs/configuration.md" target="_blank">Config ↗</a></li>
     <li><a href="https://github.com/danieldear/agent007/blob/main/docs/known-issues.md" target="_blank">Known Issues ↗</a></li>

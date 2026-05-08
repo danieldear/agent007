@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use agent007_simulation::{SimulationPipeline, TemplateLoader};
 
-use super::run::agent007_home;
+use super::run::{agent007_home, build_model_router};
 use crate::config::Config;
 
 #[derive(Parser, Debug)]
@@ -19,7 +19,7 @@ pub enum SimulateAction {
     List,
     /// Run a simulation template by name
     Run {
-        /// Template name (e.g. wifi-rtt, wifi-roaming) or path to a .toml file
+        /// Template name (e.g. skills-smoke, workflow-smoke) or path to a .toml file
         template: String,
     },
     /// Validate a simulation template without running it
@@ -29,7 +29,7 @@ pub enum SimulateAction {
     },
 }
 
-pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
+pub async fn execute(config: Arc<Config>, args: SimulateArgs) -> Result<()> {
     let custom_dir = agent007_home().join("simulations").join("custom");
     let loader = TemplateLoader::with_custom_dir(custom_dir);
 
@@ -53,16 +53,15 @@ pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
             let memory_dir = agent007_home().join("memory");
             let memory = Arc::new(agent007_memory::store::MemoryStore::new(&memory_dir));
 
-            let mock = Arc::new(agent007_models::MockProvider::new(
-                "simulation output placeholder",
-                "mock",
-            )) as Arc<dyn agent007_models::ModelProvider>;
+            let is_dry_run = std::env::var("AGENT007_DRY_RUN").as_deref() == Ok("1");
+            let model_router = build_model_router(&config, is_dry_run);
+            let provider = Arc::new(model_router) as Arc<dyn agent007_models::ModelProvider>;
 
             let dispatcher = agent007_core::dispatcher::LocalDispatcher::new(16)
                 as Arc<dyn agent007_core::dispatcher::Dispatcher>;
 
             let pipeline = SimulationPipeline {
-                provider: mock,
+                provider,
                 memory,
                 dispatcher,
             };
@@ -76,6 +75,12 @@ pub async fn execute(_config: Arc<Config>, args: SimulateArgs) -> Result<()> {
                 println!("\nFailures:");
                 for f in &report.failures {
                     println!("  [{}] {}", f.scenario, f.reason);
+                }
+            }
+            if !report.regressions.is_empty() {
+                println!("\nRegressions (new failures vs previous run):");
+                for r in &report.regressions {
+                    println!("  [REGRESSION] {}", r);
                 }
             }
         }
@@ -106,17 +111,18 @@ mod tests {
 
     #[test]
     fn parse_simulate_run() {
-        let args = SimulateArgs::try_parse_from(["simulate", "run", "wifi-rtt"]).unwrap();
+        let args = SimulateArgs::try_parse_from(["simulate", "run", "skills-smoke"]).unwrap();
         assert!(
-            matches!(args.action, SimulateAction::Run { ref template } if template == "wifi-rtt")
+            matches!(args.action, SimulateAction::Run { ref template } if template == "skills-smoke")
         );
     }
 
     #[test]
     fn parse_simulate_validate() {
-        let args = SimulateArgs::try_parse_from(["simulate", "validate", "wifi-roaming"]).unwrap();
+        let args =
+            SimulateArgs::try_parse_from(["simulate", "validate", "workflow-smoke"]).unwrap();
         assert!(
-            matches!(args.action, SimulateAction::Validate { ref template } if template == "wifi-roaming")
+            matches!(args.action, SimulateAction::Validate { ref template } if template == "workflow-smoke")
         );
     }
 }
