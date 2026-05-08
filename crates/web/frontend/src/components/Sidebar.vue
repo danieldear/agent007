@@ -9,7 +9,8 @@ const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
 
-const theme = ref(localStorage.getItem('theme') || 'dark')
+// Read current theme from DOM (set by app/config) — only restore localStorage if user saved one
+const theme = ref(localStorage.getItem('theme') || document.documentElement.getAttribute('data-theme') || 'dark')
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t)
@@ -21,7 +22,16 @@ function toggleTheme() {
   applyTheme(theme.value === 'dark' ? 'light' : 'dark')
 }
 
-onMounted(() => applyTheme(theme.value))
+onMounted(() => {
+  const saved = localStorage.getItem('theme')
+  if (saved) {
+    // Only force-apply if the user explicitly toggled via this button before
+    applyTheme(saved)
+  } else {
+    // Read whatever is already on the DOM (e.g. amber set by App.vue or config)
+    theme.value = document.documentElement.getAttribute('data-theme') || 'dark'
+  }
+})
 
 onMounted(async () => {
   try {
