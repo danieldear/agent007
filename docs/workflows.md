@@ -157,6 +157,17 @@ dependency-scan ───┘
 
 ---
 
+### `brainstorm` — Lightweight ideation pipeline
+**Use when:** You need fast idea exploration with an approval checkpoint before committing to full architecture work.
+
+Typical flow:
+```
+brainstorm -> approval -> PRD + ideation doc
+```
+
+---
+
+
 ## Eval Gates
 
 Eval Gates score each workflow run against a rolling baseline and make a `pass / warn / block` decision before the run proceeds past the gate.

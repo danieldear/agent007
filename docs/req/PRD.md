@@ -156,7 +156,7 @@ Skills are the fundamental unit of reusable AI capability in agent007. A skill i
 
 #### Skill Discovery & Resolution
 
-- **Built-in skills (15):** Shipped with the agent007 binary; always available with no configuration:
+- **Built-in skills (core set + optional specializations):** Shipped with the agent007 binary; always available with no configuration:
 
   | Trigger | Purpose |
   |---------|---------|

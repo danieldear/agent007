@@ -127,3 +127,42 @@ To connect agent007 to other MCP servers (making their tools available via `agen
 command = "/path/to/my-mcp-server"
 args = ["--flag"]
 ```
+
+---
+
+## LSP configuration
+
+LSP context injection can be configured in `config.toml`:
+
+```toml
+[lsp]
+enabled = true
+inject_for_categories = ["code_completion", "reasoning"]
+
+[lsp.servers.rust_analyzer]
+command = "rust-analyzer"
+args = []
+```
+
+Behavior:
+- `enabled=false` disables LSP context injection entirely.
+- `inject_for_categories` controls which task categories receive LSP context.
+- `servers` is a map keyed by server name.
+
+You can also manage this from the dashboard:
+- `GET /api/lsp/config`
+- `POST /api/lsp/config`
+- `DELETE /api/lsp/config`
+
+When both global and project configs exist, project-level values override global defaults.
+
+---
+
+## ETR and tool-admission policy
+
+For deterministic low-latency extraction/query helpers, use ETR built-ins via:
+- `agent007_etr_list`
+- `agent007_etr_call`
+
+Policy for core vs optional/plugin tools:
+- [docs/etr-tool-admission-policy.md](etr-tool-admission-policy.md)

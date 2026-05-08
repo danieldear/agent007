@@ -75,7 +75,7 @@ agent007 skill list
 # ...
 ```
 
-## Built-in skills (15)
+## Built-in skills (core set + optional specializations)
 
 All built-in skills ship compiled into the binary and are available immediately after `agent007 init`.
 
