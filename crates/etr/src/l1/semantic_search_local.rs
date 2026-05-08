@@ -50,12 +50,19 @@ fn walk(
     for ent in std::fs::read_dir(dir).context(format!("cannot read {}", dir.display()))? {
         let ent = ent?;
         let p = ent.path();
+        let ft = match ent.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
         if p.file_name().and_then(|s| s.to_str()) == Some(".git")
             || p.file_name().and_then(|s| s.to_str()) == Some("target")
         {
             continue;
         }
-        if p.is_dir() {
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             walk(&p, set, q_tokens, limit, out)?;
             continue;
         }
