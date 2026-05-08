@@ -61,6 +61,7 @@ const navItems = [
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
   { id: 'tools',     label: 'Tools',     symbol: '🛠' },
   { id: 'mcp',        label: 'MCP',        symbol: '⬡' },
+  { id: 'lsp',        label: 'LSP',        symbol: '⌘' },
   { id: 'extensions', label: 'Extensions', symbol: '⊞' },
   { id: 'memory',     label: 'Memory',     symbol: '◈' },
   { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },

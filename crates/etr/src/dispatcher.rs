@@ -30,6 +30,37 @@ impl EtrDispatcher {
             .map(|s| s.len())
             .unwrap_or(0);
 
+        if req.tool == "etr.policy_check" {
+            let tool = req.input["tool"].as_str().unwrap_or("");
+            let input = req
+                .input
+                .get("input")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let decision = match self.policy.check(tool, &input) {
+                PolicyResult::Allowed => serde_json::json!({
+                    "allowed": true,
+                    "reason": null
+                }),
+                PolicyResult::Denied(reason) => serde_json::json!({
+                    "allowed": false,
+                    "reason": reason
+                }),
+            };
+            let latency_ms = start.elapsed().as_millis() as u64;
+            self.audit
+                .write(&req.tool, &audit_id, "ok", latency_ms, input_size, 0);
+            return EtrCallResult {
+                tool: req.tool,
+                status: EtrStatus::Ok,
+                output: decision,
+                audit_id,
+                error: None,
+                truncated: None,
+                latency_ms,
+            };
+        }
+
         if let PolicyResult::Denied(reason) = self.policy.check(&req.tool, &req.input) {
             let latency_ms = start.elapsed().as_millis() as u64;
             self.audit
@@ -120,6 +151,44 @@ impl EtrDispatcher {
             }),
             output_schema: serde_json::json!({"tools": "array of ToolManifest"}),
         });
+        tools.push(ToolManifest {
+            name: "etr.policy_check".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Evaluate whether a tool call would be allowed by ETR policy".into(),
+            input_schema: serde_json::json!({
+                "tool":"string (target tool name)",
+                "input":"object (target tool input)"
+            }),
+            output_schema: serde_json::json!({
+                "allowed":"boolean",
+                "reason":"string|null"
+            }),
+        });
         tools
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_check_reports_denied_for_path_traversal() {
+        let base = std::env::temp_dir().join(format!("etr-policy-{}", uuid::Uuid::new_v4()));
+        let ws = base.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(base.join("outside.txt"), "x").unwrap();
+        let d = EtrDispatcher::new(ws);
+        let res = d.call(EtrCallRequest {
+            tool: "etr.policy_check".to_string(),
+            input: serde_json::json!({
+                "tool":"etr.file_stat",
+                "input":{"path":"../outside.txt"}
+            }),
+            compact: false,
+        });
+        assert_eq!(res.status, EtrStatus::Ok);
+        assert_eq!(res.output["allowed"], false);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

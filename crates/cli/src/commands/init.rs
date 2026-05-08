@@ -3384,6 +3384,12 @@ When interacting with `agent007` MCP tools:
 5. **Avoid repeating unchanged workflow state** across polls.
 6. **Prefer concise structured updates** over verbose logs to reduce token/context bloat.
 7. **Prefer ETR tools over shell tooling** for data/query/extract operations when an ETR tool is available (`agent007_etr_list` / `agent007_etr_call`).
+8. **Prefer ETR built-in tools first** for extraction/query/status/log tasks:
+   - `etr.json_query`, `etr.text_extract`, `etr.table_stats`
+   - `etr.workflow_status_summary`, `etr.artifact_read`, `etr.logs_slice`
+   - `etr.semantic_search_local`, `etr.policy_check`
+9. **Use shell scripts only as fallback** when no suitable ETR tool exists.
+10. **Keep agent007 domain-agnostic**: domain-specific analysis logic must live in plugins/optional packs, not core built-ins.
 "#;
 
 #[cfg(test)]

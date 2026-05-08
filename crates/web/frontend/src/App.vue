@@ -8,6 +8,7 @@ import SkillsView from './views/SkillsView.vue'
 import WorkflowsView from './views/WorkflowsView.vue'
 import ToolsView from './views/ToolsView.vue'
 import McpView from './views/McpView.vue'
+import LspView from './views/LspView.vue'
 import ExtensionsView from './views/ExtensionsView.vue'
 import MemoryView from './views/MemoryView.vue'
 import SharingView from './views/SharingView.vue'
@@ -23,6 +24,7 @@ const views = {
   workflows: WorkflowsView,
   tools: ToolsView,
   mcp: McpView,
+  lsp: LspView,
   extensions: ExtensionsView,
   memory: MemoryView,
   sharing: SharingView,
