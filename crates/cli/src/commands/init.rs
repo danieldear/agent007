@@ -3389,6 +3389,7 @@ When interacting with `agent007` MCP tools:
    - `etr.workflow_status_summary`, `etr.artifact_read`, `etr.logs_slice`
    - `etr.semantic_search_local`, `etr.policy_check`
 9. **Use shell scripts only as fallback** when no suitable ETR tool exists.
+10. **Keep agent007 domain-agnostic**: domain-specific analysis logic must live in plugins/optional packs, not core built-ins.
 "#;
 
 #[cfg(test)]

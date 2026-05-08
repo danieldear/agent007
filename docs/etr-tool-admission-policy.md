@@ -12,6 +12,9 @@
 Not every useful idea belongs in Core ETR.  
 This policy keeps the runtime fast, stable, and maintainable.
 
+`agent007` core is **domain-agnostic**.
+Domain-specific logic belongs in optional packs/plugins, not core built-ins.
+
 ---
 
 ## North-star model
@@ -190,3 +193,6 @@ No third-party plugin tool can be promoted to Core ETR without:
 - sustained usage evidence,
 - low incident rate,
 - and explicit maintainer approval.
+
+Domain-specific tool families must remain plugin/optional-pack scoped unless generalized
+into domain-agnostic primitives.
