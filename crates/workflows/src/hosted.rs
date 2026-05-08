@@ -27,6 +27,45 @@ use crate::runner::{
 use crate::state::{PendingApproval, WorkflowRunState, WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{StepDef, StepType, WorkflowDef};
 
+/// Token threshold (in estimated tokens) above which a step output is stored as a
+/// lazy artifact rather than injected verbatim into downstream prompts.
+const LAZY_TOKEN_THRESHOLD: usize = 4000;
+/// Number of characters to include in the inline preview stub.
+const LAZY_PREVIEW_CHARS: usize = 200;
+/// Prefix used to identify lazy-injection stubs in `state.outputs`.
+pub const LAZY_STUB_PREFIX: &str = "[LAZY:output:";
+
+/// Build the compact stub that replaces a large output in `state.outputs`.
+fn make_lazy_stub(output_key: &str, session_id: &str, content: &str) -> String {
+    let token_count = content.len() / 4;
+    let preview: String = content.chars().take(LAZY_PREVIEW_CHARS).collect();
+    format!(
+        "{prefix}{key}] {tokens} tokens stored. \
+         Call agent007_workflow_get_output(session=\"{session}\", key=\"{key}\") to retrieve. \
+         Preview: {preview}...",
+        prefix = LAZY_STUB_PREFIX,
+        key = output_key,
+        tokens = token_count,
+        session = session_id,
+        preview = preview,
+    )
+}
+
+/// Artifact filename for a lazy-stored step output.
+/// Key is sanitized to prevent path traversal: only alphanumerics, hyphens, and underscores kept.
+fn lazy_artifact_filename(key: &str) -> String {
+    let sanitized: String = key
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    format!("outputs/{}.txt", sanitized)
+}
+
+/// Returns true if `value` is a lazy-injection stub.
+pub fn is_lazy_stub(value: &str) -> bool {
+    value.starts_with(LAZY_STUB_PREFIX)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostedWorkflowProgressStatus {
@@ -796,7 +835,26 @@ impl HostedWorkflowEngine {
 
         let mut outputs = state.outputs.clone();
         if let Some(output_key) = &step.output {
-            outputs.insert(output_key.clone(), final_content.clone());
+            // P2: Lazy injection — store large outputs as artifacts, inject a compact stub.
+            // This prevents downstream prompts from ballooning due to large step outputs.
+            let stored_value = if estimate_tokens(&final_content) as usize > LAZY_TOKEN_THRESHOLD {
+                if let (Some(store), Some(run_id)) = (&self.run_store, &self.run_id) {
+                    let artifact_name = lazy_artifact_filename(output_key);
+                    if store
+                        .write_text_artifact(run_id, &artifact_name, &final_content)
+                        .is_ok()
+                    {
+                        make_lazy_stub(output_key, run_id, &final_content)
+                    } else {
+                        final_content.clone()
+                    }
+                } else {
+                    final_content.clone()
+                }
+            } else {
+                final_content.clone()
+            };
+            outputs.insert(output_key.clone(), stored_value);
         }
         state.mark_step_completed(step, &final_content);
         state.sync_outputs(outputs.clone());
@@ -1678,5 +1736,68 @@ mod tests {
             .submit_step_output(&def, &mut state, "research", "final answer")
             .unwrap();
         assert_eq!(done.status, HostedWorkflowProgressStatus::Succeeded);
+    }
+
+    // ── P2 lazy injection unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn lazy_artifact_filename_sanitizes_path_traversal() {
+        let filename = lazy_artifact_filename("../../etc/passwd");
+        assert!(!filename.contains(".."), "path traversal must not pass through");
+        assert!(!filename.contains("/etc/"), "absolute path must not pass through");
+        assert!(filename.starts_with("outputs/"), "must be in outputs/ dir");
+        assert!(filename.ends_with(".txt"), "must have .txt extension");
+    }
+
+    #[test]
+    fn lazy_artifact_filename_preserves_alphanumeric() {
+        let filename = lazy_artifact_filename("my-step_key123");
+        assert_eq!(filename, "outputs/my-step_key123.txt");
+    }
+
+    #[test]
+    fn make_lazy_stub_contains_key_and_session() {
+        let stub = make_lazy_stub("notes", "session-abc", "hello world content");
+        assert!(stub.starts_with(LAZY_STUB_PREFIX));
+        assert!(stub.contains("notes"));
+        assert!(stub.contains("session-abc"));
+        assert!(stub.contains("hello world"));
+    }
+
+    #[test]
+    fn make_lazy_stub_preview_truncated_at_200_chars() {
+        let long_content = "x".repeat(500);
+        let stub = make_lazy_stub("k", "s", &long_content);
+        let preview_start = stub.find("Preview: ").unwrap() + "Preview: ".len();
+        let preview = &stub[preview_start..];
+        assert!(
+            preview.chars().count() <= LAZY_PREVIEW_CHARS + 3,
+            "preview should be approximately LAZY_PREVIEW_CHARS"
+        );
+    }
+
+    #[test]
+    fn is_lazy_stub_detects_prefix() {
+        assert!(is_lazy_stub("[LAZY:output:my-step] 500 tokens stored. ..."));
+        assert!(!is_lazy_stub("normal output text"));
+        assert!(!is_lazy_stub(""));
+    }
+
+    #[test]
+    fn small_output_stored_verbatim_no_stub() {
+        let engine = hosted_engine();
+        let def = single_step_def();
+        let mut state = WorkflowRunState::new(&def, "test task");
+        let _ = engine.dispatch(&def, &mut state).unwrap();
+
+        // Output well below threshold — should be stored verbatim
+        let short_output = "short answer";
+        let status = engine
+            .submit_step_output(&def, &mut state, "research", short_output)
+            .unwrap();
+        assert_eq!(status.status, HostedWorkflowProgressStatus::Succeeded);
+        let stored: &str = state.outputs.get("notes").map(String::as_str).unwrap_or("");
+        assert_eq!(stored, short_output, "small output must be stored verbatim");
+        assert!(!is_lazy_stub(stored), "small output must not be a lazy stub");
     }
 }

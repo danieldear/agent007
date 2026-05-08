@@ -14,7 +14,8 @@ pub mod types;
 pub use error::WorkflowError;
 pub use eval_gates::{EvalGatePolicy, WorkflowEvalGateDecision, WorkflowEvalGateDecisionKind};
 pub use hosted::{
-    HostedWorkflowEngine, HostedWorkflowProgress, HostedWorkflowProgressStatus, HostedWorkflowStep,
+    is_lazy_stub, HostedWorkflowEngine, HostedWorkflowProgress, HostedWorkflowProgressStatus,
+    HostedWorkflowStep,
 };
 pub use loader::WorkflowLoader;
 pub use recommendations::RoutingRecommendation;

@@ -4073,9 +4073,30 @@ fn workflow_hosted_status(session: &str) -> Result<String> {
 }
 
 fn workflow_hosted_get_output(session: &str, key: &str) -> Result<String> {
-    let (_, _, _, state) = load_hosted_workflow_session(session)?;
+    let (store, _, _, state) = load_hosted_workflow_session(session)?;
     match state.outputs.get(key) {
-        Some(value) => Ok(value.clone()),
+        Some(value) => {
+            // P2: If the value is a lazy-injection stub, read the artifact instead.
+            if agent007_workflows::is_lazy_stub(value) {
+                // Use the same key sanitization as write side to find the artifact.
+                let sanitized_key: String = key
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                    .collect();
+                let artifact_name = format!("outputs/{}.txt", sanitized_key);
+                match store.read_text_artifact(session, &artifact_name) {
+                    Ok(full) => return Ok(full),
+                    Err(_) => {
+                        // Artifact missing — return stub with a helpful hint
+                        return Ok(format!(
+                            "{}\n\n[NOTE: lazy artifact file not found for key '{}']",
+                            value, key
+                        ));
+                    }
+                }
+            }
+            Ok(value.clone())
+        }
         None => {
             let available: Vec<_> = state.outputs.keys().cloned().collect();
             Err(anyhow::anyhow!(
