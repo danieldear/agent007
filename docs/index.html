@@ -1332,35 +1332,35 @@ footer {
       <div>
         <div class="etr-tool-grid reveal">
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.grep</div>
+            <div class="etr-tool-name">grep</div>
             <div class="etr-tool-desc">Ripgrep-powered pattern search across any file tree</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.glob</div>
+            <div class="etr-tool-name">glob</div>
             <div class="etr-tool-desc">Fast file discovery with glob patterns</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.file_stat</div>
+            <div class="etr-tool-name">file_stat</div>
             <div class="etr-tool-desc">File metadata: size, mtime, type, permissions</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.json_extract</div>
+            <div class="etr-tool-name">json_extract</div>
             <div class="etr-tool-desc">JSONPath extraction from large payloads</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.csv_slice</div>
+            <div class="etr-tool-name">csv_slice</div>
             <div class="etr-tool-desc">Column filter and row slicing for CSV data</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.math</div>
+            <div class="etr-tool-name">math</div>
             <div class="etr-tool-desc">Arithmetic, statistics, and numeric operations</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.diff</div>
+            <div class="etr-tool-name">diff</div>
             <div class="etr-tool-desc">Unified diff between two text blobs</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">etr.list</div>
+            <div class="etr-tool-name">list</div>
             <div class="etr-tool-desc">Discover all ETR tools and their schemas</div>
           </div>
         </div>
@@ -1380,7 +1380,6 @@ footer {
     <div class="token-tiers reveal">
       <div class="token-tier">
         <div class="token-tier-label">Layer 1 — API</div>
-        <span class="token-tier-badge p0">P0</span>
         <div class="token-tier-title">Prompt Caching</div>
         <div class="token-tier-desc">Injects Anthropic <code>cache_control</code> markers on repeated context blocks — system prompts, skill templates, large memory payloads. The API caches these blocks server-side so subsequent calls cost a fraction.</div>
         <div class="token-savings-num">~40%</div>
@@ -1388,7 +1387,6 @@ footer {
       </div>
       <div class="token-tier">
         <div class="token-tier-label">Layer 2 — Structural</div>
-        <span class="token-tier-badge p1">P1</span>
         <div class="token-tier-title">Structural Minification</div>
         <div class="token-tier-desc">Pure Rust pre-processing: collapses blank lines, strips trailing whitespace, normalizes markdown headers. Applied before every LLM call. Lossless — no semantic changes. Zero quality impact.</div>
         <div class="token-savings-num">15–25%</div>
@@ -1396,7 +1394,6 @@ footer {
       </div>
       <div class="token-tier">
         <div class="token-tier-label">Layer 3 — Lazy Injection</div>
-        <span class="token-tier-badge p2">P2</span>
         <div class="token-tier-title">Lazy Injection</div>
         <div class="token-tier-desc">Large intermediate outputs (step results, tool responses) are stored as artifacts and replaced with compact stubs. The next step receives the stub and retrieves the full artifact only if needed.</div>
         <div class="token-savings-num">50–70%</div>
@@ -1409,9 +1406,9 @@ footer {
       <pre><span class="cm"># All three tiers activate automatically when you run any skill or workflow</span>
 <span class="kw">agent007</span> run <span class="str">"analyze the codebase architecture"</span>
 
-<span class="cm"># P0: cache_control injected on system prompt + memory context</span>
-<span class="cm"># P1: markdown normalized, blank lines collapsed before LLM call</span>
-<span class="cm"># P2: large tool outputs stored as artifacts, stubs injected in context</span>
+<span class="cm"># Prompt caching applied to system prompt + memory context</span>
+<span class="cm"># Markdown normalized, blank lines collapsed before each LLM call</span>
+<span class="cm"># Large tool outputs stored as artifacts, compact stubs injected</span>
 
 <span class="cm"># Dashboard shows per-run token totals so you can measure the savings</span>
 <span class="cm"># http://localhost:8007 → Run History → click any run</span></pre>
@@ -1669,19 +1666,19 @@ footer {
       <div class="arch-divider"></div>
       <div class="arch-label">ETR — Embedded Tool Runtime (New)</div>
       <div class="arch-row">
-        <div class="arch-box hi-green">etr.grep</div>
-        <div class="arch-box hi-green">etr.glob</div>
-        <div class="arch-box hi-green">etr.json_extract</div>
-        <div class="arch-box hi-green">etr.csv_slice</div>
-        <div class="arch-box hi-green">etr.math · etr.diff</div>
+        <div class="arch-box hi-green">grep</div>
+        <div class="arch-box hi-green">glob</div>
+        <div class="arch-box hi-green">json_extract</div>
+        <div class="arch-box hi-green">csv_slice</div>
+        <div class="arch-box hi-green">math · diff</div>
       </div>
 
       <div class="arch-divider"></div>
       <div class="arch-label">Token Optimization (New)</div>
       <div class="arch-row">
-        <div class="arch-box hi-blue">P0 Prompt Cache</div>
-        <div class="arch-box hi-blue">P1 Minification</div>
-        <div class="arch-box hi-blue">P2 Lazy Inject</div>
+        <div class="arch-box hi-blue">Prompt Cache</div>
+        <div class="arch-box hi-blue">Minification</div>
+        <div class="arch-box hi-blue">Lazy Inject</div>
         <div class="arch-box">Zones / ACL</div>
         <div class="arch-box">Bundles · Extensions</div>
       </div>
