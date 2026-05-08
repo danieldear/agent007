@@ -3383,6 +3383,7 @@ When interacting with `agent007` MCP tools:
 4. **Only show full prompts/outputs when requested** by the user.
 5. **Avoid repeating unchanged workflow state** across polls.
 6. **Prefer concise structured updates** over verbose logs to reduce token/context bloat.
+7. **Prefer ETR tools over shell tooling** for data/query/extract operations when an ETR tool is available (`agent007_etr_list` / `agent007_etr_call`).
 "#;
 
 #[cfg(test)]
