@@ -8,6 +8,7 @@ pub mod json_extract;
 pub mod json_query;
 pub mod logs_slice;
 pub mod math;
+pub mod semantic_search_local;
 pub mod table_stats;
 pub mod text_extract;
 pub mod workflow_status_summary;
@@ -26,6 +27,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.glob" => glob::run(input),
         "etr.file_stat" => file_stat::run(input),
         "etr.math" => math::run(input),
+        "etr.semantic_search_local" => semantic_search_local::run(input),
         "etr.table_stats" => table_stats::run(input),
         "etr.text_extract" => text_extract::run(input),
         "etr.workflow_status_summary" => workflow_status_summary::run(input),
@@ -128,6 +130,18 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "expression": "string"
             }),
             output_schema: serde_json::json!({"result": "number or string"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.semantic_search_local".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Token-overlap semantic-like search over local text files".into(),
+            input_schema: serde_json::json!({
+                "query":"string",
+                "root":"string (optional, default '.')",
+                "pattern":"string (optional glob, default **/*.{md,rs,toml,txt,json,yaml,yml})",
+                "limit":"integer (optional, default 10)"
+            }),
+            output_schema: serde_json::json!({"count":"integer","results":"array"}),
         },
         crate::types::ToolManifest {
             name: "etr.table_stats".into(),
