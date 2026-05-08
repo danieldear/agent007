@@ -6,6 +6,7 @@ pub mod grep;
 pub mod artifact_read;
 pub mod json_extract;
 pub mod json_query;
+pub mod json_query_v2;
 pub mod logs_slice;
 pub mod math;
 pub mod semantic_search_local;
@@ -22,6 +23,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.artifact_read" => artifact_read::run(input),
         "etr.json_extract" => json_extract::run(input),
         "etr.json_query" => json_query::run(input),
+        "etr.json_query_v2" => json_query_v2::run(input),
         "etr.logs_slice" => logs_slice::run(input),
         "etr.csv_slice" => csv_slice::run(input),
         "etr.glob" => glob::run(input),
@@ -79,6 +81,20 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "query": "string (e.g. .results[*].score, .items[kind=error].id)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.json_query_v2".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Enhanced JSON query with projection, sort, and limit".into(),
+            input_schema: serde_json::json!({
+                "path": "string (JSON file path)",
+                "query": "string (e.g. .items[*], .items[kind=error])",
+                "project": "array of string (optional field projection)",
+                "sort_by": "string (optional field name)",
+                "sort_order": "string (optional: asc|desc, default asc)",
+                "limit": "integer (optional)"
+            }),
+            output_schema: serde_json::json!({"matches":"array","count":"integer"}),
         },
         crate::types::ToolManifest {
             name: "etr.logs_slice".into(),
