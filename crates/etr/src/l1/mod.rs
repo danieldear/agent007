@@ -3,6 +3,7 @@ pub mod diff;
 pub mod file_stat;
 pub mod glob;
 pub mod grep;
+pub mod artifact_read;
 pub mod json_extract;
 pub mod json_query;
 pub mod math;
@@ -16,6 +17,7 @@ use serde_json::Value;
 pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
     match tool {
         "etr.grep" => grep::run(input),
+        "etr.artifact_read" => artifact_read::run(input),
         "etr.json_extract" => json_extract::run(input),
         "etr.json_query" => json_query::run(input),
         "etr.csv_slice" => csv_slice::run(input),
@@ -42,6 +44,17 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "context_lines": "integer (optional, default 0)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.artifact_read".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Read artifact files as text or JSON with size guardrails".into(),
+            input_schema: serde_json::json!({
+                "path": "string",
+                "mode": "string (optional: text|json, default text)",
+                "max_bytes": "integer (optional, default 100000)"
+            }),
+            output_schema: serde_json::json!({"path":"string","mode":"string","size_bytes":"integer","truncated":"boolean","text or value":"any"}),
         },
         crate::types::ToolManifest {
             name: "etr.json_extract".into(),
