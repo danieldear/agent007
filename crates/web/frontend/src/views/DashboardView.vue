@@ -1,6 +1,10 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useApi } from '../composables/useApi.js'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+
+marked.setOptions({ gfm: true, breaks: true })
 
 const props = defineProps({ events: Array, connected: Boolean, stats: Object })
 const { api } = useApi()
@@ -219,6 +223,20 @@ function isSlowStep(step) {
 }
 
 const expandedSteps = ref(new Set())
+const rawStepView = ref(new Set())
+
+function renderMarkdown(raw) {
+  if (!raw) return ''
+  const dirty = marked.parse(raw)
+  return DOMPurify.sanitize(dirty, { ADD_TAGS: ['pre', 'code'], ADD_ATTR: ['class'] })
+}
+
+function toggleRawStep(stepId) {
+  const next = new Set(rawStepView.value)
+  if (next.has(stepId)) next.delete(stepId)
+  else next.add(stepId)
+  rawStepView.value = next
+}
 
 function toggleStepExpand(stepId) {
   const next = new Set(expandedSteps.value)
@@ -1080,16 +1098,31 @@ async function submitTask() {
                             <span class="text-[10px] font-mono text-base-content/30 italic">no heartbeat yet</span>
                           </template>
                         </div>
-                        <!-- Step output (expandable) -->
+                        <!-- Step output (expandable — rendered as markdown when expanded) -->
                         <div v-if="step.output_preview" class="mt-2">
-                          <div
-                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2 transition-all"
-                            :class="expandedSteps.has(step.id) ? 'max-h-[500px] overflow-auto' : 'max-h-20 overflow-hidden'"
-                          >{{ expandedSteps.has(step.id) ? stepFullOutput(step) : step.output_preview }}</div>
-                          <button
-                            class="mt-1 text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
-                            @click="toggleStepExpand(step.id)"
-                          >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                          <!-- Collapsed: plain-text preview -->
+                          <div v-if="!expandedSteps.has(step.id)"
+                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2 max-h-20 overflow-hidden"
+                          >{{ step.output_preview }}</div>
+                          <!-- Expanded raw view -->
+                          <div v-else-if="rawStepView.has(step.id)"
+                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto leading-relaxed"
+                          >{{ stepFullOutput(step) }}</div>
+                          <!-- Expanded markdown-rendered view -->
+                          <div v-else
+                            class="md-step-output text-xs bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto"
+                            v-html="renderMarkdown(stepFullOutput(step))"
+                          />
+                          <div class="flex items-center gap-3 mt-1">
+                            <button
+                              class="text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
+                              @click="toggleStepExpand(step.id)"
+                            >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                            <button v-if="expandedSteps.has(step.id)"
+                              class="text-[10px] font-mono text-base-content/30 hover:text-base-content/60 transition-colors"
+                              @click="toggleRawStep(step.id)"
+                            >{{ rawStepView.has(step.id) ? '◈ rendered' : '⌂ raw' }}</button>
+                          </div>
                         </div>
                         <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
                       </div>
@@ -1371,3 +1404,76 @@ async function submitTask() {
 
   </div>
 </template>
+
+<style scoped>
+/* ── Markdown step output — :deep() targets v-html injected content ── */
+.md-step-output :deep(h1),
+.md-step-output :deep(h2),
+.md-step-output :deep(h3),
+.md-step-output :deep(h4) {
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  margin: 1.1em 0 0.3em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(h1) { font-size: 1.1rem; color: oklch(var(--p)); }
+.md-step-output :deep(h2) { font-size: 0.95rem; color: oklch(var(--p) / 0.85); }
+.md-step-output :deep(h3) { font-size: 0.85rem; color: oklch(var(--s)); border-bottom-color: oklch(var(--b3) / 0.5); }
+.md-step-output :deep(h4) { font-size: 0.8rem; color: oklch(var(--bc) / 0.7); border-bottom: none; font-style: italic; }
+
+.md-step-output :deep(p) {
+  font-size: 0.8rem; line-height: 1.7;
+  color: oklch(var(--bc) / 0.8); margin: 0.4em 0;
+}
+.md-step-output :deep(hr) { border: none; border-top: 1px solid oklch(var(--b3)); margin: 1em 0; }
+
+.md-step-output :deep(code) {
+  font-family: var(--font-mono, monospace); font-size: 0.75rem;
+  background: oklch(var(--b3) / 0.8); color: oklch(var(--s));
+  padding: 0.1em 0.35em; border-radius: 3px; border: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(pre) {
+  border-radius: 6px; border: 1px solid oklch(var(--b3));
+  overflow: hidden; margin: 0.7em 0; background: oklch(var(--b3) / 0.35);
+}
+.md-step-output :deep(pre code) {
+  display: block; background: none; border: none;
+  font-size: 0.75rem; line-height: 1.55; color: oklch(var(--bc) / 0.85);
+  padding: 10px 14px; overflow-x: auto;
+}
+
+.md-step-output :deep(ul) { margin: 0.35em 0 0.35em 1.25em; list-style: disc; }
+.md-step-output :deep(ol) { margin: 0.35em 0 0.35em 1.25em; list-style: decimal; }
+.md-step-output :deep(li) { font-size: 0.8rem; line-height: 1.6; color: oklch(var(--bc) / 0.78); }
+
+.md-step-output :deep(blockquote) {
+  border-left: 2px solid oklch(var(--p) / 0.4);
+  margin: 0.6em 0; padding: 3px 12px;
+  color: oklch(var(--bc) / 0.55); font-style: italic;
+}
+
+.md-step-output :deep(a)       { color: oklch(var(--p)); text-decoration: underline; text-underline-offset: 2px; }
+.md-step-output :deep(a:hover) { color: oklch(var(--s)); }
+
+.md-step-output :deep(table) {
+  width: 100%; border-collapse: collapse; font-size: 0.75rem;
+  font-family: var(--font-mono, monospace); margin: 0.7em 0;
+  border-radius: 5px; overflow: hidden; border: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(th) {
+  background: oklch(var(--b3) / 0.7); color: oklch(var(--bc) / 0.55);
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 5px 10px; text-align: left; border-bottom: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(td) {
+  padding: 5px 10px; border-bottom: 1px solid oklch(var(--b3) / 0.5);
+  color: oklch(var(--bc) / 0.78);
+}
+.md-step-output :deep(tr:last-child td) { border-bottom: none; }
+.md-step-output :deep(tr:hover td)      { background: oklch(var(--b3) / 0.25); }
+
+.md-step-output :deep(strong) { color: oklch(var(--bc)); font-weight: 700; }
+.md-step-output :deep(em)     { color: oklch(var(--bc) / 0.75); font-style: italic; }
+.md-step-output :deep(del)    { color: oklch(var(--bc) / 0.35); text-decoration: line-through; }
+</style>

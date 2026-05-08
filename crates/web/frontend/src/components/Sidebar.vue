@@ -14,12 +14,12 @@ const DARK_THEME = 'night'
 const LIGHT_THEME = 'day'
 
 const THEMES = [
-  { id: 'night',   label: '🌙 Night',   dark: true  },
-  { id: 'forest',  label: '🌿 Forest',  dark: true  },
-  { id: 'ocean',   label: '🌊 Ocean',   dark: true  },
-  { id: 'aurora',  label: '✨ Aurora',  dark: true  },
-  { id: 'day',        label: '☀️ Day',       dark: false },
-  { id: 'corporate',  label: '💼 Corporate', dark: false },
+  { id: 'night',     label: '🌙 Night',     dark: true  },
+  { id: 'forest',    label: '🌿 Forest',    dark: true  },
+  { id: 'ocean',     label: '🌊 Ocean',     dark: true  },
+  { id: 'aurora',    label: '✨ Aurora',    dark: true  },
+  { id: 'day',       label: '☀️ Day',       dark: false },
+  { id: 'corporate', label: '💼 Corporate', dark: false },
 ]
 
 function normalizeSaved(t) {
@@ -30,18 +30,11 @@ function normalizeSaved(t) {
 }
 
 const theme = ref(normalizeSaved(localStorage.getItem('theme')) || document.documentElement.getAttribute('data-theme') || DARK_THEME)
-const showThemePicker = ref(false)
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t)
   localStorage.setItem('theme', t)
   theme.value = t
-  showThemePicker.value = false
-}
-
-function toggleTheme() {
-  const current = THEMES.find(t => t.id === theme.value)
-  applyTheme(current?.dark ? LIGHT_THEME : DARK_THEME)
 }
 
 onMounted(() => {
@@ -111,40 +104,38 @@ const navItems = [
       </button>
     </nav>
 
-    <!-- Connection status + theme picker -->
-    <div class="px-4 py-3 border-t border-base-300/80">
+    <!-- Appearance: always-visible theme swatches -->
+    <div class="px-4 pt-2 pb-1 border-t border-base-300/80">
+      <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/25 mb-1.5 flex items-center gap-1.5">
+        <span>🎨</span><span>Appearance</span>
+      </div>
+      <div class="grid grid-cols-3 gap-1">
+        <button
+          v-for="t in THEMES"
+          :key="t.id"
+          class="rounded px-1 py-1.5 text-[10px] font-mono leading-tight flex items-center gap-1 transition-all duration-150 truncate"
+          :class="theme === t.id
+            ? 'bg-primary/15 text-primary ring-1 ring-primary/50 font-bold'
+            : 'bg-base-300/30 text-base-content/45 hover:bg-base-300/70 hover:text-base-content/80'"
+          :title="t.label"
+          @click="applyTheme(t.id)"
+        >
+          <span class="shrink-0">{{ t.label.split(' ')[0] }}</span>
+          <span class="truncate">{{ t.label.split(' ').slice(1).join(' ') }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Connection status -->
+    <div class="px-4 py-2.5 border-t border-base-300/40">
       <div class="flex items-center gap-2">
         <span
           class="w-1.5 h-1.5 rounded-full shrink-0"
           :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"
         />
-        <span class="text-[11px] font-mono flex-1" :class="connected ? 'text-success/70' : 'text-error/70'">
+        <span class="text-[11px] font-mono" :class="connected ? 'text-success/70' : 'text-error/70'">
           {{ connected ? 'ws:live' : 'ws:off' }}
         </span>
-
-        <!-- Theme picker dropdown -->
-        <div class="relative">
-          <button
-            class="btn btn-ghost btn-xs text-base-content/40 hover:text-base-content p-0 w-6 h-6 min-h-0"
-            :title="`Theme: ${theme}`"
-            @click="showThemePicker = !showThemePicker"
-          >🎨</button>
-          <div
-            v-if="showThemePicker"
-            class="absolute bottom-8 right-0 z-50 bg-base-200 border border-base-300 rounded-lg shadow-xl py-1 min-w-[130px]"
-          >
-            <button
-              v-for="t in THEMES"
-              :key="t.id"
-              class="w-full text-left px-3 py-1.5 text-[11px] font-mono hover:bg-base-300 transition-colors flex items-center gap-2"
-              :class="theme === t.id ? 'text-primary font-bold' : 'text-base-content/70'"
-              @click="applyTheme(t.id)"
-            >
-              <span class="text-[10px]">{{ theme === t.id ? '●' : '○' }}</span>
-              {{ t.label }}
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   </aside>
