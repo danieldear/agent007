@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::commands::run::{
-    agent007_global_home, build_stack, runtime_mode_label, selected_runtime_model,
+    agent007_global_home, build_stack_for_web, runtime_mode_label, selected_runtime_model,
     selected_runtime_provider, standalone_mode_available,
 };
 use crate::config::Config;
@@ -16,7 +16,7 @@ pub const DEFAULT_PORT: u16 = 8007;
 pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
     tracing::info!("building agent007 stack for web server…");
 
-    let stack = build_stack(&config).await?;
+    let stack = build_stack_for_web(&config).await?;
 
     // Spawn feedback collector in background (same as the run command).
     let collector = stack.feedback_collector.clone();
@@ -54,10 +54,14 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         provider_label,
     );
 
+    tracing::info!("starting axum serve loop");
     let result = web
         .run(actual_port)
         .await
         .map_err(|e| anyhow::anyhow!("web server error: {e}"));
+    if let Err(ref e) = result {
+        tracing::error!("web server stopped with error: {e}");
+    }
 
     // Clean up registry entry when server stops
     PortRegistry::unregister(&cwd);

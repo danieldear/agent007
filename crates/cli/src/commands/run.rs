@@ -401,6 +401,17 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
 }
 
 pub async fn build_stack(config: &Config) -> Result<Stack> {
+    build_stack_inner(config, false).await
+}
+
+/// Build the stack without running the RAG warmup index.  Used by `serve-web`
+/// where the warmup is not required at startup and can exhaust memory on large
+/// skill databases.
+pub async fn build_stack_for_web(config: &Config) -> Result<Stack> {
+    build_stack_inner(config, true).await
+}
+
+async fn build_stack_inner(config: &Config, skip_rag_warmup: bool) -> Result<Stack> {
     let cancel = CancellationToken::new();
     let tracker = TaskTracker::new();
 
@@ -503,6 +514,7 @@ pub async fn build_stack(config: &Config) -> Result<Stack> {
         &memory_store,
         &skills_dir,
         is_dry_run,
+        skip_rag_warmup,
     )
     .await?;
     let skill_executor = skill_executor
@@ -607,6 +619,7 @@ async fn build_skill_executor(
     memory_store: &Arc<MemoryStore>,
     skills_dir: &std::path::Path,
     is_dry_run: bool,
+    skip_rag_warmup: bool,
 ) -> Result<(SkillExecutor, usize)> {
     let rag_config = config
         .memory
@@ -666,7 +679,7 @@ async fn build_skill_executor(
 
     let rag_enabled = rag_config.map(|rag| rag.enabled).unwrap_or(true);
     let mut indexed_docs = 0usize;
-    if !is_dry_run && rag_enabled {
+    if !is_dry_run && rag_enabled && !skip_rag_warmup {
         let indexer = Indexer::new(Arc::clone(&embedder), Arc::clone(&db), 900);
         match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
             Ok(count) => {
