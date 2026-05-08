@@ -4,6 +4,7 @@ pub mod file_stat;
 pub mod glob;
 pub mod grep;
 pub mod json_extract;
+pub mod json_query;
 pub mod math;
 
 use anyhow::Result;
@@ -13,6 +14,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
     match tool {
         "etr.grep" => grep::run(input),
         "etr.json_extract" => json_extract::run(input),
+        "etr.json_query" => json_query::run(input),
         "etr.csv_slice" => csv_slice::run(input),
         "etr.glob" => glob::run(input),
         "etr.file_stat" => file_stat::run(input),
@@ -44,6 +46,16 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "jq_path": "string (dot-separated path, e.g. .field.subfield)"
             }),
             output_schema: serde_json::json!({"value": "any"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.json_query".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Query JSON with dot-path + selectors ([index], [*], [field=value])".into(),
+            input_schema: serde_json::json!({
+                "path": "string (JSON file path)",
+                "query": "string (e.g. .results[*].score, .items[kind=error].id)"
+            }),
+            output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
         },
         crate::types::ToolManifest {
             name: "etr.csv_slice".into(),
