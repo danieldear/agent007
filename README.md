@@ -4,7 +4,7 @@
 
 ## What it does
 
-agent007 runs as an MCP server that gives your AI editor a 44-tool orchestration layer:
+agent007 runs as an MCP server that gives your AI editor a broad orchestration tool layer:
 
 - **Skills** — reusable prompt templates triggered by `/slash-commands`
 - **Workflows** — multi-step pipelines (TDD, code review, feature delivery, SPARC)
@@ -15,6 +15,8 @@ agent007 runs as an MCP server that gives your AI editor a 44-tool orchestration
 - **Learning** — passive feedback recording → future PromptOptimizer
 - **Git agent** — AI-powered branch, commit, PR, and impact analysis
 - **Web dashboard** — live run/task/memory inspector at `http://localhost:8007`, with standalone task execution when a local provider such as Ollama is configured
+- **LSP context controls** — configure LSP servers + category injection from config and dashboard (`/api/lsp/config`)
+- **ETR built-ins** — low-latency deterministic extraction/query/metrics tools to reduce shell+parsing overhead
 
 ---
 
@@ -195,7 +197,7 @@ agent007 replay <run-id>       Replay a past run
 
 ---
 
-## MCP tools (45+ total)
+## MCP tools
 
 These are available to your AI editor once `agent007 serve` is running.
 
@@ -280,6 +282,21 @@ These are available to your AI editor once `agent007 serve` is running.
 |------|-------------|
 | `agent007_zone_check` | Check if a path operation is allowed by zone rules |
 
+### ETR (Embedded Tool Runtime)
+| Tool | Description |
+|------|-------------|
+| `agent007_etr_list` | List available ETR tools and schemas |
+| `agent007_etr_call` | Call an ETR tool with structured JSON input |
+
+Built-in ETR tools include:
+- `etr.json_extract`, `etr.json_query`, `etr.json_query_v2`
+- `etr.text_extract`, `etr.table_select`, `etr.table_stats`, `etr.group_count`
+- `etr.time_window_filter`, `etr.join_on_key`, `etr.metrics_summary`, `etr.delta_compare`
+- `etr.workflow_status_summary`, `etr.workflow_outputs_index`, `etr.workflow_step_health`
+- `etr.artifact_read`, `etr.logs_slice`, `etr.logs_correlate`
+- `etr.glob`, `etr.file_stat`, `etr.grep`, `etr.diff`, `etr.csv_slice`, `etr.math`
+- `etr.semantic_search_local`, `etr.policy_check`
+
 ---
 
 ## Skills system
@@ -299,7 +316,7 @@ You are a helpful assistant. Given: {{args}}
 Do the following...
 ```
 
-### Built-in skills (15)
+### Built-in skills (core set + optional specializations)
 
 | Trigger | Description |
 |---------|-------------|
@@ -318,6 +335,8 @@ Do the following...
 | `/project-plan` | Break features into tasks with estimates and dependencies |
 | `/project-prd` | Product requirements document with user stories and constraints |
 | `/project-release` | Version strategy, release notes, and rollback planning |
+| `/frontend-designer` | High-quality frontend UI/component design and implementation |
+| `/brainstorm` | Free-form ideation before PRD/architecture workflows |
 
 ### Install a skill
 
@@ -344,6 +363,7 @@ Workflows are YAML pipelines in `~/.agent007/workflows/`. Steps without dependen
 | `feature` | 17 | Full delivery: spec → arch → implement → review → test → release |
 | `ideation` | 7 | Research → PRD → architecture → project plan |
 | `security-audit` | 5 | OWASP + secrets + threat model + dependencies in parallel |
+| `brainstorm` | lightweight | Ideation → approval → PRD/doc output |
 
 ---
 
@@ -406,6 +426,10 @@ This is additive convenience; direct tools (`agent007_workflow_run`, `agent007_s
 ## Configuration
 
 Full config lives at `~/.agent007/config.toml`. See [docs/configuration.md](docs/configuration.md) for the complete schema.
+
+LSP can be configured via:
+- file config: `[lsp]` block in `config.toml`
+- dashboard API: `GET/POST/DELETE /api/lsp/config`
 
 ---
 

@@ -8,7 +8,7 @@
 
 ## 1. Problem Statement
 
-Agent007 workflows are slow and token-expensive because every step that touches data or runs computation requires a full LLM round-trip (3–15 s API latency). A 40-step workflow costs 20–30 min of pure wait time. The `ftm-analysis` workflow (12 steps, 7-step serial critical path) burns ~120 K tokens — 67% of which are deterministic work that an LLM has no business doing.
+Agent007 workflows are slow and token-expensive because every step that touches data or runs computation requires a full LLM round-trip (3–15 s API latency). A 40-step workflow costs 20–30 min of pure wait time. The `domain-analysis` workflow (12 steps, 7-step serial critical path) burns ~120 K tokens — 67% of which are deterministic work that an LLM has no business doing.
 
 Three distinct problems compound each other:
 
@@ -72,8 +72,8 @@ Three distinct problems compound each other:
 - L3 gated shell is off by default; enabled via `allow_l3_shell = true` in config; always-compacted.
 
 **Token savings target:**
-- FTM analysis session: 120 K → 40 K tokens (67% reduction on deterministic work).
-- Measured by comparing token counts for `ftm-analysis` workflow runs with/without ETR.
+- Domain analysis session: 120 K → 40 K tokens (67% reduction on deterministic work).
+- Measured by comparing token counts for `domain-analysis` workflow runs with/without ETR.
 
 **Output compaction rules:**
 
@@ -208,16 +208,16 @@ L1: Built-in tools           L2: Plugins                    L3: Gated shell
 - Expose cache hits in dashboard step timing.
 - Add `agent007 cache clear` CLI command.
 
-**Deliverable:** Re-running `ftm-analysis` after editing the synthesis prompt skips all unchanged ETR steps.
+**Deliverable:** Re-running `domain-analysis` after editing the synthesis prompt skips all unchanged ETR steps.
 
 ### Phase 3 — L2 Plugin Registry (Language-Agnostic)
 - Define manifest TOML schema + Rust validator.
 - Implement plugin loader + subprocess launcher (stdin/stdout JSON protocol).
 - Implement path-binding jail enforced at Rust boundary (not inside plugin).
 - Implement `agent007 etr install` / `uninstall`.
-- Migrate `ftm_burst_report.py` to L2 plugin (`executor = "python"`) as reference example.
+- Migrate `domain_burst_report.py` to L2 plugin (`executor = "python"`) as reference example.
 
-**Deliverable:** Any developer can write a plugin in Python, Shell, Node, or any language. FTM workflow calls `etr.ftm_burst_summary` instead of embedding Python paths.
+**Deliverable:** Any developer can write a plugin in Python, Shell, Node, or any language. Domain workflow calls `etr.domain_burst_summary` instead of embedding Python paths.
 
 ### Phase 4 — task_submit Real Dispatch (hosted-MCP v2)
 - Implement subprocess worker pool in agent007 MCP server.
@@ -239,7 +239,7 @@ L1: Built-in tools           L2: Plugins                    L3: Gated shell
 
 | Metric | Baseline | Target | How measured |
 |---|---|---|---|
-| `ftm-analysis` p95 latency | ~25 min | < 12 min | Workflow run timer |
+| `domain-analysis` p95 latency | ~25 min | < 12 min | Workflow run timer |
 | Token consumption (deterministic work) | ~120 K | < 45 K | Dashboard token counter |
 | Stuck workflow rate (hosted-MCP) | ~100% (was broken) | 0% | Regression test suite |
 | Cache hit rate (re-run same workflow) | 0% | > 70% | Cache stats in dashboard |

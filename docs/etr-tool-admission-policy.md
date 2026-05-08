@@ -97,30 +97,23 @@ Proposal -> Experimental -> Optional Pack -> Core (if proven)
 
 ---
 
-## Initial shortlist for agent007
+## Core baseline (implemented)
 
-### Phase 1 (recommended next)
+Core now includes reusable domain-agnostic primitives across:
 
-1. `etr.json_query`  
-   - richer JSON filtering than dot-path extraction
-2. `etr.text_extract`  
-   - regex capture groups + structured extraction
-3. `etr.table_stats`  
-   - count/null/distinct/min/max for CSV/JSONL
+- JSON/query: `etr.json_extract`, `etr.json_query`, `etr.json_query_v2`
+- tabular/select/aggregate: `etr.table_select`, `etr.table_stats`, `etr.group_count`
+- time/join/metrics/delta: `etr.time_window_filter`, `etr.join_on_key`, `etr.metrics_summary`, `etr.delta_compare`
+- workflow/log utilities: `etr.workflow_status_summary`, `etr.workflow_outputs_index`, `etr.workflow_step_health`, `etr.artifact_read`, `etr.logs_slice`, `etr.logs_correlate`
+- file/text/search/math primitives: `etr.glob`, `etr.file_stat`, `etr.grep`, `etr.diff`, `etr.csv_slice`, `etr.text_extract`, `etr.math`, `etr.semantic_search_local`, `etr.policy_check`
 
-### Phase 2 (workflow-focused)
+## Next admission focus
 
-4. `etr.workflow_status_summary`  
-   - compact hosted workflow state (completed/total/running/ready/pending/last_error)
-5. `etr.artifact_read`  
-   - safe, structured workflow artifact retrieval
-6. `etr.logs_slice`  
-   - bounded timestamp/level/module log slicing
+Prioritize only where scorecard evidence shows clear gains:
 
-### Phase 3 (advanced)
-
-7. `etr.semantic_search_local`  
-8. `etr.policy_check`
+1. higher-fidelity joins/windowing (without turning ETR into a full query engine)
+2. structured workflow diagnostics that reduce repeated hosted-workflow polling cost
+3. portability/security hardening for optional packs and third-party plugin tools
 
 ---
 
