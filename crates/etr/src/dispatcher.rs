@@ -15,8 +15,7 @@ pub struct EtrDispatcher {
 
 impl EtrDispatcher {
     pub fn new(workspace_root: PathBuf) -> Self {
-        let audit_path =
-            workspace_root.join(".agent007/runtime/etr_audit.jsonl");
+        let audit_path = workspace_root.join(".agent007/runtime/etr_audit.jsonl");
         Self {
             policy: PolicyEngine::new(workspace_root.clone()),
             audit: AuditLog::new(audit_path),
@@ -27,12 +26,11 @@ impl EtrDispatcher {
     pub fn call(&self, req: EtrCallRequest) -> EtrCallResult {
         let audit_id = format!("etr-{}", uuid::Uuid::new_v4().simple());
         let start = Instant::now();
-        let input_size =
-            serde_json::to_string(&req.input).map(|s| s.len()).unwrap_or(0);
+        let input_size = serde_json::to_string(&req.input)
+            .map(|s| s.len())
+            .unwrap_or(0);
 
-        if let PolicyResult::Denied(reason) =
-            self.policy.check(&req.tool, &req.input)
-        {
+        if let PolicyResult::Denied(reason) = self.policy.check(&req.tool, &req.input) {
             let latency_ms = start.elapsed().as_millis() as u64;
             self.audit
                 .write(&req.tool, &audit_id, "denied", latency_ms, input_size, 0);
@@ -96,14 +94,8 @@ impl EtrDispatcher {
             }
             Err(e) => {
                 let latency_ms = start.elapsed().as_millis() as u64;
-                self.audit.write(
-                    &req.tool,
-                    &audit_id,
-                    "error",
-                    latency_ms,
-                    input_size,
-                    0,
-                );
+                self.audit
+                    .write(&req.tool, &audit_id, "error", latency_ms, input_size, 0);
                 EtrCallResult {
                     tool: req.tool,
                     status: EtrStatus::Error,
@@ -122,8 +114,7 @@ impl EtrDispatcher {
         tools.push(ToolManifest {
             name: "etr.list".into(),
             layer: crate::types::ToolLayer::L1,
-            description: "List all available ETR tools with their input/output schemas"
-                .into(),
+            description: "List all available ETR tools with their input/output schemas".into(),
             input_schema: serde_json::json!({
                 "layer": "string (optional: 'l1', 'l2', 'l3', 'all')"
             }),

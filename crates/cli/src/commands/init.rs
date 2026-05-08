@@ -746,12 +746,12 @@ pub async fn execute(
         } else {
             project_dir.join(".mcp.json")
         };
-        let claude_mcp_label = if global { "~/.claude.json" } else { ".mcp.json" };
-        let check = parse_json_command_entry(
-            &claude_mcp_path,
-            claude_mcp_label,
-            "mcpServers",
-        )?;
+        let claude_mcp_label = if global {
+            "~/.claude.json"
+        } else {
+            ".mcp.json"
+        };
+        let check = parse_json_command_entry(&claude_mcp_path, claude_mcp_label, "mcpServers")?;
         print_integration_check(&check);
     }
     if do_cursor {
@@ -903,7 +903,11 @@ fn register_claude_mcp(
     } else {
         project_dir.join(".mcp.json")
     };
-    let file_label = if global { "~/.claude.json" } else { ".mcp.json" };
+    let file_label = if global {
+        "~/.claude.json"
+    } else {
+        ".mcp.json"
+    };
 
     let mut root = load_json_root(&mcp_path, file_label)?;
 
@@ -964,11 +968,7 @@ fn register_claude_mcp(
     if let Some(parent) = mcp_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    write_json_root(
-        &mcp_path,
-        &root,
-        &format!("mcpServers.agent007 → {cmd}"),
-    )?;
+    write_json_root(&mcp_path, &root, &format!("mcpServers.agent007 → {cmd}"))?;
     ok(&format!("MCP server registered in {file_label}"));
 
     // Update settings.json: migrate out any old mcpServers.agent007 entry (now in

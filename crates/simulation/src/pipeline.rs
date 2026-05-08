@@ -459,9 +459,8 @@ mod tests {
 
         // Override SUT with a no-op command to avoid needing a real cargo build
         template.system_under_test.command = "echo".into();
-        template.system_under_test.args = vec![
-            "/brainstorm /dev-architect /dev-debug /code-refactor".into(),
-        ];
+        template.system_under_test.args =
+            vec!["/brainstorm /dev-architect /dev-debug /code-refactor".into()];
 
         let pipeline = SimulationPipeline {
             provider,

@@ -47,7 +47,10 @@ impl Compactor {
     }
 
     /// Compact tabular rows (first N + summary).
-    pub fn compact_rows(rows: &[serde_json::Value], total: usize) -> (Vec<serde_json::Value>, bool) {
+    pub fn compact_rows(
+        rows: &[serde_json::Value],
+        total: usize,
+    ) -> (Vec<serde_json::Value>, bool) {
         if rows.len() <= TABULAR_ROW_LIMIT {
             return (rows.to_vec(), false);
         }

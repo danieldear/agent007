@@ -12,8 +12,7 @@ pub fn run(input: &Value) -> Result<Value> {
         .unwrap_or(0) as usize;
 
     let re = Regex::new(pattern).context("invalid regex pattern")?;
-    let metadata =
-        std::fs::metadata(path).context(format!("cannot access path: {path}"))?;
+    let metadata = std::fs::metadata(path).context(format!("cannot access path: {path}"))?;
 
     let mut matches = Vec::new();
 
@@ -31,12 +30,7 @@ pub fn run(input: &Value) -> Result<Value> {
     Ok(json!({ "matches": matches, "count": count }))
 }
 
-fn search_file(
-    re: &Regex,
-    path: &str,
-    context_lines: usize,
-    out: &mut Vec<Value>,
-) -> Result<()> {
+fn search_file(re: &Regex, path: &str, context_lines: usize, out: &mut Vec<Value>) -> Result<()> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     let lines: Vec<String> = reader.lines().collect::<std::result::Result<_, _>>()?;
@@ -45,10 +39,8 @@ fn search_file(
         if re.is_match(line) {
             let start = i.saturating_sub(context_lines);
             let end = (i + context_lines + 1).min(lines.len());
-            let ctx_before: Vec<&str> =
-                lines[start..i].iter().map(|s| s.as_str()).collect();
-            let ctx_after: Vec<&str> =
-                lines[(i + 1)..end].iter().map(|s| s.as_str()).collect();
+            let ctx_before: Vec<&str> = lines[start..i].iter().map(|s| s.as_str()).collect();
+            let ctx_after: Vec<&str> = lines[(i + 1)..end].iter().map(|s| s.as_str()).collect();
 
             out.push(json!({
                 "file": path,

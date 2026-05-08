@@ -18,12 +18,7 @@ pub fn run(input: &Value) -> Result<Value> {
     Ok(json!({ "paths": paths, "count": paths.len() }))
 }
 
-fn collect_paths(
-    dir: &Path,
-    root: &str,
-    set: &globset::GlobSet,
-    out: &mut Vec<String>,
-) {
+fn collect_paths(dir: &Path, root: &str, set: &globset::GlobSet, out: &mut Vec<String>) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for entry in rd.flatten() {
             let p = entry.path();

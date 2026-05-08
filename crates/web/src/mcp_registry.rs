@@ -246,7 +246,9 @@ pub async fn connect_mcp_server(
     Ok(result)
 }
 
-pub async fn refresh_mcp_server_statuses(project_home: &Path) -> Result<Vec<McpRegistryEntry>, String> {
+pub async fn refresh_mcp_server_statuses(
+    project_home: &Path,
+) -> Result<Vec<McpRegistryEntry>, String> {
     let mut entries = load_mcp_registry(project_home)?;
     let mut changed = false;
 
@@ -283,7 +285,9 @@ pub async fn refresh_mcp_server_statuses(project_home: &Path) -> Result<Vec<McpR
     Ok(entries)
 }
 
-async fn probe_mcp_server(entry: &McpRegistryEntry) -> (bool, Result<Vec<serde_json::Value>, String>) {
+async fn probe_mcp_server(
+    entry: &McpRegistryEntry,
+) -> (bool, Result<Vec<serde_json::Value>, String>) {
     let config = agent007_mcp::McpServerConfig {
         name: entry.name.clone(),
         command: entry.command.clone(),

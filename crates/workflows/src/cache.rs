@@ -93,7 +93,12 @@ impl StepCache {
         }
         let mut count = 0usize;
         for entry in std::fs::read_dir(&self.cache_dir)?.flatten() {
-            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "json")
+                .unwrap_or(false)
+            {
                 std::fs::remove_file(entry.path())?;
                 count += 1;
             }
@@ -110,7 +115,12 @@ impl StepCache {
         let mut total_bytes = 0u64;
         if let Ok(rd) = std::fs::read_dir(&self.cache_dir) {
             for entry in rd.flatten() {
-                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                if entry
+                    .path()
+                    .extension()
+                    .map(|e| e == "json")
+                    .unwrap_or(false)
+                {
                     count += 1;
                     total_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
                 }

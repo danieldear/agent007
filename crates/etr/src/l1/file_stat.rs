@@ -2,8 +2,9 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 pub fn run(input: &Value) -> Result<Value> {
-    let path =
-        input["path"].as_str().ok_or_else(|| anyhow::anyhow!("path required"))?;
+    let path = input["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("path required"))?;
     match std::fs::metadata(path) {
         Ok(meta) => {
             let mtime = meta

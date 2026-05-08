@@ -172,7 +172,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         // system should be an array with cache_control
         let system = &v["system"];
-        assert!(system.is_array(), "system should be an array when content >1000 chars");
+        assert!(
+            system.is_array(),
+            "system should be an array when content >1000 chars"
+        );
         let block = &system[0];
         assert_eq!(block["type"], "text");
         assert_eq!(block["cache_control"]["type"], "ephemeral");
@@ -189,7 +192,10 @@ mod tests {
         let body = p.build_body("claude-sonnet-4-6", &msgs, None, None, Some("short system"));
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         // system should be a plain string when content ≤1000 chars
-        assert!(v["system"].is_string(), "system should be plain string when content ≤1000 chars");
+        assert!(
+            v["system"].is_string(),
+            "system should be plain string when content ≤1000 chars"
+        );
         assert!(!v["_caching"].as_bool().unwrap_or(true));
     }
 

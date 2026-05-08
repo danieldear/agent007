@@ -1415,13 +1415,12 @@ pub(crate) fn minify_context(text: &str) -> String {
         prev_was_hr = is_hr;
 
         // Normalize multiple spaces to single (only on non-indented lines)
-        let line_out = if line.contains("  ")
-            && line.chars().next().map_or(false, |c| !c.is_whitespace())
-        {
-            std::borrow::Cow::Owned(line.split_whitespace().collect::<Vec<_>>().join(" "))
-        } else {
-            std::borrow::Cow::Borrowed(line)
-        };
+        let line_out =
+            if line.contains("  ") && line.chars().next().map_or(false, |c| !c.is_whitespace()) {
+                std::borrow::Cow::Owned(line.split_whitespace().collect::<Vec<_>>().join(" "))
+            } else {
+                std::borrow::Cow::Borrowed(line)
+            };
 
         result.push_str(&line_out);
         result.push('\n');
@@ -2889,7 +2888,11 @@ mod tests {
         let input = "line with trailing   \nanother   \n";
         let output = minify_context(input);
         for line in output.lines() {
-            assert_eq!(line, line.trim_end(), "line should have no trailing whitespace");
+            assert_eq!(
+                line,
+                line.trim_end(),
+                "line should have no trailing whitespace"
+            );
         }
     }
 
@@ -2928,7 +2931,10 @@ mod tests {
     fn minify_skips_code_fences() {
         let input = "intro\n```\nsome code  here\n```\n";
         let output = minify_context(input);
-        assert_eq!(output, input, "content with code fences should pass through unchanged");
+        assert_eq!(
+            output, input,
+            "content with code fences should pass through unchanged"
+        );
     }
 
     #[test]
@@ -2943,10 +2949,16 @@ mod tests {
         // Any leading whitespace = preserve indentation and internal spaces
         let input_2 = "  two  space  indent\n";
         let output_2 = minify_context(input_2);
-        assert!(output_2.contains("  two  space  indent"), "2-space indent should be untouched");
+        assert!(
+            output_2.contains("  two  space  indent"),
+            "2-space indent should be untouched"
+        );
 
         let input_4 = "    code   with   spaces\n";
         let output_4 = minify_context(input_4);
-        assert!(output_4.contains("    code   with   spaces"), "4-space indent should be untouched");
+        assert!(
+            output_4.contains("    code   with   spaces"),
+            "4-space indent should be untouched"
+        );
     }
 }

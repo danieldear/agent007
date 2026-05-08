@@ -1,5 +1,5 @@
-use std::path::Path;
 use serde_json::Value;
+use std::path::Path;
 
 pub struct PolicyEngine {
     pub workspace_root: std::path::PathBuf,
@@ -29,9 +29,7 @@ impl PolicyEngine {
                         .canonicalize()
                         .unwrap_or_else(|_| self.workspace_root.clone());
                     if !canonical.starts_with(&ws) {
-                        return PolicyResult::Denied(format!(
-                            "Path traversal rejected: {raw}"
-                        ));
+                        return PolicyResult::Denied(format!("Path traversal rejected: {raw}"));
                     }
                 }
                 PolicyResult::Allowed

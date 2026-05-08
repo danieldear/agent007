@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use serde_json::json;
+use std::path::PathBuf;
 
 pub struct AuditLog {
     pub path: PathBuf,

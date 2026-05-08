@@ -1,15 +1,13 @@
 use anyhow::{Context, Result};
-use similar::{ChangeTag, TextDiff};
 use serde_json::{json, Value};
+use similar::{ChangeTag, TextDiff};
 
 pub fn run(input: &Value) -> Result<Value> {
     let path_a = input["path_a"].as_str().context("path_a required")?;
     let path_b = input["path_b"].as_str().context("path_b required")?;
 
-    let text_a =
-        std::fs::read_to_string(path_a).context(format!("cannot read {path_a}"))?;
-    let text_b =
-        std::fs::read_to_string(path_b).context(format!("cannot read {path_b}"))?;
+    let text_a = std::fs::read_to_string(path_a).context(format!("cannot read {path_a}"))?;
+    let text_b = std::fs::read_to_string(path_b).context(format!("cannot read {path_b}"))?;
 
     let diff = TextDiff::from_lines(&text_a, &text_b);
 

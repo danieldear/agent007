@@ -4081,7 +4081,13 @@ fn workflow_hosted_get_output(session: &str, key: &str) -> Result<String> {
                 // Use the same key sanitization as write side to find the artifact.
                 let sanitized_key: String = key
                     .chars()
-                    .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '-' || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect();
                 let artifact_name = format!("outputs/{}.txt", sanitized_key);
                 match store.read_text_artifact(session, &artifact_name) {
@@ -6218,7 +6224,13 @@ requires_approval = true
         assert_eq!(waiting["approval_gate"]["step_id"], "plan");
         assert_eq!(waiting["approval_gate"]["content"], "draft plan");
         // STOP_INSTRUCTIONS must be non-empty
-        assert!(waiting["approval_gate"]["STOP_INSTRUCTIONS"].as_array().unwrap().len() > 0);
+        assert!(
+            waiting["approval_gate"]["STOP_INSTRUCTIONS"]
+                .as_array()
+                .unwrap()
+                .len()
+                > 0
+        );
 
         let approval =
             workflow_approve(&session, None, "edit", Some("approved plan".to_string())).unwrap();

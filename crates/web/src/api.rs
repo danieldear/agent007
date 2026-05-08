@@ -4618,7 +4618,10 @@ use crate::mcp_registry::{
 /// `GET /api/mcp/servers`
 pub async fn mcp_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let home = agent007_write_home();
-    match refresh_mcp_server_statuses(&home).await.or_else(|_| load_mcp_registry(&home)) {
+    match refresh_mcp_server_statuses(&home)
+        .await
+        .or_else(|_| load_mcp_registry(&home))
+    {
         Ok(entries) => Json(serde_json::json!({ "servers": entries })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4867,9 +4870,10 @@ pub async fn etr_call_handler(
         compact: payload.compact.unwrap_or(true),
     };
     let result = dispatcher.call(req);
-    Json(serde_json::to_value(&result).unwrap_or_else(|e| {
-        serde_json::json!({ "error": e.to_string() })
-    }))
+    Json(
+        serde_json::to_value(&result)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+    )
     .into_response()
 }
 

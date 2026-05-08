@@ -305,7 +305,9 @@ impl BundleBuilder {
             })
             .filter(|s| !s.is_empty())
             .collect();
-        if !self.tools_dirs.iter().any(|d| d.exists()) && !self.scripts_dirs.iter().any(|d| d.exists()) {
+        if !self.tools_dirs.iter().any(|d| d.exists())
+            && !self.scripts_dirs.iter().any(|d| d.exists())
+        {
             return Ok(Vec::new());
         }
 
@@ -394,7 +396,11 @@ impl BundleBuilder {
                             // not a package; try next resolution mode
                         } else {
                             let mut package_files = Vec::new();
-                            collect_files_recursive_paths(&package_dir, tools_dir, &mut package_files)?;
+                            collect_files_recursive_paths(
+                                &package_dir,
+                                tools_dir,
+                                &mut package_files,
+                            )?;
                             for rel_file in package_files {
                                 if seen.contains(&rel_file) {
                                     continue;
@@ -546,7 +552,11 @@ impl BundleBuilder {
             for asset in &assets[prev_len..] {
                 let mut transitive = HashSet::new();
                 collect_tool_refs_from_text(&asset.content, &mut transitive);
-                work.extend(transitive.into_iter().filter(|r| !resolved_refs.contains(r)));
+                work.extend(
+                    transitive
+                        .into_iter()
+                        .filter(|r| !resolved_refs.contains(r)),
+                );
             }
         }
         assets.sort_by(|a, b| a.filename.cmp(&b.filename));
@@ -1595,7 +1605,9 @@ mod tests {
         .unwrap();
 
         let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
-        let bundle = builder.build(&["ml-skill"], &["__none__"], &[], &[]).unwrap();
+        let bundle = builder
+            .build(&["ml-skill"], &["__none__"], &[], &[])
+            .unwrap();
         assert_eq!(bundle.tools.len(), 1);
         assert_eq!(bundle.tools[0].filename, "scripts/ml_monitoring_suite.py");
     }

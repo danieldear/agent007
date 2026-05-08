@@ -53,7 +53,13 @@ fn make_lazy_stub(output_key: &str, session_id: &str, content: &str) -> String {
 fn lazy_artifact_filename(key: &str) -> String {
     let sanitized: String = key
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("outputs/{}.txt", sanitized)
 }
@@ -511,8 +517,8 @@ impl HostedWorkflowEngine {
                 return Ok(self.failed_progress(state, "extract step missing config"));
             };
 
-            let workspace_root = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let workspace_root =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
             // Check step cache first when caching is enabled.
             let rendered_input_str = {
@@ -1741,8 +1747,14 @@ mod tests {
     #[test]
     fn lazy_artifact_filename_sanitizes_path_traversal() {
         let filename = lazy_artifact_filename("../../etc/passwd");
-        assert!(!filename.contains(".."), "path traversal must not pass through");
-        assert!(!filename.contains("/etc/"), "absolute path must not pass through");
+        assert!(
+            !filename.contains(".."),
+            "path traversal must not pass through"
+        );
+        assert!(
+            !filename.contains("/etc/"),
+            "absolute path must not pass through"
+        );
         assert!(filename.starts_with("outputs/"), "must be in outputs/ dir");
         assert!(filename.ends_with(".txt"), "must have .txt extension");
     }
@@ -1796,6 +1808,9 @@ mod tests {
         assert_eq!(status.status, HostedWorkflowProgressStatus::Succeeded);
         let stored: &str = state.outputs.get("notes").map(String::as_str).unwrap_or("");
         assert_eq!(stored, short_output, "small output must be stored verbatim");
-        assert!(!is_lazy_stub(stored), "small output must not be a lazy stub");
+        assert!(
+            !is_lazy_stub(stored),
+            "small output must not be a lazy stub"
+        );
     }
 }

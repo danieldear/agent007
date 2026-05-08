@@ -144,9 +144,7 @@ impl Simulator {
                         if qs < min_qs {
                             return Err(SimulationError::ValidationFailed {
                                 name: scenario_name.to_string(),
-                                reason: format!(
-                                    "quality_score {qs:.3} below minimum {min_qs:.3}"
-                                ),
+                                reason: format!("quality_score {qs:.3} below minimum {min_qs:.3}"),
                             });
                         }
                     }
