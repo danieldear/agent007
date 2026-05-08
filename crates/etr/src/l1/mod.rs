@@ -6,6 +6,7 @@ pub mod grep;
 pub mod json_extract;
 pub mod json_query;
 pub mod math;
+pub mod table_stats;
 pub mod text_extract;
 
 use anyhow::Result;
@@ -20,6 +21,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.glob" => glob::run(input),
         "etr.file_stat" => file_stat::run(input),
         "etr.math" => math::run(input),
+        "etr.table_stats" => table_stats::run(input),
         "etr.text_extract" => text_extract::run(input),
         "etr.diff" => diff::run(input),
         other => anyhow::bail!("Unknown L1 tool: {other}"),
@@ -97,6 +99,17 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "expression": "string"
             }),
             output_schema: serde_json::json!({"result": "number or string"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.table_stats".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Compute compact table statistics for CSV/JSONL files".into(),
+            input_schema: serde_json::json!({
+                "path": "string",
+                "format": "string (optional: auto|csv|jsonl, default auto)",
+                "max_distinct": "integer (optional, default 20)"
+            }),
+            output_schema: serde_json::json!({"format":"string","rows":"integer","column_count":"integer","columns":"array"}),
         },
         crate::types::ToolManifest {
             name: "etr.text_extract".into(),
