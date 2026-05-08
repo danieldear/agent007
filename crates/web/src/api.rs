@@ -115,6 +115,14 @@ pub struct ToolSearchQuery {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct LspConfigResponse {
+    pub enabled: bool,
+    pub servers: std::collections::HashMap<String, String>,
+    pub inject_for_categories: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ToolImportApiRequest {
     pub provider: String,
@@ -4709,6 +4717,125 @@ pub async fn mcp_tools_handler(
         )
             .into_response(),
     }
+}
+
+/// `GET /api/lsp/config`
+pub async fn lsp_config_get_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    match read_lsp_config_from_file() {
+        Ok(cfg) => Json(cfg).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/lsp/config`
+pub async fn lsp_config_set_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<LspConfigResponse>,
+) -> impl IntoResponse {
+    match write_lsp_config_to_file(&payload) {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+fn config_toml_path() -> std::path::PathBuf {
+    agent007_write_home().join("config.toml")
+}
+
+fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
+    let path = config_toml_path();
+    if !path.exists() {
+        return Ok(LspConfigResponse {
+            enabled: true,
+            servers: std::collections::HashMap::new(),
+            inject_for_categories: vec!["code_completion".to_string(), "reasoning".to_string()],
+        });
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let root: toml::Value = toml::from_str(&content).map_err(|e| e.to_string())?;
+    let lsp = root
+        .get("lsp")
+        .and_then(|v| v.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    let enabled = lsp.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+    let servers = lsp
+        .get("servers")
+        .and_then(|v| v.as_table())
+        .map(|t| {
+            t.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let inject_for_categories = lsp
+        .get("inject_for_categories")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
+
+    Ok(LspConfigResponse {
+        enabled,
+        servers,
+        inject_for_categories,
+    })
+}
+
+fn write_lsp_config_to_file(payload: &LspConfigResponse) -> Result<(), String> {
+    let path = config_toml_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut root: toml::Value = if path.exists() {
+        toml::from_str(&std::fs::read_to_string(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    let root_table = root
+        .as_table_mut()
+        .ok_or_else(|| "config root must be a TOML table".to_string())?;
+
+    let mut lsp_table = toml::map::Map::new();
+    lsp_table.insert("enabled".to_string(), toml::Value::Boolean(payload.enabled));
+    let mut servers_table = toml::map::Map::new();
+    for (k, v) in &payload.servers {
+        if !k.trim().is_empty() && !v.trim().is_empty() {
+            servers_table.insert(k.clone(), toml::Value::String(v.clone()));
+        }
+    }
+    lsp_table.insert("servers".to_string(), toml::Value::Table(servers_table));
+    lsp_table.insert(
+        "inject_for_categories".to_string(),
+        toml::Value::Array(
+            payload
+                .inject_for_categories
+                .iter()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| toml::Value::String(s.clone()))
+                .collect(),
+        ),
+    );
+    root_table.insert("lsp".to_string(), toml::Value::Table(lsp_table));
+
+    std::fs::write(path, toml::to_string_pretty(&root).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ── RAG source handlers ───────────────────────────────────────────────────────

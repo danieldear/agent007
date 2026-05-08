@@ -179,6 +179,10 @@ export function useApi() {
     approveMcpServer: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/approve`, { method: 'POST' }),
     getMcpServerTools: (name) => fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/tools`),
 
+    // LSP config
+    getLspConfig: () => fetchJson('/api/lsp/config'),
+    setLspConfig: (data) => fetchJson('/api/lsp/config', { method: 'POST', body: JSON.stringify(data) }),
+
     // RAG Sources
     listRagSources: () => fetchJson('/api/rag/sources'),
     addRagSource: (data) => fetchJson('/api/rag/sources', { method: 'POST', body: JSON.stringify(data) }),
