@@ -50,6 +50,9 @@ pub struct PendingApproval {
     pub output_key: Option<String>,
     pub content: String,
     pub content_preview: String,
+    /// Custom approval message set via `approval_prompt` in the workflow YAML.
+    /// When present, the AI must present this message verbatim to the user.
+    pub approval_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +188,7 @@ impl WorkflowRunState {
             output_key: step.output.clone(),
             content: content.to_string(),
             content_preview: preview(content),
+            approval_prompt: step.approval_prompt.clone(),
         });
         let step_state = self.step_mut(&step.id);
         step_state.status = WorkflowStepStatus::AwaitingApproval;
@@ -406,6 +410,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,

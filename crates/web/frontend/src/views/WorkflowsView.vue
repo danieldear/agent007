@@ -10,6 +10,7 @@ import EvaluatorNode from '../components/EvaluatorNode.vue'
 import RouterNode from '../components/RouterNode.vue'
 import ApprovalNode from '../components/ApprovalNode.vue'
 import OrchestratorNode from '../components/OrchestratorNode.vue'
+import ExtractNode from '../components/ExtractNode.vue'
 
 const { api } = useApi()
 const workflows = ref([])
@@ -106,6 +107,7 @@ const nodeTypes = {
   router: RouterNode,
   approval: ApprovalNode,
   orchestrator: OrchestratorNode,
+  extract: ExtractNode,
 }
 
 const contextMenu = ref({ show: false, x: 0, y: 0, type: null, targetId: null })
@@ -312,6 +314,7 @@ function graphFromSteps(steps) {
     let type = 'agent'
     if (step.type === 'evaluator') type = 'evaluator'
     else if (step.type === 'router') type = 'router'
+    else if (step.type === 'extract') type = 'extract'
     else if (step.requires_approval) type = 'approval'
 
     return {
@@ -326,6 +329,9 @@ function graphFromSteps(steps) {
         evaluate: step.evaluate || null,
         routes: step.routes || [],
         requires_approval: step.requires_approval || false,
+        // ETR-specific
+        tool: step.extract?.tool || null,
+        cached: step.cache || false,
       },
     }
   })
@@ -345,6 +351,9 @@ function graphFromSteps(steps) {
       } else if (sourceNode?.type === 'approval') {
         style = { stroke: '#f59e0b' }
         label = 'approved'
+      } else if (sourceNode?.type === 'extract') {
+        style = { stroke: '#f59e0b', strokeDasharray: '4 2' }
+        label = '⚡'
       }
 
       stepEdges.push({

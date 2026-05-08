@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use agent007_core::persona::PersonaProvider;
 use agent007_core::RunStore;
+use agent007_etr::{EtrCallRequest, EtrDispatcher};
 
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind};
+use crate::cache::StepCache;
 use crate::error::WorkflowError;
 use crate::eval_gates::{
     evaluate_workflow_eval_gate, persist_eval_gate_artifacts, EvalGatePolicy,
@@ -24,6 +26,48 @@ use crate::runner::{
 };
 use crate::state::{PendingApproval, WorkflowRunState, WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{StepDef, StepType, WorkflowDef};
+
+/// Number of characters to include in the inline preview stub.
+const LAZY_PREVIEW_CHARS: usize = 200;
+/// Prefix used to identify lazy-injection stubs in `state.outputs`.
+pub const LAZY_STUB_PREFIX: &str = "[LAZY:output:";
+
+/// Build the compact stub that replaces a large output in `state.outputs`.
+fn make_lazy_stub(output_key: &str, session_id: &str, content: &str) -> String {
+    let token_count = content.len() / 4;
+    let preview: String = content.chars().take(LAZY_PREVIEW_CHARS).collect();
+    format!(
+        "{prefix}{key}] {tokens} tokens stored. \
+         Call agent007_workflow_get_output(session=\"{session}\", key=\"{key}\") to retrieve. \
+         Preview: {preview}...",
+        prefix = LAZY_STUB_PREFIX,
+        key = output_key,
+        tokens = token_count,
+        session = session_id,
+        preview = preview,
+    )
+}
+
+/// Artifact filename for a lazy-stored step output.
+/// Key is sanitized to prevent path traversal: only alphanumerics, hyphens, and underscores kept.
+fn lazy_artifact_filename(key: &str) -> String {
+    let sanitized: String = key
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("outputs/{}.txt", sanitized)
+}
+
+/// Returns true if `value` is a lazy-injection stub.
+pub fn is_lazy_stub(value: &str) -> bool {
+    value.starts_with(LAZY_STUB_PREFIX)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -447,12 +491,102 @@ impl HostedWorkflowEngine {
         if dispatch_ready {
             for step_id in &ready_ids {
                 if let Some(step) = step_map.get(step_id) {
+                    // Extract steps are marked running here then immediately completed below.
                     state.mark_step_running(step);
                 }
             }
         }
 
-        let ready_steps = ready_ids
+        // Auto-execute Extract steps inline when dispatching (no LLM round-trip needed).
+        let mut extract_ran = false;
+        let mut non_extract_ids: Vec<String> = Vec::new();
+        for step_id in ready_ids {
+            let step = match step_map.get(&step_id) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+            if step.r#type != StepType::Extract || !dispatch_ready {
+                non_extract_ids.push(step_id);
+                continue;
+            }
+            let Some(extract_cfg) = step.extract.clone() else {
+                state.mark_failed(
+                    Some(&step.id),
+                    "extract step is missing 'extract' config".to_string(),
+                );
+                return Ok(self.failed_progress(state, "extract step missing config"));
+            };
+
+            let workspace_root =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+            // Check step cache first when caching is enabled.
+            let rendered_input_str = {
+                let raw = extract_cfg.input.to_string();
+                render_prompt(&raw, &state.task, &state.outputs).unwrap_or(raw)
+            };
+
+            let cache_key = if step.cache {
+                Some(StepCache::compute_key(&step.id, &rendered_input_str))
+            } else {
+                None
+            };
+
+            if let Some(key) = &cache_key {
+                let cache = StepCache::new(&workspace_root);
+                if let Some(cached) = cache.get(key) {
+                    let mut outputs = state.outputs.clone();
+                    if let Some(output_key) = &step.output {
+                        outputs.insert(output_key.clone(), cached.clone());
+                    }
+                    state.mark_step_completed(&step, &cached);
+                    state.sync_outputs(outputs);
+                    extract_ran = true;
+                    continue;
+                }
+            }
+
+            let input_value: serde_json::Value =
+                serde_json::from_str(&rendered_input_str).unwrap_or(extract_cfg.input.clone());
+
+            let dispatcher = EtrDispatcher::new(workspace_root.clone());
+            let req = EtrCallRequest {
+                tool: extract_cfg.tool.clone(),
+                input: input_value,
+                compact: extract_cfg.compact,
+            };
+            let result = dispatcher.call(req);
+            let output = if result.status == agent007_etr::EtrStatus::Ok {
+                match result.output {
+                    serde_json::Value::String(s) => s,
+                    v => v.to_string(),
+                }
+            } else {
+                let err = result.error.as_deref().unwrap_or("unknown error");
+                format!("[etr error] {err}")
+            };
+
+            if let Some(key) = cache_key {
+                let cache = StepCache::new(&workspace_root);
+                let _ = cache.put(&key, &step.id, &output);
+            }
+
+            let mut outputs = state.outputs.clone();
+            if let Some(output_key) = &step.output {
+                outputs.insert(output_key.clone(), output.clone());
+            }
+            state.mark_step_completed(&step, &output);
+            state.sync_outputs(outputs);
+            extract_ran = true;
+        }
+
+        // If all ready steps were Extract steps (auto-executed), recurse to get next
+        // ready steps rather than returning an empty ready_steps list.
+        if extract_ran && non_extract_ids.is_empty() {
+            return self.progress(def, state, dispatch_ready);
+        }
+
+        let ready_steps = non_extract_ids
             .into_iter()
             .filter_map(|step_id| step_map.get(&step_id).cloned())
             .map(|step| self.hosted_step(def, state, &step))
@@ -704,13 +838,33 @@ impl HostedWorkflowEngine {
 
         let mut outputs = state.outputs.clone();
         if let Some(output_key) = &step.output {
-            outputs.insert(output_key.clone(), final_content.clone());
+            // P2: Lazy injection — store large outputs as artifacts, inject a compact stub.
+            // This prevents downstream prompts from ballooning due to large step outputs.
+            let lazy_threshold = reliability_policy.lazy_injection_threshold;
+            let stored_value = if estimate_tokens(&final_content) as usize > lazy_threshold {
+                if let (Some(store), Some(run_id)) = (&self.run_store, &self.run_id) {
+                    let artifact_name = lazy_artifact_filename(output_key);
+                    if store
+                        .write_text_artifact(run_id, &artifact_name, &final_content)
+                        .is_ok()
+                    {
+                        make_lazy_stub(output_key, run_id, &final_content)
+                    } else {
+                        final_content.clone()
+                    }
+                } else {
+                    final_content.clone()
+                }
+            } else {
+                final_content.clone()
+            };
+            outputs.insert(output_key.clone(), stored_value);
         }
         state.mark_step_completed(step, &final_content);
         state.sync_outputs(outputs.clone());
 
         match step.r#type {
-            StepType::Execute | StepType::SubWorkflow => {}
+            StepType::Execute | StepType::SubWorkflow | StepType::Extract => {}
             StepType::Evaluator => {
                 let Some(eval) = &step.evaluate else {
                     state.mark_failed(
@@ -1040,6 +1194,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -1187,6 +1342,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -1208,6 +1364,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -1223,6 +1380,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1374,6 +1532,7 @@ mod tests {
                         },
                     ]),
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -1389,6 +1548,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -1404,6 +1564,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1579,5 +1740,77 @@ mod tests {
             .submit_step_output(&def, &mut state, "research", "final answer")
             .unwrap();
         assert_eq!(done.status, HostedWorkflowProgressStatus::Succeeded);
+    }
+
+    // ── P2 lazy injection unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn lazy_artifact_filename_sanitizes_path_traversal() {
+        let filename = lazy_artifact_filename("../../etc/passwd");
+        assert!(
+            !filename.contains(".."),
+            "path traversal must not pass through"
+        );
+        assert!(
+            !filename.contains("/etc/"),
+            "absolute path must not pass through"
+        );
+        assert!(filename.starts_with("outputs/"), "must be in outputs/ dir");
+        assert!(filename.ends_with(".txt"), "must have .txt extension");
+    }
+
+    #[test]
+    fn lazy_artifact_filename_preserves_alphanumeric() {
+        let filename = lazy_artifact_filename("my-step_key123");
+        assert_eq!(filename, "outputs/my-step_key123.txt");
+    }
+
+    #[test]
+    fn make_lazy_stub_contains_key_and_session() {
+        let stub = make_lazy_stub("notes", "session-abc", "hello world content");
+        assert!(stub.starts_with(LAZY_STUB_PREFIX));
+        assert!(stub.contains("notes"));
+        assert!(stub.contains("session-abc"));
+        assert!(stub.contains("hello world"));
+    }
+
+    #[test]
+    fn make_lazy_stub_preview_truncated_at_200_chars() {
+        let long_content = "x".repeat(500);
+        let stub = make_lazy_stub("k", "s", &long_content);
+        let preview_start = stub.find("Preview: ").unwrap() + "Preview: ".len();
+        let preview = &stub[preview_start..];
+        assert!(
+            preview.chars().count() <= LAZY_PREVIEW_CHARS + 3,
+            "preview should be approximately LAZY_PREVIEW_CHARS"
+        );
+    }
+
+    #[test]
+    fn is_lazy_stub_detects_prefix() {
+        assert!(is_lazy_stub("[LAZY:output:my-step] 500 tokens stored. ..."));
+        assert!(!is_lazy_stub("normal output text"));
+        assert!(!is_lazy_stub(""));
+    }
+
+    #[test]
+    fn small_output_stored_verbatim_no_stub() {
+        let engine = hosted_engine();
+        let def = single_step_def();
+        let mut state = WorkflowRunState::new(&def, "test task");
+        let _ = engine.dispatch(&def, &mut state).unwrap();
+
+        // Output well below threshold — should be stored verbatim
+        let short_output = "short answer";
+        let status = engine
+            .submit_step_output(&def, &mut state, "research", short_output)
+            .unwrap();
+        assert_eq!(status.status, HostedWorkflowProgressStatus::Succeeded);
+        let stored: &str = state.outputs.get("notes").map(String::as_str).unwrap_or("");
+        assert_eq!(stored, short_output, "small output must be stored verbatim");
+        assert!(
+            !is_lazy_stub(stored),
+            "small output must not be a lazy stub"
+        );
     }
 }

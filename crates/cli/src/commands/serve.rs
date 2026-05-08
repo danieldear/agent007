@@ -21,7 +21,7 @@ use serde_json::Map;
 
 use super::run::{
     agent007_global_home, agent007_home, agent007_project_home, agent007_write_home, build_stack,
-    runtime_mode_label, selected_runtime_model, selected_runtime_provider,
+    build_stack_for_web, runtime_mode_label, selected_runtime_model, selected_runtime_provider,
     standalone_mode_available,
 };
 use super::skill::SkillSummary;
@@ -931,6 +931,50 @@ impl Agent007Server {
                         }
                     },
                     "propertiesOrder": ["task", "text", "max_prompt_tokens", "reserve_tokens", "max_response_tokens"]
+                }),
+            ),
+
+            // ETR — Embedded Tool Runtime
+            tool(
+                "agent007_etr_call",
+                "Call an ETR (Embedded Tool Runtime) tool. L1 tools run natively in Rust with < 1 ms \
+                 latency and zero LLM tokens. Available tools: etr.grep, etr.json_extract, etr.csv_slice, \
+                 etr.glob, etr.file_stat, etr.math, etr.diff, etr.list. Use agent007_etr_list to discover \
+                 schemas before calling.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "tool": {
+                            "type": "string",
+                            "description": "Tool name (e.g. 'etr.grep', 'etr.csv_slice', 'etr.list')"
+                        },
+                        "input": {
+                            "type": "object",
+                            "description": "Tool input as a JSON object — schema varies by tool. Use etr.list to see schemas."
+                        },
+                        "compact": {
+                            "type": "boolean",
+                            "description": "If true (default), large outputs are compacted. Set false to get full output (L1/L2 only).",
+                            "default": true
+                        }
+                    },
+                    "required": ["tool", "input"]
+                }),
+            ),
+
+            tool(
+                "agent007_etr_list",
+                "List all available ETR tools with their input/output schemas. Call this before \
+                 agent007_etr_call to discover what tools are available and their required parameters.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "layer": {
+                            "type": "string",
+                            "description": "Filter by layer: 'l1', 'l2', 'l3', or 'all' (default)",
+                            "default": "all"
+                        }
+                    }
                 }),
             ),
 
@@ -1869,6 +1913,30 @@ impl ServerHandler for Agent007Server {
                         "Error: {e}"
                     ))])),
                 }
+            }
+
+            // ETR — Embedded Tool Runtime
+            "agent007_etr_call" => {
+                let tool_name = extract_string(request.arguments.as_ref(), "tool")?;
+                let input = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("input"))
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let compact = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("compact"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let result = etr_call(&tool_name, input, compact);
+                Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+
+            "agent007_etr_list" => {
+                let result = etr_list();
+                Ok(CallToolResult::success(vec![Content::text(result)]))
             }
 
             name => Err(rmcp::model::ErrorData::new(
@@ -3712,11 +3780,54 @@ fn hosted_workflow_response(
         })
         .collect();
 
+    // When the workflow is waiting for human approval, build an explicit STOP block
+    // so the AI cannot miss it and auto-approve.
+    let approval_gate = if progress.status
+        == agent007_workflows::HostedWorkflowProgressStatus::AwaitingApproval
+    {
+        if let Some(pa) = &progress.pending_approval {
+            let default_prompt = format!(
+                "The workflow has paused at step '{}' and requires your decision.\n\
+                Please review the content above and reply with one of:\n\
+                - **approve** — accept the output and continue\n\
+                - **deny** — reject the output and stop the workflow\n\
+                - **edit: <your revised text>** — replace the output with your own version",
+                pa.step_id
+            );
+            let prompt = pa
+                .approval_prompt
+                .as_deref()
+                .unwrap_or(&default_prompt)
+                .to_string();
+            Some(serde_json::json!({
+                "HUMAN_APPROVAL_REQUIRED": true,
+                "step_id": pa.step_id,
+                "content": pa.content,
+                "content_preview": pa.content_preview,
+                "approval_prompt": prompt,
+                "STOP_INSTRUCTIONS": [
+                    "⛔ DO NOT call agent007_workflow_approve autonomously.",
+                    "⛔ DO NOT continue the workflow without explicit human input.",
+                    "✅ END your current response immediately after presenting the content.",
+                    "✅ Show the full 'content' field above to the user in your chat response.",
+                    "✅ Show the 'approval_prompt' message verbatim to the user.",
+                    "✅ Wait for the user's reply in the NEXT conversation turn.",
+                    "✅ Only after receiving their decision: call agent007_workflow_approve with decision=approve|deny|edit.",
+                ]
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "session": session,
         "mode": "hosted-mcp",
         "request": request,
         "progress": progress,
+        "approval_gate": approval_gate,
         "running_step_liveness": running_liveness,
         "warnings": stale_warnings,
         "workflow_state": state,
@@ -3748,10 +3859,14 @@ fn hosted_workflow_response(
                 "8. For long-running steps, call agent007_workflow_heartbeat periodically to report progress and prevent stale detection.",
                 "9. Call agent007_workflow_next to get the next batch of ready steps.",
                 "10. Repeat until progress.status is 'succeeded' or 'failed'.",
-                "11. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
-                "    - Before approving, surface progress.pending_approval.content_preview (and the full content when available) back to the user in this same conversation.",
-                "    - Collect the user's approve/edit/deny decision inline in this client, not in the web dashboard.",
-                "    - After recording the decision, call agent007_workflow_next to continue.",
+                "11. ⚠️ HUMAN APPROVAL GATE — if status is 'awaiting-approval' OR 'approval_gate' is present in this response:",
+                "    ⛔ DO NOT call agent007_workflow_approve autonomously.",
+                "    ⛔ DO NOT continue executing workflow steps.",
+                "    ✅ Read approval_gate.content (the full step output) and approval_gate.approval_prompt.",
+                "    ✅ Present the content AND the approval_prompt to the user in your chat response, then END your response.",
+                "    ✅ Wait for the user's explicit decision in their next message.",
+                "    ✅ After they respond, call agent007_workflow_approve with decision=approve|deny|edit.",
+                "    ✅ Then call agent007_workflow_next to continue.",
             ],
             "model_hint_values": {
                 "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
@@ -3958,9 +4073,36 @@ fn workflow_hosted_status(session: &str) -> Result<String> {
 }
 
 fn workflow_hosted_get_output(session: &str, key: &str) -> Result<String> {
-    let (_, _, _, state) = load_hosted_workflow_session(session)?;
+    let (store, _, _, state) = load_hosted_workflow_session(session)?;
     match state.outputs.get(key) {
-        Some(value) => Ok(value.clone()),
+        Some(value) => {
+            // P2: If the value is a lazy-injection stub, read the artifact instead.
+            if agent007_workflows::is_lazy_stub(value) {
+                // Use the same key sanitization as write side to find the artifact.
+                let sanitized_key: String = key
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '-' || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                let artifact_name = format!("outputs/{}.txt", sanitized_key);
+                match store.read_text_artifact(session, &artifact_name) {
+                    Ok(full) => return Ok(full),
+                    Err(_) => {
+                        // Artifact missing — return stub with a helpful hint
+                        return Ok(format!(
+                            "{}\n\n[NOTE: lazy artifact file not found for key '{}']",
+                            value, key
+                        ));
+                    }
+                }
+            }
+            Ok(value.clone())
+        }
         None => {
             let available: Vec<_> = state.outputs.keys().cloned().collect();
             Err(anyhow::anyhow!(
@@ -5098,7 +5240,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
         if already_running {
             // Still wire up a dispatcher so MCP tool calls publish events — the live
             // dashboard belongs to the first process but run history is shared on disk.
-            let stack = super::run::build_stack(&config).await?;
+            let stack = build_stack_for_web(&config).await?;
             shared_dispatcher = Some(stack.dispatcher.clone());
             shared_learning = Some(stack.learning_dispatcher.clone());
             let collector = stack.feedback_collector.clone();
@@ -5113,7 +5255,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
             // Start the dashboard inline regardless of whether stdin is a terminal.
             // The MCP stdio protocol and the HTTP web server use completely different
             // transports and coexist in the same process without conflict.
-            let stack = super::run::build_stack(&config).await?;
+            let stack = build_stack_for_web(&config).await?;
             let standalone_mode = standalone_mode_available(&config);
             let runtime_mode = runtime_mode_label(&config).to_string();
             let provider_label = match (
@@ -5387,6 +5529,30 @@ async fn dashboard_port_is_same_project(port: u16) -> bool {
         .unwrap_or("");
 
     running_project == current_project
+}
+
+// ── ETR (Embedded Tool Runtime) helpers ──────────────────────────────────────
+
+fn etr_call(tool_name: &str, input: serde_json::Value, compact: bool) -> String {
+    use agent007_etr::{EtrCallRequest, EtrDispatcher};
+    let workspace_root = agent007_home();
+    let dispatcher = EtrDispatcher::new(workspace_root);
+    let req = EtrCallRequest {
+        tool: tool_name.to_string(),
+        input,
+        compact,
+    };
+    let result = dispatcher.call(req);
+    serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+fn etr_list() -> String {
+    use agent007_etr::EtrDispatcher;
+    let workspace_root = agent007_home();
+    let dispatcher = EtrDispatcher::new(workspace_root);
+    let tools = dispatcher.list_tools();
+    serde_json::to_string_pretty(&serde_json::json!({ "tools": tools }))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
 #[cfg(test)]
@@ -6053,6 +6219,18 @@ requires_approval = true
         let waiting = workflow_hosted_submit_step(&session, "plan", "draft plan", None).unwrap();
         let waiting: serde_json::Value = serde_json::from_str(&waiting).unwrap();
         assert_eq!(waiting["progress"]["status"], "awaiting-approval");
+        // approval_gate must be present with HUMAN_APPROVAL_REQUIRED so the host LLM stops
+        assert_eq!(waiting["approval_gate"]["HUMAN_APPROVAL_REQUIRED"], true);
+        assert_eq!(waiting["approval_gate"]["step_id"], "plan");
+        assert_eq!(waiting["approval_gate"]["content"], "draft plan");
+        // STOP_INSTRUCTIONS must be non-empty
+        assert!(
+            waiting["approval_gate"]["STOP_INSTRUCTIONS"]
+                .as_array()
+                .unwrap()
+                .len()
+                > 0
+        );
 
         let approval =
             workflow_approve(&session, None, "edit", Some("approved plan".to_string())).unwrap();

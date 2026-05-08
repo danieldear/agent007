@@ -52,6 +52,7 @@ impl ModelProvider for MockProvider {
             model: self.model_name.clone(),
             input_tokens: None,
             output_tokens: None,
+            cached_tokens: None,
         })
     }
 }

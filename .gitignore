@@ -16,3 +16,4 @@ crates/web/static/dist/
 /.cursor/
 AGENTS.md
 CLAUDE.md
+.agent007.bak*

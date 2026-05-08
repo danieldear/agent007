@@ -43,14 +43,16 @@ pub struct ScenarioDef {
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ValidationConfig {
-    /// Maximum positioning error in metres (WiFi RTT).
-    pub max_error_m: Option<f64>,
-    /// Minimum accuracy percentage.
-    pub min_accuracy_percent: Option<f64>,
-    /// Maximum handoff time in milliseconds (WiFi roaming).
-    pub max_handoff_time_ms: Option<u64>,
-    /// Minimum successful connection rate (0.0–1.0).
-    pub min_connection_success_rate: Option<f64>,
+    /// Strings that must appear in the output (exact substring match).
+    #[serde(default)]
+    pub assert_contains: Vec<String>,
+    /// Strings that must NOT appear in the output.
+    #[serde(default)]
+    pub assert_not_contains: Vec<String>,
+    /// Maximum allowed wall-clock duration in milliseconds.
+    pub max_duration_ms: Option<u64>,
+    /// Minimum quality score (0.0–1.0); checked against a `quality_score` field in JSON output.
+    pub min_quality_score: Option<f64>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -110,8 +112,10 @@ mod tests {
     #[test]
     fn validation_config_defaults() {
         let v = ValidationConfig::default();
-        assert!(v.max_error_m.is_none());
-        assert!(v.min_accuracy_percent.is_none());
+        assert!(v.assert_contains.is_empty());
+        assert!(v.assert_not_contains.is_empty());
+        assert!(v.max_duration_ms.is_none());
+        assert!(v.min_quality_score.is_none());
     }
 
     #[test]
@@ -137,11 +141,11 @@ foo = "bar"
 
     #[test]
     fn builtin_templates_parse() {
-        let rtt: SimulationTemplate =
-            toml::from_str(include_str!("../templates/wifi-rtt.toml")).unwrap();
-        assert_eq!(rtt.name, "wifi-rtt");
-        let roaming: SimulationTemplate =
-            toml::from_str(include_str!("../templates/wifi-roaming.toml")).unwrap();
-        assert_eq!(roaming.name, "wifi-roaming");
+        let skills: SimulationTemplate =
+            toml::from_str(include_str!("../templates/skills-smoke.toml")).unwrap();
+        assert_eq!(skills.name, "skills-smoke");
+        let workflows: SimulationTemplate =
+            toml::from_str(include_str!("../templates/workflow-smoke.toml")).unwrap();
+        assert_eq!(workflows.name, "workflow-smoke");
     }
 }

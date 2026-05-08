@@ -532,7 +532,8 @@ pub async fn uninstall_handler(
     let mut errors: Vec<String> = Vec::new();
 
     if comps.skills {
-        let count = remove_bundle_files(&home.join("skills"), &bundle.skills, sanitize_relative_path);
+        let count =
+            remove_bundle_files(&home.join("skills"), &bundle.skills, sanitize_relative_path);
         removed.insert("skills", count);
     }
     if comps.tools {
@@ -540,8 +541,11 @@ pub async fn uninstall_handler(
         removed.insert("tools", count);
     }
     if comps.workflows {
-        let count =
-            remove_bundle_files(&home.join("workflows"), &bundle.workflows, sanitize_relative_path);
+        let count = remove_bundle_files(
+            &home.join("workflows"),
+            &bundle.workflows,
+            sanitize_relative_path,
+        );
         removed.insert("workflows", count);
     }
     if comps.mcp {
@@ -564,7 +568,9 @@ pub async fn uninstall_handler(
                 if let Some(found) = existing.iter().find(|s| s.name == name) {
                     match delete_rag_source(&home, &found.id) {
                         Ok(()) => count += 1,
-                        Err(e) => errors.push(format!("rag_sources: failed to remove '{name}': {e}")),
+                        Err(e) => {
+                            errors.push(format!("rag_sources: failed to remove '{name}': {e}"))
+                        }
                     }
                 }
             }

@@ -445,8 +445,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "integration test — requires /usr/bin/true available"]
-    async fn pipeline_runs_wifi_rtt_with_mock_sut() {
+    #[ignore = "integration test — requires cargo build to be available"]
+    async fn pipeline_runs_skills_smoke_with_mock_sut() {
         use crate::loader::TemplateLoader;
 
         let tmp = TempDir::new().unwrap();
@@ -455,11 +455,12 @@ mod tests {
         let provider = Arc::new(agent007_models::MockProvider::new("", "mock"));
 
         let loader = TemplateLoader::new_builtin_only();
-        let mut template = loader.load("wifi-rtt").unwrap();
+        let mut template = loader.load("skills-smoke").unwrap();
 
-        // Override SUT with a no-op command to avoid needing a real positioning binary
-        template.system_under_test.command = "true".into();
-        template.system_under_test.args = vec![];
+        // Override SUT with a no-op command to avoid needing a real cargo build
+        template.system_under_test.command = "echo".into();
+        template.system_under_test.args =
+            vec!["/brainstorm /dev-architect /dev-debug /code-refactor".into()];
 
         let pipeline = SimulationPipeline {
             provider,
@@ -467,7 +468,7 @@ mod tests {
             dispatcher,
         };
         let report = pipeline.run(&template).await.unwrap();
-        assert_eq!(report.template_name, "wifi-rtt");
+        assert_eq!(report.template_name, "skills-smoke");
         assert!(report.scenarios_run > 0);
     }
 }

@@ -1,6 +1,10 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useApi } from '../composables/useApi.js'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+
+marked.setOptions({ gfm: true, breaks: true })
 
 const props = defineProps({ events: Array, connected: Boolean, stats: Object })
 const { api } = useApi()
@@ -26,6 +30,13 @@ const showSlashMenu = ref(false)
 const slashFilter = ref('')
 const slashMenuIndex = ref(0)
 const slashMenuRef = ref(null)
+
+// ETR cache stats
+const etrCacheStats = ref(null)
+
+// Run list filter
+const runFilter = ref('')
+const runStatusFilter = ref('')
 
 watch(slashMenuIndex, (idx) => {
   nextTick(() => {
@@ -119,6 +130,7 @@ onMounted(async () => {
   health.value = await api.health()
   metrics.value = await api.getStats() || null
   await refreshRuns()
+  loadEtrCacheStats()
   refreshTimer = setInterval(async () => {
     try {
       metrics.value = await api.getStats() || metrics.value
@@ -211,6 +223,20 @@ function isSlowStep(step) {
 }
 
 const expandedSteps = ref(new Set())
+const rawStepView = ref(new Set())
+
+function renderMarkdown(raw) {
+  if (!raw) return ''
+  const dirty = marked.parse(raw)
+  return DOMPurify.sanitize(dirty, { ADD_TAGS: ['pre', 'code'], ADD_ATTR: ['class'] })
+}
+
+function toggleRawStep(stepId) {
+  const next = new Set(rawStepView.value)
+  if (next.has(stepId)) next.delete(stepId)
+  else next.add(stepId)
+  rawStepView.value = next
+}
 
 function toggleStepExpand(stepId) {
   const next = new Set(expandedSteps.value)
@@ -300,6 +326,45 @@ function fmtConfidence(value) {
 function fmtPct(value) {
   if (typeof value !== 'number') return '0%'
   return `${(value * 100).toFixed(1)}%`
+}
+
+// Sparkline: build SVG polyline path from an array of numbers
+function sparklinePath(values, width = 80, height = 24) {
+  if (!values || values.length < 2) return ''
+  const max = Math.max(...values) || 1
+  const step = width / (values.length - 1)
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(height - (v / max) * height).toFixed(1)}`)
+  return pts.join(' ')
+}
+
+// Last N token counts from recent_tasks
+const tokenSparkline = computed(() => {
+  const tasks = m.value.recent_tasks || []
+  return tasks.slice(-12).map(t => t.tokens || 0)
+})
+
+// Filtered runs for the persisted runs list
+const filteredRuns = computed(() => {
+  let list = runs.value
+  if (runStatusFilter.value) list = list.filter(r => r.status === runStatusFilter.value)
+  if (runFilter.value.trim()) {
+    const q = runFilter.value.toLowerCase()
+    list = list.filter(r =>
+      (r.task || '').toLowerCase().includes(q) ||
+      (r.kind || '').toLowerCase().includes(q) ||
+      (r.id || '').toLowerCase().includes(q)
+    )
+  }
+  return list
+})
+
+async function loadEtrCacheStats() {
+  try { etrCacheStats.value = await api.etrCacheStats() } catch {}
+}
+
+async function clearEtrCache() {
+  await api.etrCacheClear()
+  loadEtrCacheStats()
 }
 
 async function refreshRuns() {
@@ -565,6 +630,55 @@ async function submitTask() {
         </div>
       </div>
 
+      <!-- ETR Cache Stats row -->
+      <div class="grid grid-cols-4 gap-2" v-if="etrCacheStats">
+        <div class="bg-base-200 rounded-lg p-3 border border-warning/30 col-span-3 flex items-center gap-4">
+          <span class="text-warning text-sm">⚡</span>
+          <div>
+            <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">ETR Step Cache</div>
+            <div class="text-xs font-mono text-base-content mt-0.5">
+              {{ etrCacheStats.entries ?? 0 }} entries
+              <span class="text-base-content/30 mx-1">·</span>
+              {{ etrCacheStats.size_bytes ? (etrCacheStats.size_bytes / 1024).toFixed(1) + ' KB' : '0 KB' }}
+            </div>
+          </div>
+          <div class="ml-auto flex gap-3 text-center">
+            <div>
+              <div class="text-[9px] font-mono text-base-content/30">Hits</div>
+              <div class="text-sm font-bold font-mono text-success">{{ etrCacheStats.hits ?? '—' }}</div>
+            </div>
+            <div>
+              <div class="text-[9px] font-mono text-base-content/30">Misses</div>
+              <div class="text-sm font-bold font-mono text-warning">{{ etrCacheStats.misses ?? '—' }}</div>
+            </div>
+            <div v-if="etrCacheStats.hits !== undefined && etrCacheStats.misses !== undefined && (etrCacheStats.hits + etrCacheStats.misses) > 0">
+              <div class="text-[9px] font-mono text-base-content/30">Hit Rate</div>
+              <div class="text-sm font-bold font-mono text-success">{{ ((etrCacheStats.hits / (etrCacheStats.hits + etrCacheStats.misses)) * 100).toFixed(0) }}%</div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50 flex flex-col justify-center items-center gap-2">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Cache Actions</div>
+          <button class="btn btn-xs btn-warning btn-outline font-mono" @click="clearEtrCache">Clear Cache</button>
+        </div>
+      </div>
+
+      <!-- Sparkline token trend (visible only when we have enough data) -->
+      <div v-if="tokenSparkline.length >= 4" class="bg-base-200 rounded-lg px-4 py-2 border border-base-300/50 flex items-center gap-3">
+        <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest shrink-0">Token Trend</span>
+        <svg :width="160" :height="24" class="shrink-0 opacity-60">
+          <polyline
+            :points="sparklinePath(tokenSparkline, 160, 24)"
+            fill="none"
+            stroke="oklch(var(--s))"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+          />
+        </svg>
+        <span class="text-[9px] font-mono text-base-content/30">last {{ tokenSparkline.length }} tasks · latest {{ fmtTokens(tokenSparkline[tokenSparkline.length - 1]) }} tok</span>
+      </div>
+
       <!-- Recent Tasks (session) -->
       <div class="bg-base-200 rounded-xl border border-base-300 flex flex-col" style="max-height: 26vh">
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center shrink-0">
@@ -620,19 +734,34 @@ async function submitTask() {
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
           <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
           <div class="flex items-center gap-3">
-            <span class="text-[10px] font-mono text-base-content/30">{{ runs.length }} runs</span>
+            <span class="text-[10px] font-mono text-base-content/30">{{ filteredRuns.length }}/{{ runs.length }} runs</span>
             <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="cleanupStaleApprovals">
               cleanup stale approvals
             </button>
             <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuns">↺ refresh</button>
           </div>
         </div>
+        <!-- Filter bar -->
+        <div class="px-4 py-2 border-b border-base-300/40 flex items-center gap-2 flex-wrap">
+          <input
+            v-model="runFilter"
+            class="input input-xs input-bordered font-mono text-[10px] w-40"
+            placeholder="search runs…"
+          />
+          <button
+            v-for="s in ['', 'running', 'completed', 'failed', 'awaiting_approval']"
+            :key="s"
+            class="btn btn-xs font-mono text-[10px]"
+            :class="runStatusFilter === s ? 'btn-primary' : 'btn-ghost'"
+            @click="runStatusFilter = s"
+          >{{ s === '' ? 'all' : s.replace('_', ' ') }}</button>
+        </div>
         <div v-if="cleanupStatus" class="px-4 py-2 text-[10px] font-mono text-base-content/45 border-b border-base-300/40">
           {{ cleanupStatus }}
         </div>
 
-        <div v-if="runs.length" class="divide-y divide-base-300/40">
-          <div v-for="run in runs" :key="run.id">
+        <div v-if="filteredRuns.length" class="divide-y divide-base-300/40">
+          <div v-for="run in filteredRuns" :key="run.id">
             <!-- Run row: click to expand/collapse -->
             <button
               class="w-full text-left px-4 py-3 hover:bg-base-300/20 transition-colors flex items-center gap-4 group"
@@ -703,14 +832,16 @@ async function submitTask() {
               <!-- Task -->
               <div>
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
-                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed">{{ selectedRun.run.metadata.task }}</div>
-              </div>
+                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed"
+                  v-html="renderMarkdown(selectedRun.run.metadata.task)"
+                /></div>
 
               <!-- Output -->
               <div v-if="selectedRunOutput">
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
-                <div class="bg-base-200 rounded-lg p-4 font-mono text-xs whitespace-pre-wrap text-base-content/75 leading-relaxed max-h-48 overflow-auto">{{ selectedRunOutput }}</div>
-              </div>
+                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
+                  v-html="renderMarkdown(selectedRunOutput)"
+                /></div>
 
               <!-- Retrieval Telemetry -->
               <div v-if="selectedRetrievalTelemetry">
@@ -969,16 +1100,32 @@ async function submitTask() {
                             <span class="text-[10px] font-mono text-base-content/30 italic">no heartbeat yet</span>
                           </template>
                         </div>
-                        <!-- Step output (expandable) -->
+                        <!-- Step output (expandable — rendered as markdown when expanded) -->
                         <div v-if="step.output_preview" class="mt-2">
-                          <div
-                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-2 transition-all"
-                            :class="expandedSteps.has(step.id) ? 'max-h-[500px] overflow-auto' : 'max-h-20 overflow-hidden'"
-                          >{{ expandedSteps.has(step.id) ? stepFullOutput(step) : step.output_preview }}</div>
-                          <button
-                            class="mt-1 text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
-                            @click="toggleStepExpand(step.id)"
-                          >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                          <!-- Collapsed: markdown preview (truncated) -->
+                          <div v-if="!expandedSteps.has(step.id)"
+                            class="md-step-output text-xs bg-base-300/20 rounded p-2 max-h-20 overflow-hidden"
+                            v-html="renderMarkdown(step.output_preview)"
+                          />
+                          <!-- Expanded raw view -->
+                          <div v-else-if="rawStepView.has(step.id)"
+                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto leading-relaxed"
+                          >{{ stepFullOutput(step) }}</div>
+                          <!-- Expanded markdown-rendered view -->
+                          <div v-else
+                            class="md-step-output text-xs bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto"
+                            v-html="renderMarkdown(stepFullOutput(step))"
+                          />
+                          <div class="flex items-center gap-3 mt-1">
+                            <button
+                              class="text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
+                              @click="toggleStepExpand(step.id)"
+                            >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                            <button v-if="expandedSteps.has(step.id)"
+                              class="text-[10px] font-mono text-base-content/30 hover:text-base-content/60 transition-colors"
+                              @click="toggleRawStep(step.id)"
+                            >{{ rawStepView.has(step.id) ? '◈ rendered' : '⌂ raw' }}</button>
+                          </div>
                         </div>
                         <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
                       </div>
@@ -1260,3 +1407,76 @@ async function submitTask() {
 
   </div>
 </template>
+
+<style scoped>
+/* ── Markdown step output — :deep() targets v-html injected content ── */
+.md-step-output :deep(h1),
+.md-step-output :deep(h2),
+.md-step-output :deep(h3),
+.md-step-output :deep(h4) {
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  margin: 1.1em 0 0.3em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(h1) { font-size: 1.1rem; color: oklch(var(--p)); }
+.md-step-output :deep(h2) { font-size: 0.95rem; color: oklch(var(--p) / 0.85); }
+.md-step-output :deep(h3) { font-size: 0.85rem; color: oklch(var(--s)); border-bottom-color: oklch(var(--b3) / 0.5); }
+.md-step-output :deep(h4) { font-size: 0.8rem; color: oklch(var(--bc) / 0.7); border-bottom: none; font-style: italic; }
+
+.md-step-output :deep(p) {
+  font-size: 0.8rem; line-height: 1.7;
+  color: oklch(var(--bc) / 0.8); margin: 0.4em 0;
+}
+.md-step-output :deep(hr) { border: none; border-top: 1px solid oklch(var(--b3)); margin: 1em 0; }
+
+.md-step-output :deep(code) {
+  font-family: var(--font-mono, monospace); font-size: 0.75rem;
+  background: oklch(var(--b3) / 0.8); color: oklch(var(--s));
+  padding: 0.1em 0.35em; border-radius: 3px; border: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(pre) {
+  border-radius: 6px; border: 1px solid oklch(var(--b3));
+  overflow: hidden; margin: 0.7em 0; background: oklch(var(--b3) / 0.35);
+}
+.md-step-output :deep(pre code) {
+  display: block; background: none; border: none;
+  font-size: 0.75rem; line-height: 1.55; color: oklch(var(--bc) / 0.85);
+  padding: 10px 14px; overflow-x: auto;
+}
+
+.md-step-output :deep(ul) { margin: 0.35em 0 0.35em 1.25em; list-style: disc; }
+.md-step-output :deep(ol) { margin: 0.35em 0 0.35em 1.25em; list-style: decimal; }
+.md-step-output :deep(li) { font-size: 0.8rem; line-height: 1.6; color: oklch(var(--bc) / 0.78); }
+
+.md-step-output :deep(blockquote) {
+  border-left: 2px solid oklch(var(--p) / 0.4);
+  margin: 0.6em 0; padding: 3px 12px;
+  color: oklch(var(--bc) / 0.55); font-style: italic;
+}
+
+.md-step-output :deep(a)       { color: oklch(var(--p)); text-decoration: underline; text-underline-offset: 2px; }
+.md-step-output :deep(a:hover) { color: oklch(var(--s)); }
+
+.md-step-output :deep(table) {
+  width: 100%; border-collapse: collapse; font-size: 0.75rem;
+  font-family: var(--font-mono, monospace); margin: 0.7em 0;
+  border-radius: 5px; overflow: hidden; border: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(th) {
+  background: oklch(var(--b3) / 0.7); color: oklch(var(--bc) / 0.55);
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 5px 10px; text-align: left; border-bottom: 1px solid oklch(var(--b3));
+}
+.md-step-output :deep(td) {
+  padding: 5px 10px; border-bottom: 1px solid oklch(var(--b3) / 0.5);
+  color: oklch(var(--bc) / 0.78);
+}
+.md-step-output :deep(tr:last-child td) { border-bottom: none; }
+.md-step-output :deep(tr:hover td)      { background: oklch(var(--b3) / 0.25); }
+
+.md-step-output :deep(strong) { color: oklch(var(--bc)); font-weight: 700; }
+.md-step-output :deep(em)     { color: oklch(var(--bc) / 0.75); font-style: italic; }
+.md-step-output :deep(del)    { color: oklch(var(--bc) / 0.35); text-decoration: line-through; }
+</style>

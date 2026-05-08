@@ -22,6 +22,7 @@ members = [
     "crates/sharing",
     "crates/p2p",
     "crates/extensions",
+    "crates/etr",
 ]
 resolver = "2"
 

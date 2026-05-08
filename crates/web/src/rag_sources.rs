@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agent007_memory::{Indexer, Retriever};
 use agent007_memory::vectordb::LanceDBStore;
+use agent007_memory::{Indexer, Retriever};
 use agent007_models::{EmbeddingProvider, MockProvider, OllamaEmbeddingProvider};
 use serde::{Deserialize, Serialize};
 
@@ -196,7 +196,10 @@ pub async fn reindex_rag_source(project_home: &Path, id: &str) -> Result<RagSour
     Ok(result)
 }
 
-async fn index_source_content(project_home: &Path, source: &RagSource) -> (Option<usize>, Option<String>) {
+async fn index_source_content(
+    project_home: &Path,
+    source: &RagSource,
+) -> (Option<usize>, Option<String>) {
     let home = project_home;
     let embedder = build_embedder();
     let is_mock = embedder
@@ -246,7 +249,8 @@ fn build_embedder() -> Arc<dyn EmbeddingProvider> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
-        Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384)) as Arc<dyn EmbeddingProvider>
+        Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384))
+            as Arc<dyn EmbeddingProvider>
     } else {
         Arc::new(OllamaEmbeddingProvider::new(&base_url, &model)) as Arc<dyn EmbeddingProvider>
     }

@@ -9,6 +9,43 @@ const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
 
+// 'night' is our custom amber dark theme; 'day' is the warm light theme
+const DARK_THEME = 'night'
+const LIGHT_THEME = 'day'
+
+const THEMES = [
+  { id: 'night',     label: '🌙 Night',     dark: true  },
+  { id: 'forest',    label: '🌿 Forest',    dark: true  },
+  { id: 'ocean',     label: '🌊 Ocean',     dark: true  },
+  { id: 'aurora',    label: '✨ Aurora',    dark: true  },
+  { id: 'day',       label: '☀️ Day',       dark: false },
+  { id: 'corporate', label: '💼 Corporate', dark: false },
+]
+
+function normalizeSaved(t) {
+  // Migrate old 'dark' → 'night', old 'light' → 'day'
+  if (!t || t === 'dark') return DARK_THEME
+  if (t === 'light') return LIGHT_THEME
+  return t
+}
+
+const theme = ref(normalizeSaved(localStorage.getItem('theme')) || document.documentElement.getAttribute('data-theme') || DARK_THEME)
+
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t)
+  localStorage.setItem('theme', t)
+  theme.value = t
+}
+
+onMounted(() => {
+  const saved = normalizeSaved(localStorage.getItem('theme'))
+  if (saved) {
+    applyTheme(saved)
+  } else {
+    theme.value = document.documentElement.getAttribute('data-theme') || DARK_THEME
+  }
+})
+
 onMounted(async () => {
   try {
     const stats = await api.getStats()
@@ -67,8 +104,30 @@ const navItems = [
       </button>
     </nav>
 
+    <!-- Appearance: always-visible theme swatches -->
+    <div class="px-4 pt-2 pb-1 border-t border-base-300/80">
+      <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/25 mb-1.5 flex items-center gap-1.5">
+        <span>🎨</span><span>Appearance</span>
+      </div>
+      <div class="grid grid-cols-3 gap-1">
+        <button
+          v-for="t in THEMES"
+          :key="t.id"
+          class="rounded px-1 py-1.5 text-[10px] font-mono leading-tight flex items-center gap-1 transition-all duration-150 truncate"
+          :class="theme === t.id
+            ? 'bg-primary/15 text-primary ring-1 ring-primary/50 font-bold'
+            : 'bg-base-300/30 text-base-content/45 hover:bg-base-300/70 hover:text-base-content/80'"
+          :title="t.label"
+          @click="applyTheme(t.id)"
+        >
+          <span class="shrink-0">{{ t.label.split(' ')[0] }}</span>
+          <span class="truncate">{{ t.label.split(' ').slice(1).join(' ') }}</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Connection status -->
-    <div class="px-4 py-3 border-t border-base-300/80">
+    <div class="px-4 py-2.5 border-t border-base-300/40">
       <div class="flex items-center gap-2">
         <span
           class="w-1.5 h-1.5 rounded-full shrink-0"

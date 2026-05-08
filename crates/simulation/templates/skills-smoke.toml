@@ -1,0 +1,22 @@
+name = "skills-smoke"
+description = "Smoke test: verify agent007 skill list returns expected built-in skills"
+research_topics = []
+
+[system_under_test]
+command = "cargo"
+args = ["run", "--quiet", "--bin", "agent007", "--", "skill", "list"]
+timeout_secs = 120
+working_dir = "."
+
+[[scenarios]]
+name = "builtin-skills-present"
+
+[[scenarios]]
+name = "skill-list-exits-ok"
+
+[validation]
+assert_contains = ["/brainstorm", "/dev-architect", "/dev-debug", "/code-refactor"]
+
+[output]
+store_in_memory = true
+compare_with_previous = true

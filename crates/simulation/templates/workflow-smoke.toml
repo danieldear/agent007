@@ -1,0 +1,22 @@
+name = "workflow-smoke"
+description = "Smoke test: verify agent007 workflow list returns expected built-in workflows"
+research_topics = []
+
+[system_under_test]
+command = "cargo"
+args = ["run", "--quiet", "--bin", "agent007", "--", "workflow", "list"]
+timeout_secs = 120
+working_dir = "."
+
+[[scenarios]]
+name = "builtin-workflows-present"
+
+[[scenarios]]
+name = "workflow-list-exits-ok"
+
+[validation]
+assert_contains = ["tdd", "code-review", "security-audit", "feature"]
+
+[output]
+store_in_memory = true
+compare_with_previous = true

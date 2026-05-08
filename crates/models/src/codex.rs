@@ -111,6 +111,9 @@ impl ModelProvider for CodexProvider {
             model: model.to_string(),
             input_tokens: json["usage"]["input_tokens"].as_u64().map(|x| x as u32),
             output_tokens: json["usage"]["output_tokens"].as_u64().map(|x| x as u32),
+            cached_tokens: json["usage"]["input_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .map(|x| x as u32),
         })
     }
 }
@@ -165,6 +168,32 @@ mod tests {
         assert_eq!(v["input"][0]["role"], "system");
         assert_eq!(v["input"][1]["role"], "user");
         assert_eq!(v["input"][1]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn codex_extracts_cached_tokens_from_usage() {
+        let response = serde_json::json!({
+            "output_text": "hello",
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 50,
+                "input_tokens_details": {
+                    "cached_tokens": 150
+                }
+            }
+        });
+        // Verify the path we parse in complete()
+        let cached = response["usage"]["input_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .map(|x| x as u32);
+        assert_eq!(cached, Some(150));
+
+        // Also verify no cached tokens when field absent
+        let no_cache = serde_json::json!({"output_text": "hi", "usage": {"input_tokens": 10}});
+        let cached_none = no_cache["usage"]["input_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .map(|x| x as u32);
+        assert_eq!(cached_none, None);
     }
 
     #[test]

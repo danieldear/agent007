@@ -939,6 +939,9 @@ impl WorkflowRunner {
                         // Sub-workflow outputs were already injected during execution;
                         // nothing extra to do at the post-step routing stage.
                         StepType::SubWorkflow => {}
+                        // Extract steps are handled inline in the hosted engine; the
+                        // parallel runner does not support them and skips post-processing.
+                        StepType::Extract => {}
                     }
 
                     completed_steps.insert(step.id.clone());
@@ -1355,7 +1358,8 @@ pub(crate) fn render_prompt(
             "task" | "args" | "memory" | "memory.project" | "memory.user" | "memory.global"
             | "memory.repo_brain" | "rag_context" => {}
             _ => {
-                ctx.insert(k, v);
+                let minified = minify_context(v);
+                ctx.insert(k, &minified);
             }
         }
     }
@@ -1365,6 +1369,64 @@ pub(crate) fn render_prompt(
 pub(crate) fn estimate_tokens(text: &str) -> u64 {
     // Rough approximation: 1 token ≈ 4 chars
     (text.len() as u64) / 4
+}
+
+/// Losslessly minify Markdown context to reduce injected token count.
+///
+/// Skips structured data (JSON objects/arrays and content with code fences) entirely,
+/// since whitespace is often significant there and token savings are minimal.
+pub(crate) fn minify_context(text: &str) -> String {
+    // Guard: skip structured data unchanged
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return text.to_string();
+    }
+    if text.contains("```\n") || text.contains("```\r\n") {
+        return text.to_string();
+    }
+
+    let mut result = String::with_capacity(text.len());
+    let mut blank_run: u32 = 0;
+    let mut prev_was_hr = false;
+
+    for line in text.lines() {
+        let line = line.trim_end();
+
+        if line.is_empty() {
+            blank_run += 1;
+            // Allow at most 1 consecutive blank line (2 newlines in output)
+            if blank_run <= 1 {
+                result.push('\n');
+            }
+            continue;
+        }
+        blank_run = 0;
+
+        // Remove single-line HTML comments
+        if line.starts_with("<!--") && line.ends_with("-->") {
+            continue;
+        }
+
+        // Collapse repeated Markdown horizontal rules
+        let is_hr = line == "---" || line == "***" || line == "___";
+        if is_hr && prev_was_hr {
+            continue;
+        }
+        prev_was_hr = is_hr;
+
+        // Normalize multiple spaces to single (only on non-indented lines)
+        let line_out =
+            if line.contains("  ") && line.chars().next().map_or(false, |c| !c.is_whitespace()) {
+                std::borrow::Cow::Owned(line.split_whitespace().collect::<Vec<_>>().join(" "))
+            } else {
+                std::borrow::Cow::Borrowed(line)
+            };
+
+        result.push_str(&line_out);
+        result.push('\n');
+    }
+
+    result
 }
 
 pub(crate) fn preview(text: &str) -> String {
@@ -1581,6 +1643,7 @@ mod tests {
                 model: "sequence".to_string(),
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             })
         }
     }
@@ -1615,6 +1678,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -1674,6 +1738,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "step2".to_string(),
@@ -1689,6 +1754,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1715,6 +1781,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(10_000),
@@ -1846,6 +1913,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "b".to_string(),
@@ -1861,6 +1929,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1893,6 +1962,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -1928,6 +1998,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // extremely low — 1 token
@@ -1967,6 +2038,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: None,
@@ -2004,6 +2076,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // would exceed but mode is alert-only
@@ -2040,6 +2113,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2061,6 +2135,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2076,6 +2151,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2107,6 +2183,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2128,6 +2205,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2143,6 +2221,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2183,6 +2262,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2204,6 +2284,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2219,6 +2300,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2267,6 +2349,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -2332,6 +2415,7 @@ mod tests {
                         },
                     ]),
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -2347,6 +2431,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -2362,6 +2447,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2502,6 +2588,7 @@ mod tests {
                         },
                     ]),
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -2517,6 +2604,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -2532,6 +2620,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2585,6 +2674,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(6),
@@ -2636,6 +2726,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -2689,6 +2780,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -2778,5 +2870,95 @@ mod tests {
             crate::eval_gates::WorkflowEvalGateDecisionKind::Warn
         );
         assert!(decision.reason_codes.contains(&"cost-increase".to_string()));
+    }
+
+    // ── minify_context unit tests ────────────────────────────────────────────
+
+    #[test]
+    fn minify_collapses_excess_blank_lines() {
+        let input = "line1\n\n\n\n\nline2\n";
+        let output = minify_context(input);
+        assert!(!output.contains("\n\n\n"), "should collapse 3+ blank lines");
+        assert!(output.contains("line1"));
+        assert!(output.contains("line2"));
+    }
+
+    #[test]
+    fn minify_strips_trailing_whitespace() {
+        let input = "line with trailing   \nanother   \n";
+        let output = minify_context(input);
+        for line in output.lines() {
+            assert_eq!(
+                line,
+                line.trim_end(),
+                "line should have no trailing whitespace"
+            );
+        }
+    }
+
+    #[test]
+    fn minify_removes_html_comments() {
+        let input = "before\n<!-- this is a comment -->\nafter\n";
+        let output = minify_context(input);
+        assert!(!output.contains("<!--"));
+        assert!(output.contains("before"));
+        assert!(output.contains("after"));
+    }
+
+    #[test]
+    fn minify_collapses_repeated_horizontal_rules() {
+        let input = "text\n---\n---\n---\nmore\n";
+        let output = minify_context(input);
+        let hr_count = output.lines().filter(|l| *l == "---").count();
+        assert_eq!(hr_count, 1, "repeated HRs should collapse to one");
+    }
+
+    #[test]
+    fn minify_skips_json_objects() {
+        let input = r#"{"key": "value",  "another":  "val"}"#;
+        let output = minify_context(input);
+        assert_eq!(output, input, "JSON objects should pass through unchanged");
+    }
+
+    #[test]
+    fn minify_skips_json_arrays() {
+        let input = "[1,  2,  3]";
+        let output = minify_context(input);
+        assert_eq!(output, input, "JSON arrays should pass through unchanged");
+    }
+
+    #[test]
+    fn minify_skips_code_fences() {
+        let input = "intro\n```\nsome code  here\n```\n";
+        let output = minify_context(input);
+        assert_eq!(
+            output, input,
+            "content with code fences should pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn minify_normalizes_multiple_spaces() {
+        let input = "word1  word2   word3\n";
+        let output = minify_context(input);
+        assert!(output.contains("word1 word2 word3"));
+    }
+
+    #[test]
+    fn minify_preserves_indented_code_blocks() {
+        // Any leading whitespace = preserve indentation and internal spaces
+        let input_2 = "  two  space  indent\n";
+        let output_2 = minify_context(input_2);
+        assert!(
+            output_2.contains("  two  space  indent"),
+            "2-space indent should be untouched"
+        );
+
+        let input_4 = "    code   with   spaces\n";
+        let output_4 = minify_context(input_4);
+        assert!(
+            output_4.contains("    code   with   spaces"),
+            "4-space indent should be untouched"
+        );
     }
 }

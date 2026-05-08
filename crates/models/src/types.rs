@@ -34,6 +34,9 @@ pub struct CompletionResponse {
     pub input_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u32>,
+    /// Tokens served from provider cache (prompt caching hit). None if not reported or not cached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
 }
 
 #[cfg(test)]
@@ -65,11 +68,13 @@ mod tests {
             model: "claude-sonnet-4-6".to_string(),
             input_tokens: Some(5),
             output_tokens: Some(1),
+            cached_tokens: Some(3),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: CompletionResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.content, "world");
         assert_eq!(back.input_tokens, Some(5));
+        assert_eq!(back.cached_tokens, Some(3));
     }
 
     #[test]

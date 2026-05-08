@@ -8,6 +8,7 @@ agent007-core     = { path = "../core" }
 agent007-models   = { path = "../models" }
 agent007-skills   = { path = "../skills" }
 agent007-testing  = { path = "../testing" }
+agent007-etr      = { path = "../etr" }
 thiserror         = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
@@ -21,6 +22,9 @@ tracing           = { workspace = true }
 async-trait       = { workspace = true }
 tempfile          = { workspace = true }
 chrono            = { workspace = true }
+sha2              = "0.10"
+hex               = "0.4"
 
 [dev-dependencies]
 tokio     = { workspace = true }
+tempfile  = { workspace = true }

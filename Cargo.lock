@@ -13,6 +13,7 @@ name = "agent007"
 version = "0.2.0"
 dependencies = [
  "agent007-core",
+ "agent007-etr",
  "agent007-git-agent",
  "agent007-hooks",
  "agent007-ide-bridge",
@@ -85,6 +86,26 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "agent007-etr"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "csv",
+ "evalexpr",
+ "globset",
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -350,6 +371,7 @@ name = "agent007-web"
 version = "0.2.0"
 dependencies = [
  "agent007-core",
+ "agent007-etr",
  "agent007-extensions",
  "agent007-learning",
  "agent007-mcp",
@@ -390,16 +412,19 @@ name = "agent007-workflows"
 version = "0.2.0"
 dependencies = [
  "agent007-core",
+ "agent007-etr",
  "agent007-models",
  "agent007-skills",
  "agent007-testing",
  "async-trait",
  "chrono",
  "futures",
+ "hex",
  "petgraph 0.6.5",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "tera",
  "thiserror 1.0.69",
@@ -2339,6 +2364,12 @@ name = "ethnum"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
+
+[[package]]
+name = "evalexpr"
+version = "12.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae893d2d5e908b78f151ed89de3bfc272cdf6d368c7ed866942f98e24dea208a"
 
 [[package]]
 name = "event-listener"
@@ -5627,6 +5658,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

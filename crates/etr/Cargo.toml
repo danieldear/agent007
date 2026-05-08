@@ -1,0 +1,21 @@
+[package]
+name = "agent007-etr"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }
+thiserror   = { workspace = true }
+chrono      = { workspace = true }
+tracing     = { workspace = true }
+globset     = { workspace = true }
+uuid        = { workspace = true }
+# L1 tool deps
+regex       = "1"
+csv         = "1"
+evalexpr    = "12"
+similar     = { version = "2", features = ["text"] }
+sha2        = "0.10"
+hex         = "0.4"

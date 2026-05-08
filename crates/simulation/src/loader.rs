@@ -4,14 +4,14 @@ use crate::error::SimulationError;
 use crate::types::SimulationTemplate;
 
 // Embedded built-in templates (compile-time)
-const BUILTIN_WIFI_RTT: &str = include_str!("../templates/wifi-rtt.toml");
-const BUILTIN_WIFI_ROAMING: &str = include_str!("../templates/wifi-roaming.toml");
+const BUILTIN_SKILLS_SMOKE: &str = include_str!("../templates/skills-smoke.toml");
+const BUILTIN_WORKFLOW_SMOKE: &str = include_str!("../templates/workflow-smoke.toml");
 
 /// Maps built-in template names to their embedded TOML content.
 fn builtin_templates() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("wifi-rtt", BUILTIN_WIFI_RTT),
-        ("wifi-roaming", BUILTIN_WIFI_ROAMING),
+        ("skills-smoke", BUILTIN_SKILLS_SMOKE),
+        ("workflow-smoke", BUILTIN_WORKFLOW_SMOKE),
     ]
 }
 
@@ -144,26 +144,27 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn loader_finds_builtin_wifi_rtt() {
+    fn loader_finds_builtin_skills_smoke() {
         let loader = TemplateLoader::new_builtin_only();
-        let t = loader.load("wifi-rtt").unwrap();
-        assert_eq!(t.name, "wifi-rtt");
+        let t = loader.load("skills-smoke").unwrap();
+        assert_eq!(t.name, "skills-smoke");
         assert!(!t.scenarios.is_empty());
     }
 
     #[test]
-    fn loader_finds_builtin_wifi_roaming() {
+    fn loader_finds_builtin_workflow_smoke() {
         let loader = TemplateLoader::new_builtin_only();
-        let t = loader.load("wifi-roaming").unwrap();
-        assert_eq!(t.name, "wifi-roaming");
+        let t = loader.load("workflow-smoke").unwrap();
+        assert_eq!(t.name, "workflow-smoke");
+        assert!(!t.scenarios.is_empty());
     }
 
     #[test]
     fn loader_lists_builtins() {
         let loader = TemplateLoader::new_builtin_only();
         let names = loader.list();
-        assert!(names.contains(&"wifi-rtt".to_string()));
-        assert!(names.contains(&"wifi-roaming".to_string()));
+        assert!(names.contains(&"skills-smoke".to_string()));
+        assert!(names.contains(&"workflow-smoke".to_string()));
     }
 
     #[test]

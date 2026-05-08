@@ -4618,7 +4618,10 @@ use crate::mcp_registry::{
 /// `GET /api/mcp/servers`
 pub async fn mcp_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
     let home = agent007_write_home();
-    match refresh_mcp_server_statuses(&home).await.or_else(|_| load_mcp_registry(&home)) {
+    match refresh_mcp_server_statuses(&home)
+        .await
+        .or_else(|_| load_mcp_registry(&home))
+    {
         Ok(entries) => Json(serde_json::json!({ "servers": entries })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4837,6 +4840,65 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
     }
 }
 
+// ── ETR (Embedded Tool Runtime) API ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct EtrCallRequest {
+    pub tool: String,
+    pub input: Option<serde_json::Value>,
+    pub compact: Option<bool>,
+}
+
+pub async fn etr_list_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_etr::EtrDispatcher;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let dispatcher = EtrDispatcher::new(root);
+    let tools = dispatcher.list_tools();
+    Json(serde_json::json!({ "tools": tools })).into_response()
+}
+
+pub async fn etr_call_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<EtrCallRequest>,
+) -> impl IntoResponse {
+    use agent007_etr::{EtrCallRequest as EtrReq, EtrDispatcher};
+    let root = std::path::PathBuf::from(&state.project_path);
+    let dispatcher = EtrDispatcher::new(root);
+    let req = EtrReq {
+        tool: payload.tool,
+        input: payload.input.unwrap_or_else(|| serde_json::json!({})),
+        compact: payload.compact.unwrap_or(true),
+    };
+    let result = dispatcher.call(req);
+    Json(
+        serde_json::to_value(&result)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+    )
+    .into_response()
+}
+
+pub async fn etr_cache_stats_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_workflows::cache::StepCache;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let cache = StepCache::new(&root);
+    let (entries, size_bytes) = cache.stats();
+    Json(serde_json::json!({ "entries": entries, "size_bytes": size_bytes })).into_response()
+}
+
+pub async fn etr_cache_clear_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_workflows::cache::StepCache;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let cache = StepCache::new(&root);
+    match cache.clear() {
+        Ok(cleared) => Json(serde_json::json!({ "ok": true, "cleared": cleared })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -4893,7 +4955,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_tool_import_quarantine_approve_and_test_flow() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(project.path().join(".agent007")).unwrap();
@@ -4984,7 +5046,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_run_accepts_task() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ts = test_server();
         let response = ts
             .post("/api/run")
@@ -5028,7 +5090,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_skills_reports_collision_metadata_with_project_precedence() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_skill_fixture(project.path(), "project_skill.md", "/dupe", "Project Skill");
@@ -5098,7 +5160,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_workflows_reports_collision_metadata_with_project_precedence() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_workflow_fixture(project.path(), "dupe.yaml", "Project Workflow");
@@ -5168,7 +5230,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_skills_respects_agent007_home_override() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let override_home = tempfile::tempdir().unwrap();
@@ -5254,7 +5316,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_memory_scopes_keep_global_and_project_isolated() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
         let project_home = project.path().join(".agent007");
@@ -5316,7 +5378,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_memory_stats_reports_type_counts_and_learning_skills() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let project = tempfile::tempdir().unwrap();
         let project_home = project.path().join(".agent007");
         std::fs::create_dir_all(&project_home).unwrap();
@@ -5398,7 +5460,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_stats_uses_shared_run_store_snapshot() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -5461,7 +5523,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_scorecards_returns_recent_scorecards() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -5528,7 +5590,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_regression_evaluate_reports_threshold_failures() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("AGENT007_HOME", home.path());
 
@@ -5601,7 +5663,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_run_approval_records_decision() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -5678,7 +5740,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_run_approval_rejects_external_workflow_run() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -5754,7 +5816,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_run_resume_creates_new_session() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         let workflows = home.path().join("workflows");
@@ -5907,7 +5969,7 @@ requires_approval = true
 
     #[tokio::test]
     async fn api_run_resume_rejects_external_workflow_run() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         let workflows = home.path().join("workflows");
@@ -6005,7 +6067,7 @@ requires_approval = true
 
     #[tokio::test]
     async fn api_runs_cleanup_awaiting_closes_only_stale_non_dashboard_runs() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions_dir = home.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -6083,7 +6145,7 @@ requires_approval = true
 
     #[tokio::test]
     async fn api_run_resume_allows_retry_when_previous_resume_failed() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let sessions = home.path().join("sessions").join("session-1");
         let workflows = home.path().join("workflows");

@@ -354,9 +354,7 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
             model: provider_label,
             tokens,
             started_at: run.started_at.to_rfc3339(),
-            finished_at: run
-                .finished_at
-                .map(|value| value.to_rfc3339()),
+            finished_at: run.finished_at.map(|value| value.to_rfc3339()),
         });
         if metrics.recent_tasks.len() > MAX_RECENT_TASKS {
             metrics.recent_tasks.pop_front();
