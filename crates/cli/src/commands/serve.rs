@@ -3780,11 +3780,54 @@ fn hosted_workflow_response(
         })
         .collect();
 
+    // When the workflow is waiting for human approval, build an explicit STOP block
+    // so the AI cannot miss it and auto-approve.
+    let approval_gate = if progress.status
+        == agent007_workflows::HostedWorkflowProgressStatus::AwaitingApproval
+    {
+        if let Some(pa) = &progress.pending_approval {
+            let default_prompt = format!(
+                "The workflow has paused at step '{}' and requires your decision.\n\
+                Please review the content above and reply with one of:\n\
+                - **approve** — accept the output and continue\n\
+                - **deny** — reject the output and stop the workflow\n\
+                - **edit: <your revised text>** — replace the output with your own version",
+                pa.step_id
+            );
+            let prompt = pa
+                .approval_prompt
+                .as_deref()
+                .unwrap_or(&default_prompt)
+                .to_string();
+            Some(serde_json::json!({
+                "HUMAN_APPROVAL_REQUIRED": true,
+                "step_id": pa.step_id,
+                "content": pa.content,
+                "content_preview": pa.content_preview,
+                "approval_prompt": prompt,
+                "STOP_INSTRUCTIONS": [
+                    "⛔ DO NOT call agent007_workflow_approve autonomously.",
+                    "⛔ DO NOT continue the workflow without explicit human input.",
+                    "✅ END your current response immediately after presenting the content.",
+                    "✅ Show the full 'content' field above to the user in your chat response.",
+                    "✅ Show the 'approval_prompt' message verbatim to the user.",
+                    "✅ Wait for the user's reply in the NEXT conversation turn.",
+                    "✅ Only after receiving their decision: call agent007_workflow_approve with decision=approve|deny|edit.",
+                ]
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "session": session,
         "mode": "hosted-mcp",
         "request": request,
         "progress": progress,
+        "approval_gate": approval_gate,
         "running_step_liveness": running_liveness,
         "warnings": stale_warnings,
         "workflow_state": state,
@@ -3816,10 +3859,14 @@ fn hosted_workflow_response(
                 "8. For long-running steps, call agent007_workflow_heartbeat periodically to report progress and prevent stale detection.",
                 "9. Call agent007_workflow_next to get the next batch of ready steps.",
                 "10. Repeat until progress.status is 'succeeded' or 'failed'.",
-                "11. If status is 'awaiting-approval', call agent007_workflow_approve with your decision.",
-                "    - Before approving, surface progress.pending_approval.content_preview (and the full content when available) back to the user in this same conversation.",
-                "    - Collect the user's approve/edit/deny decision inline in this client, not in the web dashboard.",
-                "    - After recording the decision, call agent007_workflow_next to continue.",
+                "11. ⚠️ HUMAN APPROVAL GATE — if status is 'awaiting-approval' OR 'approval_gate' is present in this response:",
+                "    ⛔ DO NOT call agent007_workflow_approve autonomously.",
+                "    ⛔ DO NOT continue executing workflow steps.",
+                "    ✅ Read approval_gate.content (the full step output) and approval_gate.approval_prompt.",
+                "    ✅ Present the content AND the approval_prompt to the user in your chat response, then END your response.",
+                "    ✅ Wait for the user's explicit decision in their next message.",
+                "    ✅ After they respond, call agent007_workflow_approve with decision=approve|deny|edit.",
+                "    ✅ Then call agent007_workflow_next to continue.",
             ],
             "model_hint_values": {
                 "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
@@ -6145,6 +6192,12 @@ requires_approval = true
         let waiting = workflow_hosted_submit_step(&session, "plan", "draft plan", None).unwrap();
         let waiting: serde_json::Value = serde_json::from_str(&waiting).unwrap();
         assert_eq!(waiting["progress"]["status"], "awaiting-approval");
+        // approval_gate must be present with HUMAN_APPROVAL_REQUIRED so the host LLM stops
+        assert_eq!(waiting["approval_gate"]["HUMAN_APPROVAL_REQUIRED"], true);
+        assert_eq!(waiting["approval_gate"]["step_id"], "plan");
+        assert_eq!(waiting["approval_gate"]["content"], "draft plan");
+        // STOP_INSTRUCTIONS must be non-empty
+        assert!(waiting["approval_gate"]["STOP_INSTRUCTIONS"].as_array().unwrap().len() > 0);
 
         let approval =
             workflow_approve(&session, None, "edit", Some("approved plan".to_string())).unwrap();

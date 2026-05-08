@@ -149,6 +149,9 @@ pub struct StepDef {
     pub skill: Option<String>,
     pub output: Option<String>,
     pub requires_approval: Option<bool>,
+    /// Optional prompt shown to the user at the approval gate. If set, the AI must
+    /// present this message verbatim when asking the user for their approve/deny/edit decision.
+    pub approval_prompt: Option<String>,
     #[serde(default, rename = "type")]
     pub r#type: StepType,
     pub evaluate: Option<EvaluateConfig>,
