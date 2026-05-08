@@ -8,6 +8,9 @@ pub struct OllamaProvider {
     base_url: String,
     model: String,
     provider_name: String,
+    /// Duration to keep model loaded in Ollama after the last request.
+    /// Prevents cold-start reload between workflow steps. E.g. "10m", "1h", "-1" (forever).
+    keep_alive: String,
 }
 
 impl OllamaProvider {
@@ -17,7 +20,15 @@ impl OllamaProvider {
             base_url: base_url.to_string(),
             model: model.to_string(),
             provider_name,
+            keep_alive: "10m".to_string(),
         }
+    }
+
+    /// Override how long Ollama keeps the model loaded after the last request.
+    /// Defaults to `"10m"`. Use `"-1"` to keep forever, `"0"` to unload immediately.
+    pub fn with_keep_alive(mut self, keep_alive: &str) -> Self {
+        self.keep_alive = keep_alive.to_string();
+        self
     }
 
     pub fn build_body(
@@ -31,6 +42,7 @@ impl OllamaProvider {
             "model": model,
             "messages": messages,
             "stream": false,
+            "keep_alive": self.keep_alive,
         });
 
         if max_tokens.is_some() || temperature.is_some() {
@@ -67,6 +79,12 @@ impl ModelProvider for OllamaProvider {
 
         // Prepend system message if provided
         if let Some(system_content) = request.system {
+            if system_content.len() > 1000 {
+                tracing::debug!(
+                    len = system_content.len(),
+                    "Ollama: large system prompt — no server-side caching available for local models"
+                );
+            }
             messages.insert(
                 0,
                 Message {
@@ -110,6 +128,7 @@ impl ModelProvider for OllamaProvider {
             model: model.to_string(),
             input_tokens: None,
             output_tokens: None,
+            cached_tokens: None,
         })
     }
 }
@@ -138,6 +157,23 @@ mod tests {
         assert_eq!(v["messages"][0]["role"], "user");
         assert_eq!(v["messages"][0]["content"], "hello");
         assert_eq!(v["stream"], false);
+        assert_eq!(v["keep_alive"], "10m");
+    }
+
+    #[test]
+    fn ollama_keep_alive_default_is_10m() {
+        let p = OllamaProvider::new("http://localhost:11434", "llama3");
+        let body = p.build_body("llama3", &[], None, None);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["keep_alive"], "10m");
+    }
+
+    #[test]
+    fn ollama_keep_alive_configurable() {
+        let p = OllamaProvider::new("http://localhost:11434", "llama3").with_keep_alive("-1");
+        let body = p.build_body("llama3", &[], None, None);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["keep_alive"], "-1");
     }
 
     #[test]

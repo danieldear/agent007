@@ -1644,6 +1644,7 @@ mod tests {
                 model: "sequence".to_string(),
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             })
         }
     }

@@ -32,6 +32,7 @@ mod tests {
                 model: "test".to_string(),
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             })
         }
         fn name(&self) -> &str {

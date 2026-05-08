@@ -175,6 +175,7 @@ mod tests {
                 model: request.model,
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             })
         }
     }

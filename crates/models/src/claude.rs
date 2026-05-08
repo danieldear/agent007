@@ -128,6 +128,9 @@ impl ModelProvider for ClaudeProvider {
             model: model.to_string(),
             input_tokens: json["usage"]["input_tokens"].as_u64().map(|x| x as u32),
             output_tokens: json["usage"]["output_tokens"].as_u64().map(|x| x as u32),
+            cached_tokens: json["usage"]["cache_read_input_tokens"]
+                .as_u64()
+                .map(|x| x as u32),
         })
     }
 }
