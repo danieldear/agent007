@@ -6,6 +6,7 @@ pub mod grep;
 pub mod json_extract;
 pub mod json_query;
 pub mod math;
+pub mod text_extract;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -19,6 +20,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.glob" => glob::run(input),
         "etr.file_stat" => file_stat::run(input),
         "etr.math" => math::run(input),
+        "etr.text_extract" => text_extract::run(input),
         "etr.diff" => diff::run(input),
         other => anyhow::bail!("Unknown L1 tool: {other}"),
     }
@@ -95,6 +97,19 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "expression": "string"
             }),
             output_schema: serde_json::json!({"result": "number or string"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.text_extract".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Extract regex matches from text or file with optional capture group".into(),
+            input_schema: serde_json::json!({
+                "pattern": "string (regex)",
+                "path": "string (optional; file path)",
+                "text": "string (optional; inline text)",
+                "group": "integer (optional, default 0)",
+                "max_matches": "integer (optional, default 100)"
+            }),
+            output_schema: serde_json::json!({"matches": "array", "count": "integer", "truncated": "boolean"}),
         },
         crate::types::ToolManifest {
             name: "etr.diff".into(),
