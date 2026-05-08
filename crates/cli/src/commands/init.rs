@@ -3365,6 +3365,24 @@ When running hosted workflows (`agent007_workflow_start` / `agent007_workflow_ne
 - **If unsure what's available**, call `agent007_skill_list` or `agent007_workflow_list`
 - **Do not add `--no-dashboard`** to `agent007 serve` — the dashboard is always on
 - **MCP server:** `agent007 serve`  |  **Dashboard:** `http://localhost:8007`
+
+---
+
+## MCP efficiency rules (all agents)
+
+When interacting with `agent007` MCP tools:
+
+1. **Call MCP tools directly** (`agent007_workflow_status`, `agent007_workflow_next`, etc.).
+2. **Do not generate Python/temp-file JSON parsing scripts** unless explicitly required.
+3. **Do not dump full JSON by default**; provide compact status summaries:
+   - completed/total
+   - running step IDs
+   - ready step IDs
+   - pending approval step
+   - last error
+4. **Only show full prompts/outputs when requested** by the user.
+5. **Avoid repeating unchanged workflow state** across polls.
+6. **Prefer concise structured updates** over verbose logs to reduce token/context bloat.
 "#;
 
 #[cfg(test)]
