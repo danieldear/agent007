@@ -8,6 +8,7 @@ pub mod json_query;
 pub mod math;
 pub mod table_stats;
 pub mod text_extract;
+pub mod workflow_status_summary;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -23,6 +24,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.math" => math::run(input),
         "etr.table_stats" => table_stats::run(input),
         "etr.text_extract" => text_extract::run(input),
+        "etr.workflow_status_summary" => workflow_status_summary::run(input),
         "etr.diff" => diff::run(input),
         other => anyhow::bail!("Unknown L1 tool: {other}"),
     }
@@ -123,6 +125,23 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "max_matches": "integer (optional, default 100)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer", "truncated": "boolean"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.workflow_status_summary".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Summarize hosted workflow progress JSON into compact status fields".into(),
+            input_schema: serde_json::json!({
+                "path": "string (JSON file path)"
+            }),
+            output_schema: serde_json::json!({
+                "completed_steps":"integer",
+                "total_steps":"integer",
+                "running_steps":"array of string",
+                "ready_steps":"array of string",
+                "pending_approval":"string|null",
+                "last_error":"any",
+                "outputs_available":"array of string"
+            }),
         },
         crate::types::ToolManifest {
             name: "etr.diff".into(),
