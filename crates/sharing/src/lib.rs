@@ -1665,18 +1665,18 @@ mod tests {
         std::fs::create_dir_all(&skills_dir).unwrap();
         std::fs::create_dir_all(&workflows_dir).unwrap();
         std::fs::create_dir_all(&tools_dir).unwrap();
-        std::fs::write(tools_dir.join("ftm_excel_report.py"), "print('ok')\n").unwrap();
+        std::fs::write(tools_dir.join("sample_report.py"), "print('ok')\n").unwrap();
 
         let bundle = BundleBuilder::new([&skills_dir], [&workflows_dir]).build(
             &["__none__"],
             &["__none__"],
             &["__none__"],
-            &["ftm_excel_report.py"],
+            &["sample_report.py"],
         );
 
         let bundle = bundle.expect("tools-only selection should succeed");
         assert_eq!(bundle.tools.len(), 1, "expected flat tool file export");
-        assert_eq!(bundle.tools[0].filename, "ftm_excel_report.py");
+        assert_eq!(bundle.tools[0].filename, "sample_report.py");
     }
 
     #[test]

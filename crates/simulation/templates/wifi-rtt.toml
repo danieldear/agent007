@@ -1,7 +1,7 @@
 name = "wifi-rtt"
 description = "WiFi Round-Trip Time (RTT) / Fine Timing Measurement positioning simulation"
 research_topics = [
-    "IEEE 802.11mc FTM protocol",
+    "IEEE 802.11mc RTT protocol",
     "path loss models (free-space, log-distance)",
     "multipath propagation effects",
     "anchor placement algorithms",
