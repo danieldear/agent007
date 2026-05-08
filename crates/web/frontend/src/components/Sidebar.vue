@@ -9,6 +9,20 @@ const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
 
+const theme = ref(localStorage.getItem('theme') || 'dark')
+
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t)
+  localStorage.setItem('theme', t)
+  theme.value = t
+}
+
+function toggleTheme() {
+  applyTheme(theme.value === 'dark' ? 'light' : 'dark')
+}
+
+onMounted(() => applyTheme(theme.value))
+
 onMounted(async () => {
   try {
     const stats = await api.getStats()
@@ -67,16 +81,21 @@ const navItems = [
       </button>
     </nav>
 
-    <!-- Connection status -->
+    <!-- Connection status + theme toggle -->
     <div class="px-4 py-3 border-t border-base-300/80">
       <div class="flex items-center gap-2">
         <span
           class="w-1.5 h-1.5 rounded-full shrink-0"
           :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"
         />
-        <span class="text-[11px] font-mono" :class="connected ? 'text-success/70' : 'text-error/70'">
+        <span class="text-[11px] font-mono flex-1" :class="connected ? 'text-success/70' : 'text-error/70'">
           {{ connected ? 'ws:live' : 'ws:off' }}
         </span>
+        <button
+          class="btn btn-ghost btn-xs text-base-content/40 hover:text-base-content p-0 w-6 h-6 min-h-0"
+          :title="theme === 'dark' ? 'Switch to light' : 'Switch to dark'"
+          @click="toggleTheme"
+        >{{ theme === 'dark' ? '☀' : '🌙' }}</button>
       </div>
     </div>
   </aside>

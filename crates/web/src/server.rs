@@ -257,6 +257,10 @@ impl WebServer {
                 post(extensions_api::uninstall_handler),
             )
             .route("/api/extensions/list", get(extensions_api::list_handler))
+            .route("/api/etr/tools", get(api::etr_list_handler))
+            .route("/api/etr/call", post(api::etr_call_handler))
+            .route("/api/etr/cache/stats", get(api::etr_cache_stats_handler))
+            .route("/api/etr/cache/clear", post(api::etr_cache_clear_handler))
             .route("/assets/{*path}", get(asset_handler))
             .with_state(self.state)
     }

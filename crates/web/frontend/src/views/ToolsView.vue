@@ -334,6 +334,66 @@ async function runTest() {
   }
 }
 
+// ── ETR state ───────────────────────────────────────────────────────────
+const etrTools       = ref([])
+const etrLoading     = ref(false)
+const etrSelected    = ref(null)
+const etrInputJson   = ref('{}')
+const etrCompact     = ref(true)
+const etrResult      = ref(null)
+const etrRunning     = ref(false)
+const etrCacheStats  = ref(null)
+
+// Sample payloads keyed by tool name
+const ETR_SAMPLES = {
+  'etr.grep':         JSON.stringify({ pattern: 'TODO', path: '.', file_glob: '*.rs' }, null, 2),
+  'etr.json_extract': JSON.stringify({ path: 'package.json', query: '$.name' }, null, 2),
+  'etr.csv_slice':    JSON.stringify({ path: 'data.csv', rows: [0, 10] }, null, 2),
+  'etr.glob':         JSON.stringify({ pattern: 'src/**/*.rs', root: '.' }, null, 2),
+  'etr.file_stat':    JSON.stringify({ path: 'Cargo.toml' }, null, 2),
+  'etr.math':         JSON.stringify({ expr: '2 + 2 * 21' }, null, 2),
+  'etr.diff':         JSON.stringify({ a: 'hello world', b: 'hello rust' }, null, 2),
+}
+
+function selectEtrTool(tool) {
+  etrSelected.value = tool
+  etrResult.value = null
+  etrInputJson.value = ETR_SAMPLES[tool.name] || '{}'
+}
+
+async function runEtrTool() {
+  if (!etrSelected.value || etrRunning.value) return
+  etrRunning.value = true
+  etrResult.value = null
+  try {
+    let input = {}
+    try { input = JSON.parse(etrInputJson.value) } catch { /* keep {} */ }
+    etrResult.value = await api.etrCall(etrSelected.value.name, input, etrCompact.value)
+  } catch (e) {
+    etrResult.value = { status: 'error', error: e.message }
+  } finally {
+    etrRunning.value = false
+  }
+}
+
+async function loadEtrTools() {
+  etrLoading.value = true
+  try {
+    const data = await api.etrListTools()
+    etrTools.value = (data?.tools || []).filter(t => t.name !== 'etr.list')
+    if (etrTools.value.length && !etrSelected.value) selectEtrTool(etrTools.value[0])
+    const stats = await api.etrCacheStats()
+    etrCacheStats.value = stats
+  } catch {}
+  finally { etrLoading.value = false }
+}
+
+async function clearEtrCache() {
+  await api.etrCacheClear()
+  const stats = await api.etrCacheStats()
+  etrCacheStats.value = stats
+}
+
 onMounted(loadTools)
 </script>
 
@@ -369,14 +429,14 @@ onMounted(loadTools)
     <!-- Tab bar -->
     <div class="flex items-center gap-0 px-5 bg-base-200 border-b border-base-300 shrink-0">
       <button
-        v-for="tab in ['registry', 'import', 'test']"
+        v-for="tab in ['registry', 'import', 'test', 'etr']"
         :key="tab"
         class="px-4 py-2.5 text-[11px] font-mono uppercase tracking-widest border-b-2 transition-colors"
         :class="activeTab === tab
           ? 'border-primary text-primary'
           : 'border-transparent text-base-content/40 hover:text-base-content/70'"
-        @click="activeTab = tab"
-      >{{ tab }}</button>
+        @click="activeTab = tab; if (tab === 'etr') loadEtrTools()"
+      >{{ tab === 'etr' ? '⚡ etr native' : tab }}</button>
     </div>
 
     <!-- ─────────────────────────────────────────────────────────────────
@@ -868,6 +928,125 @@ onMounted(loadTools)
 
       <div v-else-if="!testRunning" class="flex flex-col items-center justify-center py-16 gap-2 text-base-content/20">
         <p class="text-xs font-mono uppercase tracking-widest">select a tool and run it</p>
+      </div>
+
+    </div>
+
+    <!-- ─────────────────────────────────────────────────────────────────
+         ETR NATIVE TAB
+    ──────────────────────────────────────────────────────────────────── -->
+    <div v-if="activeTab === 'etr'" class="flex-1 overflow-hidden flex">
+
+      <!-- Left: tool list -->
+      <aside class="w-56 shrink-0 border-r border-base-300 flex flex-col overflow-hidden bg-base-200">
+        <div class="px-3 py-2.5 border-b border-base-300 flex items-center justify-between">
+          <span class="text-[10px] font-mono uppercase tracking-widest text-base-content/35">Native L1 Tools</span>
+          <span class="badge badge-xs badge-warning font-mono">built-in</span>
+        </div>
+
+        <!-- cache stats -->
+        <div v-if="etrCacheStats" class="px-3 py-2 border-b border-base-300/60 bg-base-300/20 flex items-center gap-2">
+          <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">cache</span>
+          <span class="text-[10px] font-mono text-base-content/50">{{ etrCacheStats.entries }} entries</span>
+          <span class="text-[10px] font-mono text-base-content/30">·</span>
+          <span class="text-[10px] font-mono text-base-content/40">{{ (etrCacheStats.size_bytes / 1024).toFixed(1) }}KB</span>
+          <button v-if="etrCacheStats.entries > 0" class="ml-auto text-[9px] font-mono text-error/50 hover:text-error transition-colors" @click="clearEtrCache" title="Clear cache">✕</button>
+        </div>
+
+        <div v-if="etrLoading" class="py-10 flex justify-center">
+          <span class="loading loading-spinner loading-sm text-primary/40"></span>
+        </div>
+        <div v-else class="flex-1 overflow-auto py-1">
+          <button
+            v-for="tool in etrTools"
+            :key="tool.name"
+            class="w-full text-left px-3 py-2.5 flex flex-col gap-0.5 transition-colors"
+            :class="etrSelected?.name === tool.name
+              ? 'bg-primary/10 border-l-2 border-primary'
+              : 'hover:bg-base-300/50 border-l-2 border-transparent'"
+            @click="selectEtrTool(tool)"
+          >
+            <div class="flex items-center gap-1.5">
+              <span class="text-[9px] font-mono text-warning/70">⚡</span>
+              <span class="text-[11px] font-mono text-base-content/80 font-medium">{{ tool.name }}</span>
+            </div>
+            <p class="text-[10px] text-base-content/40 truncate pl-3.5">{{ tool.description }}</p>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Right: test console -->
+      <div class="flex-1 overflow-auto p-5 space-y-4">
+        <div v-if="!etrSelected" class="flex flex-col items-center justify-center h-full gap-2 text-base-content/20">
+          <span class="text-4xl">⚡</span>
+          <p class="text-xs font-mono uppercase tracking-widest">select a native tool</p>
+        </div>
+
+        <template v-else>
+          <!-- Tool header -->
+          <div class="flex items-start justify-between">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-warning/70">⚡</span>
+                <h2 class="font-mono text-sm font-bold text-base-content/80">{{ etrSelected.name }}</h2>
+                <span class="badge badge-xs badge-warning font-mono">L1 · Rust</span>
+                <span class="badge badge-xs badge-success font-mono">0 tokens</span>
+              </div>
+              <p class="text-[11px] text-base-content/45 mt-1 pl-5">{{ etrSelected.description }}</p>
+            </div>
+          </div>
+
+          <!-- Input -->
+          <div class="space-y-1.5">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-mono uppercase tracking-widest text-base-content/30">Input JSON</span>
+              <div class="flex-1 h-px bg-base-content/8"></div>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" class="checkbox checkbox-xs" v-model="etrCompact" />
+                <span class="text-[10px] font-mono text-base-content/40">compact output</span>
+              </label>
+            </div>
+            <textarea
+              class="textarea textarea-bordered w-full h-28 font-mono text-xs resize-none"
+              v-model="etrInputJson"
+              placeholder="{}"
+              spellcheck="false"
+            />
+          </div>
+
+          <!-- Run button -->
+          <button
+            class="btn btn-sm btn-warning font-mono gap-1.5"
+            :disabled="etrRunning"
+            @click="runEtrTool"
+          >
+            <span v-if="etrRunning" class="loading loading-spinner loading-xs"></span>
+            <span v-else>⚡</span>
+            {{ etrRunning ? 'running...' : 'run tool' }}
+          </button>
+
+          <!-- Result -->
+          <div v-if="etrResult" class="space-y-3">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-mono uppercase tracking-widest text-base-content/30">Result</span>
+              <span class="badge badge-sm font-mono"
+                :class="etrResult.status === 'ok' ? 'badge-success' : etrResult.status === 'denied' ? 'badge-warning' : 'badge-error'">
+                {{ etrResult.status || 'error' }}
+              </span>
+              <span v-if="etrResult.latency_ms != null" class="text-[11px] font-mono text-base-content/30">
+                {{ etrResult.latency_ms }}ms
+              </span>
+              <span v-if="etrResult.truncated" class="text-[10px] font-mono text-warning/60">truncated</span>
+              <div class="flex-1 h-px bg-base-content/8"></div>
+            </div>
+            <div class="rounded-xl bg-base-200 border border-base-300 p-4">
+              <pre class="text-[11px] font-mono whitespace-pre-wrap text-base-content/75 max-h-64 overflow-auto">{{ typeof etrResult.output === 'string' ? etrResult.output : JSON.stringify(etrResult.output, null, 2) }}</pre>
+            </div>
+            <div v-if="etrResult.error" class="px-3 py-2 rounded-lg bg-error/10 border border-error/20">
+              <p class="text-[11px] font-mono text-error/70">{{ etrResult.error }}</p>
+            </div>
+          </div>
+        </template>
       </div>
 
     </div>

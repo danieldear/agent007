@@ -4837,6 +4837,64 @@ impl agent007_memory::VectorDB for NoOpVectorDB {
     }
 }
 
+// ── ETR (Embedded Tool Runtime) API ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct EtrCallRequest {
+    pub tool: String,
+    pub input: Option<serde_json::Value>,
+    pub compact: Option<bool>,
+}
+
+pub async fn etr_list_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_etr::EtrDispatcher;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let dispatcher = EtrDispatcher::new(root);
+    let tools = dispatcher.list_tools();
+    Json(serde_json::json!({ "tools": tools })).into_response()
+}
+
+pub async fn etr_call_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<EtrCallRequest>,
+) -> impl IntoResponse {
+    use agent007_etr::{EtrCallRequest as EtrReq, EtrDispatcher};
+    let root = std::path::PathBuf::from(&state.project_path);
+    let dispatcher = EtrDispatcher::new(root);
+    let req = EtrReq {
+        tool: payload.tool,
+        input: payload.input.unwrap_or_else(|| serde_json::json!({})),
+        compact: payload.compact.unwrap_or(true),
+    };
+    let result = dispatcher.call(req);
+    Json(serde_json::to_value(&result).unwrap_or_else(|e| {
+        serde_json::json!({ "error": e.to_string() })
+    }))
+    .into_response()
+}
+
+pub async fn etr_cache_stats_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_workflows::cache::StepCache;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let cache = StepCache::new(&root);
+    let (entries, size_bytes) = cache.stats();
+    Json(serde_json::json!({ "entries": entries, "size_bytes": size_bytes })).into_response()
+}
+
+pub async fn etr_cache_clear_handler(State(state): State<AppState>) -> impl IntoResponse {
+    use agent007_workflows::cache::StepCache;
+    let root = std::path::PathBuf::from(&state.project_path);
+    let cache = StepCache::new(&root);
+    match cache.clear() {
+        Ok(cleared) => Json(serde_json::json!({ "ok": true, "cleared": cleared })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

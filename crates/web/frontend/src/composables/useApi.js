@@ -159,6 +159,13 @@ export function useApi() {
     // Skill generation
     generateSkill: (data) => fetchJson('/api/skills/generate', { method: 'POST', body: JSON.stringify(data) }),
 
+    // ETR (Embedded Tool Runtime)
+    etrListTools: () => fetchJson('/api/etr/tools'),
+    etrCall: (tool, input = {}, compact = true) =>
+      fetchJson('/api/etr/call', { method: 'POST', body: JSON.stringify({ tool, input, compact }) }),
+    etrCacheStats: () => fetchJson('/api/etr/cache/stats'),
+    etrCacheClear: () => fetchJson('/api/etr/cache/clear', { method: 'POST' }),
+
     // Extensions
     previewExtension: (data) => fetchJson('/api/extensions/preview', { method: 'POST', body: JSON.stringify(data) }),
     installExtension: (data) => fetchJson('/api/extensions/install', { method: 'POST', body: JSON.stringify(data) }),

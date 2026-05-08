@@ -27,6 +27,13 @@ const slashFilter = ref('')
 const slashMenuIndex = ref(0)
 const slashMenuRef = ref(null)
 
+// ETR cache stats
+const etrCacheStats = ref(null)
+
+// Run list filter
+const runFilter = ref('')
+const runStatusFilter = ref('')
+
 watch(slashMenuIndex, (idx) => {
   nextTick(() => {
     const items = slashMenuRef.value?.querySelectorAll('button[data-slash-item]')
@@ -119,6 +126,7 @@ onMounted(async () => {
   health.value = await api.health()
   metrics.value = await api.getStats() || null
   await refreshRuns()
+  loadEtrCacheStats()
   refreshTimer = setInterval(async () => {
     try {
       metrics.value = await api.getStats() || metrics.value
@@ -300,6 +308,45 @@ function fmtConfidence(value) {
 function fmtPct(value) {
   if (typeof value !== 'number') return '0%'
   return `${(value * 100).toFixed(1)}%`
+}
+
+// Sparkline: build SVG polyline path from an array of numbers
+function sparklinePath(values, width = 80, height = 24) {
+  if (!values || values.length < 2) return ''
+  const max = Math.max(...values) || 1
+  const step = width / (values.length - 1)
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(height - (v / max) * height).toFixed(1)}`)
+  return pts.join(' ')
+}
+
+// Last N token counts from recent_tasks
+const tokenSparkline = computed(() => {
+  const tasks = m.value.recent_tasks || []
+  return tasks.slice(-12).map(t => t.tokens || 0)
+})
+
+// Filtered runs for the persisted runs list
+const filteredRuns = computed(() => {
+  let list = runs.value
+  if (runStatusFilter.value) list = list.filter(r => r.status === runStatusFilter.value)
+  if (runFilter.value.trim()) {
+    const q = runFilter.value.toLowerCase()
+    list = list.filter(r =>
+      (r.task || '').toLowerCase().includes(q) ||
+      (r.kind || '').toLowerCase().includes(q) ||
+      (r.id || '').toLowerCase().includes(q)
+    )
+  }
+  return list
+})
+
+async function loadEtrCacheStats() {
+  try { etrCacheStats.value = await api.etrCacheStats() } catch {}
+}
+
+async function clearEtrCache() {
+  await api.etrCacheClear()
+  loadEtrCacheStats()
 }
 
 async function refreshRuns() {
@@ -565,6 +612,55 @@ async function submitTask() {
         </div>
       </div>
 
+      <!-- ETR Cache Stats row -->
+      <div class="grid grid-cols-4 gap-2" v-if="etrCacheStats">
+        <div class="bg-base-200 rounded-lg p-3 border border-warning/30 col-span-3 flex items-center gap-4">
+          <span class="text-warning text-sm">⚡</span>
+          <div>
+            <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">ETR Step Cache</div>
+            <div class="text-xs font-mono text-base-content mt-0.5">
+              {{ etrCacheStats.entries ?? 0 }} entries
+              <span class="text-base-content/30 mx-1">·</span>
+              {{ etrCacheStats.size_bytes ? (etrCacheStats.size_bytes / 1024).toFixed(1) + ' KB' : '0 KB' }}
+            </div>
+          </div>
+          <div class="ml-auto flex gap-3 text-center">
+            <div>
+              <div class="text-[9px] font-mono text-base-content/30">Hits</div>
+              <div class="text-sm font-bold font-mono text-success">{{ etrCacheStats.hits ?? '—' }}</div>
+            </div>
+            <div>
+              <div class="text-[9px] font-mono text-base-content/30">Misses</div>
+              <div class="text-sm font-bold font-mono text-warning">{{ etrCacheStats.misses ?? '—' }}</div>
+            </div>
+            <div v-if="etrCacheStats.hits !== undefined && etrCacheStats.misses !== undefined && (etrCacheStats.hits + etrCacheStats.misses) > 0">
+              <div class="text-[9px] font-mono text-base-content/30">Hit Rate</div>
+              <div class="text-sm font-bold font-mono text-success">{{ ((etrCacheStats.hits / (etrCacheStats.hits + etrCacheStats.misses)) * 100).toFixed(0) }}%</div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50 flex flex-col justify-center items-center gap-2">
+          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Cache Actions</div>
+          <button class="btn btn-xs btn-warning btn-outline font-mono" @click="clearEtrCache">Clear Cache</button>
+        </div>
+      </div>
+
+      <!-- Sparkline token trend (visible only when we have enough data) -->
+      <div v-if="tokenSparkline.length >= 4" class="bg-base-200 rounded-lg px-4 py-2 border border-base-300/50 flex items-center gap-3">
+        <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest shrink-0">Token Trend</span>
+        <svg :width="160" :height="24" class="shrink-0 opacity-60">
+          <polyline
+            :points="sparklinePath(tokenSparkline, 160, 24)"
+            fill="none"
+            stroke="oklch(var(--s))"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+          />
+        </svg>
+        <span class="text-[9px] font-mono text-base-content/30">last {{ tokenSparkline.length }} tasks · latest {{ fmtTokens(tokenSparkline[tokenSparkline.length - 1]) }} tok</span>
+      </div>
+
       <!-- Recent Tasks (session) -->
       <div class="bg-base-200 rounded-xl border border-base-300 flex flex-col" style="max-height: 26vh">
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center shrink-0">
@@ -620,19 +716,34 @@ async function submitTask() {
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
           <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
           <div class="flex items-center gap-3">
-            <span class="text-[10px] font-mono text-base-content/30">{{ runs.length }} runs</span>
+            <span class="text-[10px] font-mono text-base-content/30">{{ filteredRuns.length }}/{{ runs.length }} runs</span>
             <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="cleanupStaleApprovals">
               cleanup stale approvals
             </button>
             <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuns">↺ refresh</button>
           </div>
         </div>
+        <!-- Filter bar -->
+        <div class="px-4 py-2 border-b border-base-300/40 flex items-center gap-2 flex-wrap">
+          <input
+            v-model="runFilter"
+            class="input input-xs input-bordered font-mono text-[10px] w-40"
+            placeholder="search runs…"
+          />
+          <button
+            v-for="s in ['', 'running', 'completed', 'failed', 'awaiting_approval']"
+            :key="s"
+            class="btn btn-xs font-mono text-[10px]"
+            :class="runStatusFilter === s ? 'btn-primary' : 'btn-ghost'"
+            @click="runStatusFilter = s"
+          >{{ s === '' ? 'all' : s.replace('_', ' ') }}</button>
+        </div>
         <div v-if="cleanupStatus" class="px-4 py-2 text-[10px] font-mono text-base-content/45 border-b border-base-300/40">
           {{ cleanupStatus }}
         </div>
 
-        <div v-if="runs.length" class="divide-y divide-base-300/40">
-          <div v-for="run in runs" :key="run.id">
+        <div v-if="filteredRuns.length" class="divide-y divide-base-300/40">
+          <div v-for="run in filteredRuns" :key="run.id">
             <!-- Run row: click to expand/collapse -->
             <button
               class="w-full text-left px-4 py-3 hover:bg-base-300/20 transition-colors flex items-center gap-4 group"
