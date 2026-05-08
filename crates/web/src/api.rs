@@ -4746,56 +4746,93 @@ pub async fn lsp_config_set_handler(
     }
 }
 
-fn config_toml_path() -> std::path::PathBuf {
+/// `DELETE /api/lsp/config`
+pub async fn lsp_config_delete_handler(State(_state): State<AppState>) -> impl IntoResponse {
+    match clear_lsp_config_from_file() {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+fn config_toml_path_for_write() -> std::path::PathBuf {
+    // Prefer project-local config when available/desired, then fallback to global.
     agent007_write_home().join("config.toml")
 }
 
+fn config_toml_candidate_paths_for_read() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        paths.push(std::path::PathBuf::from(home).join("config.toml"));
+        return paths;
+    }
+    if let Some(project_home) = agent007_project_home() {
+        paths.push(project_home.join("config.toml"));
+    }
+    paths.push(agent007_global_home().join("config.toml"));
+    paths
+}
+
 fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
-    let path = config_toml_path();
-    if !path.exists() {
+    // Merge global + project with project taking precedence.
+    let mut enabled = true;
+    let mut servers = std::collections::HashMap::new();
+    let mut inject_for_categories = vec!["code_completion".to_string(), "reasoning".to_string()];
+
+    let mut seen_any = false;
+    // order: global first, then project, so project overrides
+    let mut paths = config_toml_candidate_paths_for_read();
+    if paths.len() > 1 {
+        paths.reverse();
+    }
+
+    for path in paths.into_iter().rev() {
+        if !path.exists() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let root: toml::Value = toml::from_str(&content).map_err(|e| e.to_string())?;
+        let Some(lsp) = root.get("lsp").and_then(|v| v.as_table()) else {
+            continue;
+        };
+        seen_any = true;
+        if let Some(v) = lsp.get("enabled").and_then(|v| v.as_bool()) {
+            enabled = v;
+        }
+        if let Some(t) = lsp.get("servers").and_then(|v| v.as_table()) {
+            for (k, v) in t {
+                if let Some(cmd) = v.as_str() {
+                    servers.insert(k.clone(), cmd.to_string());
+                }
+            }
+        }
+        if let Some(arr) = lsp.get("inject_for_categories").and_then(|v| v.as_array()) {
+            let parsed = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>();
+            if !parsed.is_empty() {
+                inject_for_categories = parsed;
+            }
+        }
+    }
+
+    if !seen_any {
         return Ok(LspConfigResponse {
             enabled: true,
             servers: std::collections::HashMap::new(),
             inject_for_categories: vec!["code_completion".to_string(), "reasoning".to_string()],
         });
     }
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let root: toml::Value = toml::from_str(&content).map_err(|e| e.to_string())?;
-    let lsp = root
-        .get("lsp")
-        .and_then(|v| v.as_table())
-        .cloned()
-        .unwrap_or_default();
 
-    let enabled = lsp.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-    let servers = lsp
-        .get("servers")
-        .and_then(|v| v.as_table())
-        .map(|t| {
-            t.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect::<std::collections::HashMap<_, _>>()
-        })
-        .unwrap_or_default();
-    let inject_for_categories = lsp
-        .get("inject_for_categories")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
-
-    Ok(LspConfigResponse {
-        enabled,
-        servers,
-        inject_for_categories,
-    })
+    Ok(LspConfigResponse { enabled, servers, inject_for_categories })
 }
 
 fn write_lsp_config_to_file(payload: &LspConfigResponse) -> Result<(), String> {
-    let path = config_toml_path();
+    let path = config_toml_path_for_write();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -4833,6 +4870,23 @@ fn write_lsp_config_to_file(payload: &LspConfigResponse) -> Result<(), String> {
     );
     root_table.insert("lsp".to_string(), toml::Value::Table(lsp_table));
 
+    std::fs::write(path, toml::to_string_pretty(&root).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn clear_lsp_config_from_file() -> Result<(), String> {
+    let path = config_toml_path_for_write();
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut root: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let root_table = root
+        .as_table_mut()
+        .ok_or_else(|| "config root must be a TOML table".to_string())?;
+    root_table.remove("lsp");
     std::fs::write(path, toml::to_string_pretty(&root).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     Ok(())

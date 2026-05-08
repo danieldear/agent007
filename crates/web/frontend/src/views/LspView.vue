@@ -61,7 +61,23 @@ async function saveConfig() {
       servers: normalizeServersMap(),
       inject_for_categories,
     })
+    await loadConfig()
     ok.value = 'Saved LSP configuration.'
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function clearConfig() {
+  saving.value = true
+  error.value = ''
+  ok.value = ''
+  try {
+    await api.clearLspConfig()
+    await loadConfig()
+    ok.value = 'Cleared saved LSP configuration.'
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -94,7 +110,10 @@ onMounted(loadConfig)
         <div class="space-y-2">
           <div class="flex items-center justify-between">
             <label class="label py-0"><span class="label-text font-mono text-xs">Language → Server command</span></label>
-            <button class="btn btn-xs btn-outline font-mono" @click="addRow">+ Row</button>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-mono text-base-content/50">{{ servers.filter(s => (s.language||'').trim() && (s.command||'').trim()).length }} saved</span>
+              <button class="btn btn-xs btn-outline font-mono" @click="addRow">+ Row</button>
+            </div>
           </div>
           <div v-for="(row, i) in servers" :key="i" class="grid grid-cols-12 gap-2 items-center">
             <input class="input input-bordered input-sm col-span-3 font-mono" v-model="row.language" placeholder="rust" />
@@ -106,6 +125,9 @@ onMounted(loadConfig)
         <div class="pt-2">
           <button class="btn btn-primary btn-sm font-mono" :disabled="saving" @click="saveConfig">
             {{ saving ? 'Saving…' : 'Save LSP Config' }}
+          </button>
+          <button class="btn btn-ghost btn-sm font-mono ml-2" :disabled="saving" @click="clearConfig">
+            Clear saved
           </button>
         </div>
         <p v-if="ok" class="text-success text-sm font-mono">{{ ok }}</p>

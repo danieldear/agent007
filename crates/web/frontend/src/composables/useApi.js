@@ -182,6 +182,7 @@ export function useApi() {
     // LSP config
     getLspConfig: () => fetchJson('/api/lsp/config'),
     setLspConfig: (data) => fetchJson('/api/lsp/config', { method: 'POST', body: JSON.stringify(data) }),
+    clearLspConfig: () => fetchJson('/api/lsp/config', { method: 'DELETE' }),
 
     // RAG Sources
     listRagSources: () => fetchJson('/api/rag/sources'),

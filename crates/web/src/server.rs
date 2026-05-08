@@ -234,7 +234,9 @@ impl WebServer {
             .route("/api/mcp/servers/{name}/tools", get(api::mcp_tools_handler))
             .route(
                 "/api/lsp/config",
-                get(api::lsp_config_get_handler).post(api::lsp_config_set_handler),
+                get(api::lsp_config_get_handler)
+                    .post(api::lsp_config_set_handler)
+                    .delete(api::lsp_config_delete_handler),
             )
             // RAG sources
             .route(
