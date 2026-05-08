@@ -939,6 +939,9 @@ impl WorkflowRunner {
                         // Sub-workflow outputs were already injected during execution;
                         // nothing extra to do at the post-step routing stage.
                         StepType::SubWorkflow => {}
+                        // Extract steps are handled inline in the hosted engine; the
+                        // parallel runner does not support them and skips post-processing.
+                        StepType::Extract => {}
                     }
 
                     completed_steps.insert(step.id.clone());
@@ -1615,6 +1618,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -1674,6 +1678,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "step2".to_string(),
@@ -1689,6 +1694,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1715,6 +1721,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(10_000),
@@ -1846,6 +1853,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "b".to_string(),
@@ -1861,6 +1869,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -1893,6 +1902,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -1928,6 +1938,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // extremely low — 1 token
@@ -1967,6 +1978,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: None,
@@ -2004,6 +2016,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(1), // would exceed but mode is alert-only
@@ -2040,6 +2053,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2061,6 +2075,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2076,6 +2091,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2107,6 +2123,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2128,6 +2145,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2143,6 +2161,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2183,6 +2202,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "review".to_string(),
@@ -2204,6 +2224,7 @@ mod tests {
                     }),
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "done".to_string(),
@@ -2219,6 +2240,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2267,6 +2289,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -2332,6 +2355,7 @@ mod tests {
                         },
                     ]),
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -2347,6 +2371,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -2362,6 +2387,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2502,6 +2528,7 @@ mod tests {
                         },
                     ]),
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "ui-work".to_string(),
@@ -2517,6 +2544,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
                 StepDef {
                     id: "api-work".to_string(),
@@ -2532,6 +2560,7 @@ mod tests {
                     evaluate: None,
                     routes: None,
                     workflow: None,
+                    ..Default::default()
                 },
             ],
             budget: None,
@@ -2585,6 +2614,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: Some(BudgetConfig {
                 max_tokens_per_session: Some(6),
@@ -2636,6 +2666,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,
@@ -2689,6 +2720,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,

@@ -77,6 +77,16 @@ impl WorkflowDef {
                         });
                     }
                 }
+                StepType::Extract => {
+                    if step.extract.is_none() {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': extract steps must have an 'extract' block",
+                                step.id
+                            ),
+                        });
+                    }
+                }
             }
         }
         Ok(())
@@ -92,6 +102,23 @@ pub enum StepType {
     Router,
     /// Call another workflow by name and inject its outputs into the current context.
     SubWorkflow,
+    /// Run a deterministic ETR tool call — no LLM round-trip.
+    Extract,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct ExtractConfig {
+    /// ETR tool name (e.g. "etr.grep", "etr.csv_slice")
+    pub tool: String,
+    /// Input JSON for the ETR tool call
+    pub input: serde_json::Value,
+    /// Whether to compact the output (default true)
+    #[serde(default = "default_true")]
+    pub compact: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -111,7 +138,7 @@ pub struct RouteConfig {
     pub default: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct StepDef {
     pub id: String,
     pub agent: String,
@@ -128,6 +155,11 @@ pub struct StepDef {
     pub routes: Option<Vec<RouteConfig>>,
     /// For sub-workflow steps: the name of the workflow file to call (without .toml extension).
     pub workflow: Option<String>,
+    /// For `type: extract` steps: the ETR tool call configuration.
+    pub extract: Option<ExtractConfig>,
+    /// If true, cache this step's output by content hash and skip re-execution on cache hit.
+    #[serde(default)]
+    pub cache: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]

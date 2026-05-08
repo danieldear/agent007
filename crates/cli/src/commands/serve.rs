@@ -934,6 +934,50 @@ impl Agent007Server {
                 }),
             ),
 
+            // ETR — Embedded Tool Runtime
+            tool(
+                "agent007_etr_call",
+                "Call an ETR (Embedded Tool Runtime) tool. L1 tools run natively in Rust with < 1 ms \
+                 latency and zero LLM tokens. Available tools: etr.grep, etr.json_extract, etr.csv_slice, \
+                 etr.glob, etr.file_stat, etr.math, etr.diff, etr.list. Use agent007_etr_list to discover \
+                 schemas before calling.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "tool": {
+                            "type": "string",
+                            "description": "Tool name (e.g. 'etr.grep', 'etr.csv_slice', 'etr.list')"
+                        },
+                        "input": {
+                            "type": "object",
+                            "description": "Tool input as a JSON object — schema varies by tool. Use etr.list to see schemas."
+                        },
+                        "compact": {
+                            "type": "boolean",
+                            "description": "If true (default), large outputs are compacted. Set false to get full output (L1/L2 only).",
+                            "default": true
+                        }
+                    },
+                    "required": ["tool", "input"]
+                }),
+            ),
+
+            tool(
+                "agent007_etr_list",
+                "List all available ETR tools with their input/output schemas. Call this before \
+                 agent007_etr_call to discover what tools are available and their required parameters.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "layer": {
+                            "type": "string",
+                            "description": "Filter by layer: 'l1', 'l2', 'l3', or 'all' (default)",
+                            "default": "all"
+                        }
+                    }
+                }),
+            ),
+
             // Workflow create — save a new workflow YAML to disk
             tool(
                 "agent007_workflow_create",
@@ -1869,6 +1913,30 @@ impl ServerHandler for Agent007Server {
                         "Error: {e}"
                     ))])),
                 }
+            }
+
+            // ETR — Embedded Tool Runtime
+            "agent007_etr_call" => {
+                let tool_name = extract_string(request.arguments.as_ref(), "tool")?;
+                let input = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("input"))
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let compact = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("compact"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let result = etr_call(&tool_name, input, compact);
+                Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+
+            "agent007_etr_list" => {
+                let result = etr_list();
+                Ok(CallToolResult::success(vec![Content::text(result)]))
             }
 
             name => Err(rmcp::model::ErrorData::new(
@@ -5387,6 +5455,30 @@ async fn dashboard_port_is_same_project(port: u16) -> bool {
         .unwrap_or("");
 
     running_project == current_project
+}
+
+// ── ETR (Embedded Tool Runtime) helpers ──────────────────────────────────────
+
+fn etr_call(tool_name: &str, input: serde_json::Value, compact: bool) -> String {
+    use agent007_etr::{EtrCallRequest, EtrDispatcher};
+    let workspace_root = agent007_home();
+    let dispatcher = EtrDispatcher::new(workspace_root);
+    let req = EtrCallRequest {
+        tool: tool_name.to_string(),
+        input,
+        compact,
+    };
+    let result = dispatcher.call(req);
+    serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+fn etr_list() -> String {
+    use agent007_etr::EtrDispatcher;
+    let workspace_root = agent007_home();
+    let dispatcher = EtrDispatcher::new(workspace_root);
+    let tools = dispatcher.list_tools();
+    serde_json::to_string_pretty(&serde_json::json!({ "tools": tools }))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
 #[cfg(test)]

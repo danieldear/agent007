@@ -406,6 +406,7 @@ mod tests {
                 evaluate: None,
                 routes: None,
                 workflow: None,
+                ..Default::default()
             }],
             budget: None,
             reliability: None,

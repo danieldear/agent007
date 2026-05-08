@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod cache;
 pub mod dag;
 pub mod error;
 pub mod eval_gates;
