@@ -26,6 +26,11 @@ pub fn run(input: &Value) -> Result<Value> {
             }))
         }
         "json" => {
+            if truncated {
+                anyhow::bail!(
+                    "artifact exceeds max_bytes for JSON mode; increase max_bytes to parse full JSON"
+                );
+            }
             let v: Value = serde_json::from_slice(slice).context("invalid JSON artifact")?;
             Ok(json!({
                 "path": path,
@@ -49,6 +54,27 @@ mod tests {
         std::fs::write(&p, "hello").unwrap();
         let out = run(&json!({"path": p, "mode":"text"})).unwrap();
         assert_eq!(out["text"], "hello");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn reads_json_artifact() {
+        let p = std::env::temp_dir().join(format!("etr-art-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&p, r#"{"ok":true}"#).unwrap();
+        let out = run(&json!({"path": p, "mode":"json"})).unwrap();
+        assert_eq!(out["value"]["ok"], true);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn json_mode_rejects_truncated_parse() {
+        let p = std::env::temp_dir().join(format!("etr-art-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&p, r#"{"big":"0123456789"}"#).unwrap();
+        let err = run(&json!({"path": p, "mode":"json", "max_bytes": 5})).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds max_bytes"),
+            "unexpected error: {err}"
+        );
         let _ = std::fs::remove_file(&p);
     }
 }

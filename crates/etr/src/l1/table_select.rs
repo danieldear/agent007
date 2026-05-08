@@ -14,9 +14,10 @@ pub fn run(input: &Value) -> Result<Value> {
     rows.retain(|r| matches_where(r, &where_obj));
     if let Some(field) = order_by {
         rows.sort_by(|a, b| {
-            let av = a.get(field).cloned().unwrap_or(Value::Null).to_string();
-            let bv = b.get(field).cloned().unwrap_or(Value::Null).to_string();
-            av.cmp(&bv)
+            compare_values(
+                a.get(field).cloned().unwrap_or(Value::Null),
+                b.get(field).cloned().unwrap_or(Value::Null),
+            )
         });
         if order_desc {
             rows.reverse();
@@ -44,6 +45,26 @@ pub fn run(input: &Value) -> Result<Value> {
 
 fn matches_where(row: &Map<String, Value>, where_obj: &Map<String, Value>) -> bool {
     where_obj.iter().all(|(k, v)| row.get(k) == Some(v))
+}
+
+fn compare_values(a: Value, b: Value) -> std::cmp::Ordering {
+    let parse_num = |v: &Value| match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    };
+    if let (Some(na), Some(nb)) = (parse_num(&a), parse_num(&b)) {
+        return na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal);
+    }
+    let sa = match a {
+        Value::String(s) => s,
+        other => other.to_string(),
+    };
+    let sb = match b {
+        Value::String(s) => s,
+        other => other.to_string(),
+    };
+    sa.cmp(&sb)
 }
 
 fn load_rows(path: &str, format: &str) -> Result<Vec<Map<String, Value>>> {
@@ -95,5 +116,6 @@ mod tests {
         std::fs::write(&p, "id,kind\n1,a\n2,b\n").unwrap();
         let out = run(&json!({"path":p,"where":{"kind":"b"},"columns":["id"]})).unwrap();
         assert_eq!(out["count"], 1);
+        let _ = std::fs::remove_file(&p);
     }
 }

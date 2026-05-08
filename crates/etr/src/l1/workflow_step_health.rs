@@ -52,5 +52,6 @@ mod tests {
         .unwrap();
         let out = run(&json!({"path":p})).unwrap();
         assert_eq!(out["failed_count"], 1);
+        let _ = std::fs::remove_file(&p);
     }
 }

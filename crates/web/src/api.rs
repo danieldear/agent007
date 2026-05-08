@@ -4769,10 +4769,10 @@ fn config_toml_candidate_paths_for_read() -> Vec<std::path::PathBuf> {
         paths.push(std::path::PathBuf::from(home).join("config.toml"));
         return paths;
     }
+    paths.push(agent007_global_home().join("config.toml"));
     if let Some(project_home) = agent007_project_home() {
         paths.push(project_home.join("config.toml"));
     }
-    paths.push(agent007_global_home().join("config.toml"));
     paths
 }
 
@@ -4783,13 +4783,8 @@ fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
     let mut inject_for_categories = vec!["code_completion".to_string(), "reasoning".to_string()];
 
     let mut seen_any = false;
-    // order: global first, then project, so project overrides
-    let mut paths = config_toml_candidate_paths_for_read();
-    if paths.len() > 1 {
-        paths.reverse();
-    }
-
-    for path in paths.into_iter().rev() {
+    // read in order: global first, then project, so project overrides
+    for path in config_toml_candidate_paths_for_read() {
         if !path.exists() {
             continue;
         }

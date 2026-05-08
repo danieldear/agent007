@@ -6,10 +6,8 @@ pub fn run(input: &Value) -> Result<Value> {
     let field = input["field"].as_str().context("field required")?;
     let top_k = input["top_k"].as_u64().unwrap_or(50) as usize;
     let rows = if let Some(path) = input["path"].as_str() {
-        super::table_select::run(&json!({"path":path,"format":input["format"]}))
-            .ok()
-            .and_then(|v| v["rows"].as_array().cloned())
-            .unwrap_or_default()
+        let result = super::table_select::run(&json!({"path":path,"format":input["format"]}))?;
+        result["rows"].as_array().cloned().unwrap_or_default()
     } else {
         input["rows"].as_array().cloned().unwrap_or_default()
     };

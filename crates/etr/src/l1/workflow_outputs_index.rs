@@ -28,5 +28,6 @@ mod tests {
         std::fs::write(&p, r#"{"progress":{"outputs_available":["a","b"]}}"#).unwrap();
         let out = run(&json!({"path":p})).unwrap();
         assert_eq!(out["count"], 2);
+        let _ = std::fs::remove_file(&p);
     }
 }

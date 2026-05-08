@@ -46,5 +46,7 @@ mod tests {
         std::fs::write(&b, "seen abc\n").unwrap();
         let out = run(&json!({"path_a":a,"path_b":b,"pattern":"(abc)"})).unwrap();
         assert_eq!(out["count"], 1);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
     }
 }
