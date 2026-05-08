@@ -6,6 +6,7 @@ pub mod grep;
 pub mod artifact_read;
 pub mod json_extract;
 pub mod json_query;
+pub mod logs_slice;
 pub mod math;
 pub mod table_stats;
 pub mod text_extract;
@@ -20,6 +21,7 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.artifact_read" => artifact_read::run(input),
         "etr.json_extract" => json_extract::run(input),
         "etr.json_query" => json_query::run(input),
+        "etr.logs_slice" => logs_slice::run(input),
         "etr.csv_slice" => csv_slice::run(input),
         "etr.glob" => glob::run(input),
         "etr.file_stat" => file_stat::run(input),
@@ -75,6 +77,18 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "query": "string (e.g. .results[*].score, .items[kind=error].id)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.logs_slice".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Filter log files by level and substring with bounded output".into(),
+            input_schema: serde_json::json!({
+                "path":"string",
+                "level":"string (optional: trace|debug|info|warn|error|fatal)",
+                "contains":"string (optional substring)",
+                "max_lines":"integer (optional, default 200)"
+            }),
+            output_schema: serde_json::json!({"path":"string","count":"integer","lines":"array"}),
         },
         crate::types::ToolManifest {
             name: "etr.csv_slice".into(),
