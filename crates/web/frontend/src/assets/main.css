@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @plugin "daisyui";
 
+/* ── night (amber dark) — default ─────────────────────────────────────── */
 @plugin "daisyui/theme" {
   name: "night";
   default: true;
@@ -33,6 +34,142 @@
   --size-field: 0.28125rem;
   --border: 0.5px;
   --depth: 0;
+  --noise: 0;
+}
+
+/* ── forest (green dark) ──────────────────────────────────────────────── */
+@plugin "daisyui/theme" {
+  name: "forest";
+  color-scheme: "dark";
+  --color-base-100: oklch(20% 0.02 150);
+  --color-base-200: oklch(18% 0.018 150);
+  --color-base-300: oklch(16% 0.016 150);
+  --color-base-content: oklch(95% 0.02 150);
+  --color-primary: oklch(72% 0.2 150);
+  --color-primary-content: oklch(15% 0.04 150);
+  --color-secondary: oklch(62% 0.15 180);
+  --color-secondary-content: oklch(15% 0.03 180);
+  --color-accent: oklch(80% 0.18 85);
+  --color-accent-content: oklch(18% 0.04 85);
+  --color-neutral: oklch(22% 0.015 150);
+  --color-neutral-content: oklch(90% 0.005 150);
+  --color-info: oklch(74% 0.16 232.661);
+  --color-info-content: oklch(29% 0.066 243.157);
+  --color-success: oklch(76% 0.2 145);
+  --color-success-content: oklch(20% 0.05 145);
+  --color-warning: oklch(82% 0.189 84.429);
+  --color-warning-content: oklch(20% 0.05 84);
+  --color-error: oklch(71% 0.194 13.428);
+  --color-error-content: oklch(27% 0.105 12);
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.3125rem;
+  --size-field: 0.28125rem;
+  --border: 0.5px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ── ocean (cyan/teal dark) ───────────────────────────────────────────── */
+@plugin "daisyui/theme" {
+  name: "ocean";
+  color-scheme: "dark";
+  --color-base-100: oklch(22% 0.03 220);
+  --color-base-200: oklch(20% 0.027 220);
+  --color-base-300: oklch(18% 0.024 220);
+  --color-base-content: oklch(96% 0.015 220);
+  --color-primary: oklch(72% 0.15 200);
+  --color-primary-content: oklch(14% 0.035 200);
+  --color-secondary: oklch(65% 0.14 240);
+  --color-secondary-content: oklch(14% 0.03 240);
+  --color-accent: oklch(78% 0.17 185);
+  --color-accent-content: oklch(16% 0.04 185);
+  --color-neutral: oklch(24% 0.02 220);
+  --color-neutral-content: oklch(90% 0.006 220);
+  --color-info: oklch(74% 0.16 232.661);
+  --color-info-content: oklch(29% 0.066 243.157);
+  --color-success: oklch(76% 0.177 163.223);
+  --color-success-content: oklch(37% 0.077 168.94);
+  --color-warning: oklch(82% 0.189 84.429);
+  --color-warning-content: oklch(41% 0.112 45.904);
+  --color-error: oklch(71% 0.194 13.428);
+  --color-error-content: oklch(27% 0.105 12.094);
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.3125rem;
+  --size-field: 0.28125rem;
+  --border: 0.5px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ── aurora (purple/violet dark) ─────────────────────────────────────── */
+@plugin "daisyui/theme" {
+  name: "aurora";
+  color-scheme: "dark";
+  --color-base-100: oklch(22% 0.03 280);
+  --color-base-200: oklch(20% 0.027 280);
+  --color-base-300: oklch(18% 0.024 280);
+  --color-base-content: oklch(96% 0.012 280);
+  --color-primary: oklch(70% 0.22 295);
+  --color-primary-content: oklch(14% 0.04 295);
+  --color-secondary: oklch(68% 0.2 330);
+  --color-secondary-content: oklch(14% 0.04 330);
+  --color-accent: oklch(78% 0.18 200);
+  --color-accent-content: oklch(16% 0.04 200);
+  --color-neutral: oklch(24% 0.025 280);
+  --color-neutral-content: oklch(90% 0.006 280);
+  --color-info: oklch(74% 0.16 232.661);
+  --color-info-content: oklch(29% 0.066 243.157);
+  --color-success: oklch(76% 0.177 163.223);
+  --color-success-content: oklch(37% 0.077 168.94);
+  --color-warning: oklch(82% 0.189 84.429);
+  --color-warning-content: oklch(41% 0.112 45.904);
+  --color-error: oklch(71% 0.194 13.428);
+  --color-error-content: oklch(27% 0.105 12.094);
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.3125rem;
+  --size-field: 0.28125rem;
+  --border: 0.5px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ── day (warm parchment light — readable, rich amber accents) ───────── */
+@plugin "daisyui/theme" {
+  name: "day";
+  color-scheme: "light";
+  --color-base-100: oklch(98.5% 0.005 78);
+  --color-base-200: oklch(94.5% 0.008 78);
+  --color-base-300: oklch(88% 0.012 75);
+  --color-base-content: oklch(22% 0.022 58);
+  --color-primary: oklch(55% 0.185 52);
+  --color-primary-content: oklch(99% 0.004 52);
+  --color-secondary: oklch(48% 0.11 192);
+  --color-secondary-content: oklch(99% 0.004 192);
+  --color-accent: oklch(58% 0.165 88);
+  --color-accent-content: oklch(18% 0.04 88);
+  --color-neutral: oklch(32% 0.018 58);
+  --color-neutral-content: oklch(98% 0.003 58);
+  --color-info: oklch(52% 0.16 232);
+  --color-info-content: oklch(99% 0.004 232);
+  --color-success: oklch(52% 0.17 155);
+  --color-success-content: oklch(99% 0.004 155);
+  --color-warning: oklch(65% 0.18 82);
+  --color-warning-content: oklch(16% 0.04 82);
+  --color-error: oklch(53% 0.2 20);
+  --color-error-content: oklch(99% 0.004 20);
+  --radius-selector: 0.75rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.3125rem;
+  --size-field: 0.28125rem;
+  --border: 1px;
+  --depth: 1;
   --noise: 0;
 }
 

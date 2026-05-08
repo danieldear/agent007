@@ -9,27 +9,46 @@ const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
 
-// Read current theme from DOM (set by app/config) — only restore localStorage if user saved one
-const theme = ref(localStorage.getItem('theme') || document.documentElement.getAttribute('data-theme') || 'dark')
+// 'night' is our custom amber dark theme; 'day' is the warm light theme
+const DARK_THEME = 'night'
+const LIGHT_THEME = 'day'
+
+const THEMES = [
+  { id: 'night',   label: '🌙 Night',   dark: true  },
+  { id: 'forest',  label: '🌿 Forest',  dark: true  },
+  { id: 'ocean',   label: '🌊 Ocean',   dark: true  },
+  { id: 'aurora',  label: '✨ Aurora',  dark: true  },
+  { id: 'day',     label: '☀️ Day',     dark: false },
+]
+
+function normalizeSaved(t) {
+  // Migrate old 'dark' → 'night', old 'light' → 'day'
+  if (!t || t === 'dark') return DARK_THEME
+  if (t === 'light') return LIGHT_THEME
+  return t
+}
+
+const theme = ref(normalizeSaved(localStorage.getItem('theme')) || document.documentElement.getAttribute('data-theme') || DARK_THEME)
+const showThemePicker = ref(false)
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t)
   localStorage.setItem('theme', t)
   theme.value = t
+  showThemePicker.value = false
 }
 
 function toggleTheme() {
-  applyTheme(theme.value === 'dark' ? 'light' : 'dark')
+  const current = THEMES.find(t => t.id === theme.value)
+  applyTheme(current?.dark ? LIGHT_THEME : DARK_THEME)
 }
 
 onMounted(() => {
-  const saved = localStorage.getItem('theme')
+  const saved = normalizeSaved(localStorage.getItem('theme'))
   if (saved) {
-    // Only force-apply if the user explicitly toggled via this button before
     applyTheme(saved)
   } else {
-    // Read whatever is already on the DOM (e.g. amber set by App.vue or config)
-    theme.value = document.documentElement.getAttribute('data-theme') || 'dark'
+    theme.value = document.documentElement.getAttribute('data-theme') || DARK_THEME
   }
 })
 
@@ -91,7 +110,7 @@ const navItems = [
       </button>
     </nav>
 
-    <!-- Connection status + theme toggle -->
+    <!-- Connection status + theme picker -->
     <div class="px-4 py-3 border-t border-base-300/80">
       <div class="flex items-center gap-2">
         <span
@@ -101,11 +120,30 @@ const navItems = [
         <span class="text-[11px] font-mono flex-1" :class="connected ? 'text-success/70' : 'text-error/70'">
           {{ connected ? 'ws:live' : 'ws:off' }}
         </span>
-        <button
-          class="btn btn-ghost btn-xs text-base-content/40 hover:text-base-content p-0 w-6 h-6 min-h-0"
-          :title="theme === 'dark' ? 'Switch to light' : 'Switch to dark'"
-          @click="toggleTheme"
-        >{{ theme === 'dark' ? '☀' : '🌙' }}</button>
+
+        <!-- Theme picker dropdown -->
+        <div class="relative">
+          <button
+            class="btn btn-ghost btn-xs text-base-content/40 hover:text-base-content p-0 w-6 h-6 min-h-0"
+            :title="`Theme: ${theme}`"
+            @click="showThemePicker = !showThemePicker"
+          >🎨</button>
+          <div
+            v-if="showThemePicker"
+            class="absolute bottom-8 right-0 z-50 bg-base-200 border border-base-300 rounded-lg shadow-xl py-1 min-w-[130px]"
+          >
+            <button
+              v-for="t in THEMES"
+              :key="t.id"
+              class="w-full text-left px-3 py-1.5 text-[11px] font-mono hover:bg-base-300 transition-colors flex items-center gap-2"
+              :class="theme === t.id ? 'text-primary font-bold' : 'text-base-content/70'"
+              @click="applyTheme(t.id)"
+            >
+              <span class="text-[10px]">{{ theme === t.id ? '●' : '○' }}</span>
+              {{ t.label }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </aside>
