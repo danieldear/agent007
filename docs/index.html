@@ -4,10 +4,10 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>agent007 — AI Orchestration for Your Editor</title>
-<meta name="description" content="Multi-agent AI orchestration: MCP server, skills, workflows, ETR embedded tools, 3-tier token savings, live dashboard. Works with Claude Code, Cursor, Codex, Copilot, and Zed."/>
+<meta name="description" content="Multi-agent AI orchestration: MCP server, skills, workflows, ETR embedded tools, security-aware controls, 3-tier token savings, live dashboard. Works with Claude Code, Cursor, GitHub Copilot, Codex CLI, Zed, Ollama + custom models, and more."/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
 <style>
 :root {
   --black:   #09090b;
@@ -30,7 +30,7 @@
   --white:   #fafafa;
   --radius:  4px;
   --radius2: 8px;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-mono: "SF Mono", "Ayuthaya", "JetBrains Mono", "IBM Plex Mono", "Menlo", "Monaco", "Cascadia Mono", ui-monospace, monospace;
   --font-sans: 'Syne', sans-serif;
 }
 
@@ -121,14 +121,20 @@ nav {
 /* ── Hero ── */
 .hero {
   position: relative;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
+  min-height: auto;
   padding: 8rem 2.5rem 6rem;
   z-index: 1;
 }
+.hero-grid {
+  max-width: 1240px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(360px, .94fr);
+  gap: 2.5rem;
+  align-items: start;
+}
 
-.hero-inner { max-width: 900px; margin: 0 auto; width: 100%; }
+.hero-inner { max-width: none; margin: 0; width: 100%; }
 
 .hero-badge {
   display: inline-flex;
@@ -203,6 +209,48 @@ nav {
   animation: fadeUp .6s .3s ease both;
 }
 
+.hero-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .9rem;
+  margin-top: 2rem;
+  animation: fadeUp .6s .35s ease both;
+}
+
+.hero-meta-card {
+  padding: 1rem 1rem 1.05rem;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0)),
+    var(--surface);
+  border-radius: 14px;
+  min-height: 118px;
+}
+
+.hero-meta-label {
+  font-size: .62rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: .55rem;
+}
+
+.hero-meta-value {
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -.02em;
+  color: var(--white);
+  margin-bottom: .45rem;
+}
+
+.hero-meta-copy {
+  color: var(--text2);
+  font-size: .77rem;
+  line-height: 1.65;
+}
+
 .btn-primary {
   background: var(--amber);
   color: var(--black);
@@ -237,20 +285,95 @@ nav {
 
 /* Floating terminal */
 .hero-terminal {
-  position: absolute;
-  right: 5%;
-  top: 50%;
-  transform: translateY(-50%);
-  width: min(470px, 42vw);
+  position: relative;
+  right: auto;
+  top: auto;
+  transform: none;
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius2);
+  border-radius: 18px;
   box-shadow: 0 40px 80px rgba(0,0,0,.6), 0 0 0 1px var(--border);
   overflow: hidden;
   animation: slideIn .7s .4s ease both;
-  display: none;
+  display: block;
 }
-@media (min-width: 1100px) { .hero-terminal { display: block; } }
+
+.hero-side {
+  display: grid;
+  gap: 1rem;
+}
+
+.hero-surface {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(245,158,11,.10), transparent 38%),
+    radial-gradient(circle at bottom left, rgba(96,165,250,.08), transparent 35%),
+    var(--black2);
+  padding: 1.1rem 1.1rem 1rem;
+}
+
+.hero-surface-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.hero-surface-title {
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  color: var(--white);
+}
+
+.hero-surface-pill {
+  font-size: .62rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--green2);
+  border: 1px solid rgba(16,185,129,.25);
+  background: rgba(16,185,129,.08);
+  padding: .25rem .55rem;
+  border-radius: 999px;
+}
+
+.hero-surface-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.hero-surface-card {
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,.02);
+  border-radius: 14px;
+  padding: .9rem;
+}
+
+.hero-surface-card strong {
+  display: block;
+  font-family: var(--font-sans);
+  color: var(--white);
+  font-size: 1rem;
+  margin-bottom: .35rem;
+}
+
+.hero-surface-card span {
+  display: block;
+  color: var(--text2);
+  font-size: .74rem;
+  line-height: 1.6;
+}
+
+.security-meta-card {
+  border-color: rgba(245,158,11,.22);
+  background: linear-gradient(180deg, rgba(245,158,11,.08), rgba(255,255,255,.02));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+}
 
 .term-bar {
   background: var(--black2);
@@ -286,13 +409,16 @@ nav {
   background: var(--black2);
 }
 .editors-inner {
-  max-width: 900px;
+  max-width: 1180px;
   margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 2.5rem;
   flex-wrap: wrap;
 }
+.works-with-inner { justify-content: space-between; }
+.works-with-copy { display: grid; gap: .45rem; max-width: 380px; }
+.works-with-sub { color: var(--text2); font-size: .8rem; line-height: 1.7; margin: 0; }
 .editors-label {
   font-size: .68rem;
   letter-spacing: .12em;
@@ -310,6 +436,74 @@ nav {
   transition: border-color .2s, color .2s;
 }
 .editor-tag:hover { border-color: var(--amber); color: var(--amber); }
+.editor-tag.more { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.25); color: var(--amber); }
+
+/* ── Security strip ── */
+.security-strip {
+  position: relative;
+  z-index: 1;
+  padding: 2.2rem 2.5rem 0;
+}
+.security-strip-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  border: 1px solid rgba(245,158,11,.18);
+  background: linear-gradient(180deg, rgba(245,158,11,.07), rgba(255,255,255,.02));
+  border-radius: 20px;
+  padding: 1.35rem 1.4rem;
+  box-shadow: 0 20px 60px rgba(0,0,0,.18);
+}
+.security-strip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.security-strip-title {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  font-weight: 750;
+  color: var(--white);
+  letter-spacing: -.02em;
+}
+.security-strip-copy {
+  color: var(--text2);
+  font-size: .8rem;
+  line-height: 1.7;
+  max-width: 720px;
+}
+.security-strip-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .75rem;
+}
+.security-pill {
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.025);
+  border-radius: 14px;
+  padding: .9rem 1rem;
+}
+.security-pill strong {
+  display: block;
+  font-family: var(--font-sans);
+  color: var(--white);
+  font-size: .88rem;
+  margin-bottom: .32rem;
+}
+.security-pill span {
+  display: block;
+  color: var(--text2);
+  font-size: .73rem;
+  line-height: 1.65;
+}
+@media (max-width: 960px) {
+  .security-strip-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .security-strip-grid { grid-template-columns: 1fr; }
+}
 
 /* ── Section base ── */
 section {
@@ -317,7 +511,7 @@ section {
   z-index: 1;
   padding: 6rem 2.5rem;
 }
-.section-inner { max-width: 900px; margin: 0 auto; }
+.section-inner { max-width: 1180px; margin: 0 auto; }
 
 .section-tag {
   font-size: .67rem;
@@ -349,15 +543,15 @@ section {
 /* ── Stats ── */
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
-  border-radius: var(--radius2);
+  border-radius: 18px;
   overflow: hidden;
   margin-bottom: 5rem;
 }
-@media (max-width: 700px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 450px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
 
 .stat-box {
@@ -434,7 +628,7 @@ section {
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
-  border-radius: var(--radius2);
+  border-radius: 18px;
   overflow: hidden;
 }
 .features-grid.cols2 { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
@@ -442,9 +636,9 @@ section {
 .feature-card {
   background: var(--black2);
   padding: 1.75rem;
-  transition: background .2s;
+  transition: background .2s, transform .18s ease;
 }
-.feature-card:hover { background: var(--surface); }
+.feature-card:hover { background: var(--surface); transform: translateY(-2px); }
 
 .feature-icon { font-size: 1.3rem; margin-bottom: .9rem; line-height: 1; }
 .feature-title {
@@ -940,60 +1134,6 @@ pre .fn  { color: var(--blue); }
 }
 .skill-pill:hover { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.04); }
 
-/* ── Simulate section ── */
-.simulate-section {
-  background: var(--black);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  position: relative;
-}
-.simulate-glow {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(ellipse 600px 400px at 20% 50%, rgba(245,158,11,.04) 0%, transparent 70%);
-  pointer-events: none;
-}
-.simulate-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4rem;
-  align-items: start;
-}
-@media (max-width: 800px) { .simulate-layout { grid-template-columns: 1fr; gap: 2.5rem; } }
-
-.simulate-point {
-  display: flex;
-  gap: .75rem;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
-.simulate-point-icon { font-size: 1rem; margin-top: .1rem; flex-shrink: 0; line-height: 1; }
-.simulate-point-title {
-  font-family: var(--font-sans);
-  font-size: .88rem;
-  font-weight: 700;
-  color: var(--white);
-  margin-bottom: .25rem;
-}
-.simulate-point-desc { font-size: .76rem; color: var(--text2); line-height: 1.6; }
-
-.simulate-badge-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .5rem;
-  margin-top: 1.5rem;
-}
-.simulate-badge {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: .5rem .9rem;
-  font-size: .72rem;
-  color: var(--amber);
-  font-weight: 700;
-  font-family: var(--font-mono);
-}
-
 /* ── CTA ── */
 .cta-section {
   background: var(--black2);
@@ -1026,8 +1166,8 @@ footer {
   to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes slideIn {
-  from { opacity: 0; transform: translateY(-50%) translateX(30px); }
-  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .reveal {
   opacity: 0;
@@ -1055,11 +1195,23 @@ footer {
 }
 
 /* ── Mobile ── */
+@media (max-width: 1100px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .hero-meta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 800px) {
+  .hero-meta,
+  .hero-surface-grid { grid-template-columns: 1fr; }
+  .editors-inner { max-width: 1180px; }
+}
+
 @media (max-width: 640px) {
   .nav-links { display: none; }
   nav { padding: 1rem 1.5rem; }
   .hero { padding: 7rem 1.5rem 4rem; }
   section { padding: 4rem 1.5rem; }
+  .hero-meta { grid-template-columns: 1fr; }
   footer { padding: 2rem 1.5rem; flex-direction: column; align-items: flex-start; }
   .editors { padding: 1.25rem 1.5rem; }
   .stats-row { margin-bottom: 3rem; }
@@ -1084,65 +1236,148 @@ footer {
 
 <!-- ── Hero ── -->
 <section class="hero">
-  <div class="hero-inner">
-    <div class="hero-badge"><span class="badge-text">MCP Server · CLI · Built in Rust</span></div>
+  <div class="hero-grid">
+    <div class="hero-inner">
+      <div class="hero-badge"><span class="badge-text">MCP Server · CLI · Built in Rust</span></div>
 
-    <h1 class="hero-title">
-      Your AI editor,<br/>
-      <span class="accent">orchestrated</span>.
-    </h1>
+      <h1 class="hero-title">
+        Your AI editor,<br/>
+        <span class="accent">orchestrated</span>.
+      </h1>
 
-    <p class="hero-sub">
-      agent007 is a multi-agent orchestration layer that plugs into Claude Code, Cursor, Copilot, Codex, and Zed via MCP — adding skills, workflows, memory, personas, eval gates, and a live web dashboard.
-    </p>
+      <p class="hero-sub">
+        agent007 is the operations layer for AI coding environments — adding workflows, skills, memory, ETR tools, live observability, and a local dashboard without changing how your editor works.
+      </p>
 
-    <div class="hero-new-pills">
-      <span class="new-pill green">⚡ ETR — native Rust tools, &lt;1ms</span>
-      <span class="new-pill blue">💰 multi-tier token burn reduction</span>
-      <span class="new-pill amber">🎨 6-theme web dashboard</span>
+      <div class="hero-new-pills">
+        <span class="new-pill green">⚡ 26 ETR built-ins · native Rust</span>
+        <span class="new-pill blue">🧩 LSP config + dashboard controls</span>
+        <span class="new-pill amber">🚀 Linux · Apple Silicon · Windows release path</span>
+      </div>
+
+      <div class="hero-actions">
+        <a class="btn-primary" href="#install">Install →</a>
+        <a class="btn-secondary" href="https://github.com/danieldear/agent007" target="_blank">View on GitHub</a>
+      </div>
+
+      <div class="hero-meta">
+        <div class="hero-meta-card">
+          <div class="hero-meta-label">Works where you work</div>
+          <div class="hero-meta-value">Editor-native</div>
+          <div class="hero-meta-copy">Connect agent007 to your existing coding environment, model setup, and local tooling without changing the way your team works.</div>
+        </div>
+        <div class="hero-meta-card">
+          <div class="hero-meta-label">Fast local execution</div>
+          <div class="hero-meta-value">Deterministic ETR</div>
+          <div class="hero-meta-copy">Use built-in Rust tools for JSON queries, joins, metrics, log analysis, and workflow inspection before falling back to slower shell parsing.</div>
+        </div>
+        <div class="hero-meta-card security-meta-card">
+          <div class="hero-meta-label">Security-aware controls</div>
+          <div class="hero-meta-value">Guardrails available</div>
+          <div class="hero-meta-copy">Policy checks, zone-aware tooling, approval-gated workflows, and security-audit workflows support safer automation without overclaiming compliance.</div>
+        </div>
+      </div>
     </div>
 
-    <div class="hero-actions">
-      <a class="btn-primary" href="#install">Install →</a>
-      <a class="btn-secondary" href="https://github.com/danieldear/agent007" target="_blank">View on GitHub</a>
-    </div>
-  </div>
+    <div class="hero-side">
+      <div class="hero-terminal">
+        <div class="term-bar">
+          <div class="term-dot r"></div>
+          <div class="term-dot y"></div>
+          <div class="term-dot g"></div>
+          <span class="term-title">terminal — agent007</span>
+        </div>
+        <div class="term-body">
+          <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007 init</span></div>
+          <div class="term-out success">✓ Created ~/.agent007/</div>
+          <div class="term-out success">✓ Registered MCP with Claude Code</div>
+          <div class="term-out success">✓ Registered MCP with Cursor, Copilot, Codex, Zed</div>
+          <div class="term-spacer"></div>
+          <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007 serve</span></div>
+          <div class="term-out success">✓ MCP stdio server ready · 50+ tools</div>
+          <div class="term-out success">✓ Dashboard → http://localhost:8007</div>
+          <div class="term-out success">✓ WebSocket live · ws:connected</div>
+          <div class="term-spacer"></div>
+          <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007_etr_call <span style="color:var(--amber)">"etr.table_select"</span></span></div>
+          <div class="term-out dim">⟳ ETR dispatcher → L1 Rust native</div>
+          <div class="term-out success">✓ Done in 0.6ms · 0 LLM tokens <span class="cursor"></span></div>
+        </div>
+      </div>
 
-  <div class="hero-terminal">
-    <div class="term-bar">
-      <div class="term-dot r"></div>
-      <div class="term-dot y"></div>
-      <div class="term-dot g"></div>
-      <span class="term-title">terminal — agent007</span>
-    </div>
-    <div class="term-body">
-      <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007 init</span></div>
-      <div class="term-out success">✓ Created ~/.agent007/</div>
-      <div class="term-out success">✓ Registered MCP with Claude Code</div>
-      <div class="term-out success">✓ Registered MCP with Cursor, Copilot, Codex</div>
-      <div class="term-spacer"></div>
-      <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007 serve</span></div>
-      <div class="term-out success">✓ MCP stdio server ready · 50+ tools</div>
-      <div class="term-out success">✓ Dashboard → http://localhost:8007</div>
-      <div class="term-out success">✓ WebSocket live · ws:connected</div>
-      <div class="term-spacer"></div>
-      <div class="term-line"><span class="term-prompt">$</span><span class="term-cmd">agent007_etr_call <span style="color:var(--amber)">"etr.grep"</span></span></div>
-      <div class="term-out dim">⟳ ETR dispatcher → L1 Rust native</div>
-      <div class="term-out success">✓ Done in 0.4ms · 0 LLM tokens  <span class="cursor"></span></div>
+      <div class="hero-surface">
+        <div class="hero-surface-head">
+          <div class="hero-surface-title">Current surface area</div>
+          <div class="hero-surface-pill">live</div>
+        </div>
+        <div class="hero-surface-grid">
+          <div class="hero-surface-card">
+            <strong>26 ETR tools</strong>
+            <span>Search, JSON query, table select, joins, metrics, workflow inspection, log slicing, policy check, and more.</span>
+          </div>
+          <div class="hero-surface-card">
+            <strong>20 built-in skills</strong>
+            <span>Development, code quality, planning, UI design, analysis, and project release workflows.</span>
+          </div>
+          <div class="hero-surface-card">
+            <strong>9 workflows</strong>
+            <span>From TDD and code review to feature delivery, ideation, security audits, and log analysis.</span>
+          </div>
+          <div class="hero-surface-card">
+            <strong>Dashboard-first ops</strong>
+            <span>Run state, tokens, liveness, LSP config, MCP registry, memory, tools, and workflow visibility in one place.</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
 <!-- ── Editor strip ── -->
 <div class="editors">
-  <div class="editors-inner">
-    <span class="editors-label">Works with</span>
-    <div class="editors-list">
+  <div class="editors-inner works-with-inner">
+    <div class="works-with-copy">
+      <span class="editors-label">Works with</span>
+      <p class="works-with-sub">Use agent007 from the tools your team already uses — editor-native when you want it, local-model friendly when you need it.</p>
+    </div>
+    <div class="editors-list works-with-list">
       <span class="editor-tag">Claude Code</span>
       <span class="editor-tag">Cursor</span>
       <span class="editor-tag">GitHub Copilot</span>
       <span class="editor-tag">Codex CLI</span>
       <span class="editor-tag">Zed</span>
+      <span class="editor-tag">Ollama + custom models</span>
+      <span class="editor-tag more">and many more</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Security strip ── -->
+<div class="security-strip">
+  <div class="security-strip-inner">
+    <div class="security-strip-head">
+      <div>
+        <div class="security-strip-title">Security-aware controls</div>
+        <div class="security-strip-copy">agent007 includes practical guardrails for safer automation: built-in policy checks, zone-aware tooling, approval-gated workflow steps, and a dedicated security-audit workflow.</div>
+      </div>
+      <span class="editor-tag more">present capabilities</span>
+    </div>
+    <div class="security-strip-grid">
+      <div class="security-pill">
+        <strong>Policy checks</strong>
+        <span>Evaluate tool usage and admission decisions with deterministic built-in checks before broader execution.</span>
+      </div>
+      <div class="security-pill">
+        <strong>Zone-aware tooling</strong>
+        <span>Use zone checks and scoped access patterns to keep file and execution boundaries explicit.</span>
+      </div>
+      <div class="security-pill">
+        <strong>Approval-gated workflows</strong>
+        <span>Hosted workflows can stop for approvals so risky changes are reviewable before they continue.</span>
+      </div>
+      <div class="security-pill">
+        <strong>Security-audit workflow</strong>
+        <span>Run parallel security review across code, dependencies, secrets, and threat-model oriented checks.</span>
+      </div>
     </div>
   </div>
 </div>
@@ -1156,20 +1391,25 @@ footer {
         <div class="stat-label">MCP Tools</div>
       </div>
       <div class="stat-box">
-        <div class="stat-num green" style="font-size:clamp(1.2rem,3vw,1.8rem)">&lt;1ms</div>
+        <div class="stat-num green">26</div>
         <div class="stat-label">ETR Tools</div>
         <span class="stat-new">▲ NEW</span>
       </div>
       <div class="stat-box">
-        <div class="stat-num">18</div>
+        <div class="stat-num">20</div>
         <div class="stat-label">Built-in Skills</div>
       </div>
       <div class="stat-box">
         <div class="stat-num">9</div>
+        <div class="stat-label">Workflows</div>
       </div>
       <div class="stat-box">
         <div class="stat-num">5</div>
         <div class="stat-label">IDE Integrations</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num">21</div>
+        <div class="stat-label">Rust Crates</div>
       </div>
     </div>
   </div>
@@ -1200,7 +1440,7 @@ footer {
           <div class="feature-icon">🔁</div>
           <div class="feature-title">Workflows</div>
           <div class="feature-desc">Multi-step YAML pipelines with parallel execution, approval gates, and step dependencies. TDD, code review, full feature delivery — all orchestrated.</div>
-          <span class="feature-tag">10 built-in</span>
+          <span class="feature-tag">9 built-in</span>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🧠</div>
@@ -1245,7 +1485,7 @@ footer {
           <span class="feature-tag green-tag">NEW: Markdown rendering</span>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">��</div>
+          <div class="feature-icon">🪙</div>
           <div class="feature-title">Token Tracking</div>
           <div class="feature-desc">Actual LLM token counts threaded from skill executor and workflow submit path all the way to the dashboard. Per-step and per-run totals. No estimates — real numbers.</div>
           <span class="feature-tag">Accurate</span>
@@ -1326,6 +1566,12 @@ footer {
           <div class="feature-desc">Signed envelope infrastructure, policy redaction filters, and local sync. Full mDNS peer discovery, artifact pull, and cross-machine trust controls coming in M4.</div>
           <span class="feature-tag">In progress · M4</span>
         </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧾</div>
+          <div class="feature-title">Release Engineering</div>
+          <div class="feature-desc">Tagged GitHub releases now package Linux, Apple Silicon macOS, and Windows artifacts with checksums, installer handoff, and manual release-workflow dispatch for safe testing.</div>
+          <span class="feature-tag">Release-ready</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1337,7 +1583,7 @@ footer {
   <div class="section-inner">
     <p class="section-tag green reveal">Performance · New</p>
     <h2 class="section-title reveal">Zero-overhead tools.<br/>Zero LLM tokens.</h2>
-    <p class="section-sub reveal">The Embedded Tool Runtime runs 7 tools natively in Rust at L1 speed — under 1 millisecond, no API call, no token cost. Call them from your AI editor exactly like any other MCP tool.</p>
+    <p class="section-sub reveal">The Embedded Tool Runtime now exposes 26 built-ins at L1 speed — JSON query, joins, metrics, workflow health, log slicing, table selection, policy checks, and more with zero model round-trips.</p>
 
     <div class="etr-layout reveal">
       <div>
@@ -1374,12 +1620,14 @@ footer {
 })
 <span class="cm"># → results in 0.3ms · 0 tokens used</span>
 
-<span class="cm"># Extract fields from a 5MB JSON response</span>
-<span class="fn">agent007_etr_call</span>(<span class="str">"etr.json_extract"</span>, {
-  <span class="str">"data"</span>: json_blob,
-  <span class="str">"path"</span>: <span class="str">"$.runs[*].status"</span>
+<span class="cm"># Filter JSON and project only the fields you need</span>
+<span class="fn">agent007_etr_call</span>(<span class="str">"etr.json_query_v2"</span>, {
+  <span class="str">"path"</span>: <span class="str">"workflow-state.json"</span>,
+  <span class="str">"query"</span>: <span class="str">".steps[*]"</span>,
+  <span class="str">"project"</span>: [<span class="str">"id"</span>, <span class="str">"status"</span>],
+  <span class="str">"limit"</span>: <span class="num">5</span>
 })
-<span class="cm"># → 0.1ms · 0 tokens used</span></pre>
+<span class="cm"># → deterministic structured output · 0 prompt tokens</span></pre>
         </div>
       </div>
 
@@ -1390,31 +1638,31 @@ footer {
             <div class="etr-tool-desc">Ripgrep-powered pattern search across any file tree</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">glob</div>
-            <div class="etr-tool-desc">Fast file discovery with glob patterns</div>
+            <div class="etr-tool-name">json_query_v2</div>
+            <div class="etr-tool-desc">Projection, sorting, and limits on structured JSON results</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">file_stat</div>
-            <div class="etr-tool-desc">File metadata: size, mtime, type, permissions</div>
+            <div class="etr-tool-name">table_select</div>
+            <div class="etr-tool-desc">Select, filter, order, and limit rows from CSV or JSONL</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">json_extract</div>
-            <div class="etr-tool-desc">JSONPath extraction from large payloads</div>
+            <div class="etr-tool-name">join_on_key</div>
+            <div class="etr-tool-desc">Join two datasets on key fields without shell glue</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">csv_slice</div>
-            <div class="etr-tool-desc">Column filter and row slicing for CSV data</div>
+            <div class="etr-tool-name">metrics_summary</div>
+            <div class="etr-tool-desc">Min/max/mean/p50/p95/stddev summaries for numeric columns</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">math</div>
-            <div class="etr-tool-desc">Arithmetic, statistics, and numeric operations</div>
+            <div class="etr-tool-name">logs_correlate</div>
+            <div class="etr-tool-desc">Correlate events across multiple logs by extracted token</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">diff</div>
-            <div class="etr-tool-desc">Unified diff between two text blobs</div>
+            <div class="etr-tool-name">workflow_step_health</div>
+            <div class="etr-tool-desc">Summarize failed and running workflow steps from state</div>
           </div>
           <div class="etr-tool">
-            <div class="etr-tool-name">list</div>
+            <div class="etr-tool-name">etr.list</div>
             <div class="etr-tool-desc">Discover all ETR tools and their schemas</div>
           </div>
         </div>
@@ -1664,7 +1912,7 @@ footer {
         </div>
       </div>
       <div class="workflow-card">
-        <div class="wf-card-name">workflow-brainstorm</div>
+        <div class="wf-card-name">brainstorm</div>
         <div class="wf-card-desc">Lightweight brainstorm pipeline: ideation → PRD. Stops before architecture. Direct input for ideation workflow.</div>
         <div class="wf-card-footer">
           <span class="wf-card-steps">lightweight</span>
@@ -1680,7 +1928,7 @@ footer {
   <div class="section-inner">
     <p class="section-tag reveal">How it works</p>
     <h2 class="section-title reveal">One server.<br/>Your whole stack.</h2>
-    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects and gets 50+ tools — backed by a 21-crate Rust core with ETR, token optimization, and a live web dashboard.</p>
+    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects and gets 50+ tools — backed by a 21-crate Rust core with ETR, token optimization, dashboard controls, and release-ready install paths.</p>
 
     <div class="arch-diagram reveal">
       <div class="arch-label">Your AI Editor</div>
@@ -1718,13 +1966,13 @@ footer {
       </div>
 
       <div class="arch-divider"></div>
-      <div class="arch-label">ETR — Embedded Tool Runtime (New)</div>
+      <div class="arch-label">ETR — Embedded Tool Runtime</div>
       <div class="arch-row">
-        <div class="arch-box hi-green">grep</div>
-        <div class="arch-box hi-green">glob</div>
-        <div class="arch-box hi-green">json_extract</div>
-        <div class="arch-box hi-green">csv_slice</div>
-        <div class="arch-box hi-green">math · diff</div>
+        <div class="arch-box hi-green">grep · glob</div>
+        <div class="arch-box hi-green">json_query_v2</div>
+        <div class="arch-box hi-green">table_select</div>
+        <div class="arch-box hi-green">join_on_key</div>
+        <div class="arch-box hi-green">metrics + workflow health</div>
       </div>
 
       <div class="arch-divider"></div>
@@ -1755,8 +2003,8 @@ footer {
 <section id="skills">
   <div class="section-inner">
     <p class="section-tag reveal">Skills library</p>
-    <h2 class="section-title reveal">18 built-in skills.<br/>Infinitely extensible.</h2>
-    <p class="section-sub reveal">Every skill is a Markdown file. Write your own, install from GitHub, or share as a bundle. Trigger from any editor with <code>/slash-commands</code>.</p>
+    <h2 class="section-title reveal">Core skills from a 20-skill library.<br/>Infinitely extensible.</h2>
+    <p class="section-sub reveal">Every skill is a Markdown file. Write your own, install from GitHub, or share as a bundle. The grid below highlights the core, domain-agnostic surface area available from any editor.</p>
 
     <div class="reveal">
       <div class="skills-category">
@@ -1767,7 +2015,7 @@ footer {
           <span class="skill-pill">/dev-pr-review</span>
           <span class="skill-pill">/dev-tdd</span>
           <span class="skill-pill">/frontend-designer</span>
-          <span class="skill-pill">/senior-ml-engineer</span>
+          <span class="skill-pill">/skill</span>
         </div>
       </div>
 
@@ -1805,91 +2053,14 @@ footer {
 </section>
 
 <!-- ── Simulate ── -->
-<section id="simulate" class="simulate-section">
-  <div class="simulate-glow"></div>
-  <div class="section-inner">
-    <p class="section-tag reveal">Quality Assurance · New</p>
-    <h2 class="section-title reveal">Run agent007<br/>against itself.</h2>
-    <p class="section-sub reveal">Define regression scenarios in TOML. Run them against any agent007 binary. Detect regressions automatically — before they reach production.</p>
 
-    <div class="simulate-layout reveal">
-      <div>
-        <div class="simulate-point">
-          <span class="simulate-point-icon">📋</span>
-          <div>
-            <div class="simulate-point-title">TOML-defined scenarios</div>
-            <div class="simulate-point-desc">Each scenario specifies a command to run, what the output must contain, what it must not contain, and optional quality thresholds. No code required.</div>
-          </div>
-        </div>
-        <div class="simulate-point">
-          <span class="simulate-point-icon">🔍</span>
-          <div>
-            <div class="simulate-point-title">Regression detection</div>
-            <div class="simulate-point-desc">Compare runs over time. Failures that are new since the last baseline are flagged as regressions. Pre-existing failures are tracked but not re-reported.</div>
-          </div>
-        </div>
-        <div class="simulate-point">
-          <span class="simulate-point-icon">🧠</span>
-          <div>
-            <div class="simulate-point-title">Real LLM provider</div>
-            <div class="simulate-point-desc">The simulate command uses your configured model provider — the same one <code>agent007 run</code> uses. No mocks, no placeholders. Set <code>AGENT007_DRY_RUN=1</code> for fast offline checks.</div>
-          </div>
-        </div>
-
-        <div class="simulate-badge-grid">
-          <span class="simulate-badge">agent007 simulate list</span>
-          <span class="simulate-badge">agent007 simulate run skills-smoke</span>
-          <span class="simulate-badge">agent007 simulate validate</span>
-        </div>
-      </div>
-
-      <div>
-        <div class="code-block">
-          <div class="code-header">
-            <span class="code-lang">skills-smoke.toml</span>
-          </div>
-          <pre><span class="cm"># Smoke-test that built-in skills are registered</span>
-<span class="kw">name</span> = <span class="str">"skills-smoke"</span>
-<span class="kw">description</span> = <span class="str">"Verify built-in skills are listed"</span>
-
-<span class="kw">[[scenarios]]</span>
-<span class="kw">name</span> = <span class="str">"skill-list-shows-builtins"</span>
-<span class="kw">command</span> = <span class="str">"agent007 skill list"</span>
-
-<span class="kw">[scenarios.validation]</span>
-<span class="kw">assert_contains</span> = [
-  <span class="str">"/brainstorm"</span>,
-  <span class="str">"/dev-architect"</span>,
-  <span class="str">"/code-refactor"</span>,
-]
-<span class="kw">assert_not_contains</span> = [<span class="str">"error"</span>, <span class="str">"panic"</span>]
-<span class="kw">max_duration_ms</span> = <span class="num">5000</span></pre>
-        </div>
-
-        <div class="code-block" style="margin-top: 1rem;">
-          <div class="code-header">
-            <span class="code-lang">Running a simulation</span>
-          </div>
-          <pre><span class="cm"># Run built-in smoke tests</span>
-$ <span class="fn">agent007 simulate run skills-smoke</span>
-
-<span class="cm"># Run all templates and detect regressions</span>
-$ <span class="fn">agent007 simulate run --all --report</span>
-
-<span class="cm"># Validate a custom template</span>
-$ <span class="fn">agent007 simulate validate my-scenario.toml</span></pre>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <!-- ── Install ── -->
 <section id="install" class="install-section">
   <div class="section-inner">
     <p class="section-tag reveal">Get started</p>
     <h2 class="section-title reveal">Three commands<br/>and you're live.</h2>
-    <p class="section-sub reveal">Linux ships as a prebuilt binary. macOS builds from source via <code>cargo install</code>. Dashboard assets are embedded in the binary — no separate frontend build.</p>
+    <p class="section-sub reveal">Linux, Apple Silicon macOS, and Windows ship as release artifacts. Intel macOS falls back to source install. Dashboard assets are embedded in the binary — no separate frontend build.</p>
 
     <div class="install-grid">
       <div class="reveal">
@@ -1901,7 +2072,7 @@ $ <span class="fn">agent007 simulate validate my-scenario.toml</span></pre>
           <pre><span class="cm"># Linux x86_64 (prebuilt binary)</span>
 <span class="kw">curl</span> -fsSL https://raw.githubusercontent.com/danieldear/agent007/main/scripts/install.sh | <span class="kw">bash</span>
 
-<span class="cm"># macOS (source install, embeds dashboard)</span>
+<span class="cm"># Intel macOS (source install fallback)</span>
 <span class="kw">cargo</span> install --git https://github.com/danieldear/agent007.git agent007
 
 <span class="cm"># Local development</span>
@@ -1976,7 +2147,6 @@ $ <span class="fn">agent007 simulate validate my-scenario.toml</span></pre>
     <li><a href="#token-savings">Token Savings</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#skills">Skills</a></li>
-    <li><a href="#simulate">Simulate</a></li>
     <li><a href="#workflows">Workflows</a></li>
     <li><a href="https://github.com/danieldear/agent007/blob/main/docs/configuration.md" target="_blank">Config ↗</a></li>
     <li><a href="https://github.com/danieldear/agent007/blob/main/docs/known-issues.md" target="_blank">Known Issues ↗</a></li>
@@ -2008,10 +2178,10 @@ function copyCode(btn, text) {
 (function() {
   const phrases = [
     'MCP Server · CLI · Built in Rust',
-    'Claude Code · Cursor · Copilot · Codex · Zed',
-    '50+ MCP tools · 7 ETR tools · <1ms',
+    'Claude Code · Cursor · Copilot · Codex CLI · Zed · Ollama',
+    '50+ MCP tools · 26 ETR tools · <1ms',
     '3-tier token reduction · Up to 70% savings',
-    '18 skills · 9 workflows · Live dashboard',
+    '20 skills · 9 workflows · Live dashboard',
     '21 Rust crates · MIT license · Open source',
   ];
   const badge = document.querySelector('.hero-badge');
