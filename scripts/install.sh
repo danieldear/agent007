@@ -80,7 +80,14 @@ case "$OS" in
   Darwin)
     case "$ARCH" in
       x86_64)
-        TARGET="x86_64-apple-darwin"
+        cat >&2 <<EOF
+Intel macOS prebuilt artifacts are not currently published.
+Use one of these options instead:
+  1. Source install:
+     cargo install --git https://github.com/${REPO}.git agent007
+  2. Apple Silicon machine / runner using the aarch64 macOS release artifact
+EOF
+        exit 1
         ;;
       arm64|aarch64)
         TARGET="aarch64-apple-darwin"
