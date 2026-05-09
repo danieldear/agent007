@@ -30,6 +30,20 @@ for public releases.
 - `WorkflowStepState` gains `last_heartbeat_at` and `last_heartbeat_hint` fields (backward-compatible via `#[serde(default)]`).
 - Step prompt heartbeat instruction updated from "periodically" to "every 3-5 minutes; silence >10 min marks the step stale".
 
+## [0.3.1] - 2026-05-08
+
+### Added
+
+- Embedded Tool Runtime expansion with reusable built-ins for table selection, grouping, joins, metrics summaries, workflow outputs/health, log correlation, and deltas.
+- LSP configuration management via dashboard API and config documentation.
+- Security maturity roadmap document for phased hardening work.
+
+### Changed
+
+- Release workflow now supports manual dispatch testing and publishes cross-platform artifacts for Linux, macOS Apple Silicon, and Windows x64.
+- Intel macOS installer path now fails fast with explicit source-install guidance instead of a missing-asset download failure.
+- Documentation refreshed for ETR, LSP configuration, release behavior, and security planning.
+
 ## [0.1.0] - 2026-04-27
 
 ### Added
