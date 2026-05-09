@@ -175,37 +175,45 @@
   --noise: 0;
 }
 
-/* ── day (warm parchment light — readable, rich amber accents) ───────── */
+/* ── day (matches index.html light theme — clean zinc + amber-600) ───── */
 @plugin "daisyui/theme" {
   name: "day";
   color-scheme: "light";
-  --color-base-100: oklch(98.5% 0.005 78);
-  --color-base-200: oklch(94.5% 0.008 78);
-  --color-base-300: oklch(88% 0.012 75);
-  --color-base-content: oklch(22% 0.022 58);
-  --color-primary: oklch(55% 0.185 52);
-  --color-primary-content: oklch(99% 0.004 52);
-  --color-secondary: oklch(48% 0.11 192);
-  --color-secondary-content: oklch(99% 0.004 192);
-  --color-accent: oklch(58% 0.165 88);
-  --color-accent-content: oklch(18% 0.04 88);
-  --color-neutral: oklch(32% 0.018 58);
-  --color-neutral-content: oklch(98% 0.003 58);
-  --color-info: oklch(52% 0.16 232);
-  --color-info-content: oklch(99% 0.004 232);
-  --color-success: oklch(52% 0.17 155);
-  --color-success-content: oklch(99% 0.004 155);
-  --color-warning: oklch(65% 0.18 82);
-  --color-warning-content: oklch(16% 0.04 82);
-  --color-error: oklch(53% 0.2 20);
-  --color-error-content: oklch(99% 0.004 20);
-  --radius-selector: 0.75rem;
-  --radius-field: 0.5rem;
-  --radius-box: 0.75rem;
+  /* Backgrounds: pure white → light zinc — matches --black/#f4f4f5/#e4e4e7 */
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(96.5% 0.002 264);
+  --color-base-300: oklch(91% 0.004 264);
+  /* Text: dark zinc — matches --text: #18181b */
+  --color-base-content: oklch(15% 0.013 264);
+  /* Primary: amber-600 #d97706 — same as index.html --amber in light mode */
+  --color-primary: oklch(65% 0.183 55.9);
+  --color-primary-content: oklch(100% 0 0);
+  /* Secondary: emerald-600 #059669 — same as index.html --green in light mode */
+  --color-secondary: oklch(59% 0.19 163);
+  --color-secondary-content: oklch(100% 0 0);
+  /* Accent: blue-600 #2563eb — same as index.html --blue in light mode */
+  --color-accent: oklch(52% 0.23 261);
+  --color-accent-content: oklch(100% 0 0);
+  /* Neutral: zinc-600 #52525b */
+  --color-neutral: oklch(40% 0.012 264);
+  --color-neutral-content: oklch(98% 0 0);
+  /* Semantic */
+  --color-info: oklch(52% 0.23 261);
+  --color-info-content: oklch(100% 0 0);
+  --color-success: oklch(59% 0.19 163);
+  --color-success-content: oklch(100% 0 0);
+  --color-warning: oklch(65% 0.183 55.9);
+  --color-warning-content: oklch(15% 0.013 264);
+  --color-error: oklch(53% 0.22 27);
+  --color-error-content: oklch(100% 0 0);
+  /* Tight sharp radius — matches index.html --radius: 4px / --radius2: 8px */
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
   --size-selector: 0.3125rem;
   --size-field: 0.28125rem;
   --border: 1px;
-  --depth: 1;
+  --depth: 0;
   --noise: 0;
 }
 
