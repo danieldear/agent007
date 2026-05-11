@@ -3445,7 +3445,8 @@ async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String>
     if !standalone_mode_available(config) {
         // In hosted-MCP mode, start a real hosted workflow session instead of returning
         // a static workflow plan. This gives the host LLM concrete ready steps plus the
-        // workflow_next / workflow_submit_step loop needed to actually finish the run.
+        // agent007_workflow_next / agent007_workflow_submit_step loop needed to
+        // actually finish the run.
         return workflow_hosted_start(name, task);
     }
 
@@ -5539,6 +5540,35 @@ mod tests {
     use crate::test_support::env_lock;
     use std::thread;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn write_workflow_fixture(dir: &std::path::Path, name: &str, body: &str) {
         let workflows_dir = dir.join("workflows");
         std::fs::create_dir_all(&workflows_dir).unwrap();
@@ -6385,11 +6415,10 @@ requires_approval = true
     async fn workflow_run_starts_hosted_session_in_hosted_mcp_mode() {
         let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("AGENT007_HOME", tmp.path());
-        let old_openai = std::env::var("OPENAI_API_KEY").ok();
-        let old_anthropic = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::remove_var("OPENAI_API_KEY");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let _home = EnvVarGuard::set("AGENT007_HOME", tmp.path());
+        let _dry_run = EnvVarGuard::unset("AGENT007_DRY_RUN");
+        let _openai = EnvVarGuard::unset("OPENAI_API_KEY");
+        let _anthropic = EnvVarGuard::unset("ANTHROPIC_API_KEY");
         write_workflow_fixture(
             tmp.path(),
             "hosted-flow",
@@ -6418,14 +6447,6 @@ output = "plan"
             .unwrap_or(&vec![])
             .iter()
             .any(|v| v.as_str().unwrap_or("").contains("workflow_submit_step")));
-
-        std::env::remove_var("AGENT007_HOME");
-        if let Some(value) = old_openai {
-            std::env::set_var("OPENAI_API_KEY", value);
-        }
-        if let Some(value) = old_anthropic {
-            std::env::set_var("ANTHROPIC_API_KEY", value);
-        }
     }
 
     #[test]
