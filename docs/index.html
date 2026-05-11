@@ -1,10 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>agent007 — AI Orchestration for Your Editor</title>
 <meta name="description" content="Multi-agent AI orchestration: MCP server, skills, workflows, ETR embedded tools, security-aware controls, 3-tier token savings, live dashboard. Works with Claude Code, Cursor, GitHub Copilot, Codex CLI, Zed, Ollama + custom models, and more."/>
+<!-- FOUC-prevention: apply saved/system theme before first paint -->
+<script>
+(function(){
+  var t=localStorage.getItem('a7theme');
+  if(!t)t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
+  document.documentElement.setAttribute('data-theme',t);
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
@@ -129,7 +137,7 @@ nav {
   max-width: 1240px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.06fr) minmax(360px, .94fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
   gap: 2.5rem;
   align-items: start;
 }
@@ -161,7 +169,7 @@ nav {
 
 .hero-title {
   font-family: var(--font-sans);
-  font-size: clamp(2.8rem, 7.5vw, 6rem);
+  font-size: clamp(2rem, 4.5vw, 4rem);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -.04em;
@@ -1012,6 +1020,7 @@ section {
   border: 1px solid var(--border);
   border-radius: var(--radius2);
   overflow: hidden;
+  min-width: 0;
   margin-bottom: 1.5rem;
 }
 .code-header {
@@ -1050,10 +1059,10 @@ pre .fn  { color: var(--blue); }
 
 .install-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1.5rem;
 }
-@media (max-width: 680px) { .install-grid { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .install-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ── Architecture ── */
 .arch-section { background: var(--black2); }
@@ -1194,6 +1203,111 @@ footer {
   50%      { opacity: 0; }
 }
 
+/* ── Hamburger / mobile nav ── */
+#mobile-menu-toggle { display: none; }
+
+.hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  gap: 5px;
+  border-radius: var(--radius);
+  transition: background .2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.hamburger:hover { background: rgba(255,255,255,.06); }
+.hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--text2);
+  border-radius: 2px;
+  transition: transform .25s ease, opacity .2s ease, width .2s ease;
+}
+
+/* Animated X state */
+#mobile-menu-toggle:checked ~ nav .hamburger span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+#mobile-menu-toggle:checked ~ nav .hamburger span:nth-child(2) {
+  opacity: 0;
+  width: 0;
+}
+#mobile-menu-toggle:checked ~ nav .hamburger span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* Mobile nav drawer */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  top: 57px;
+  left: 0; right: 0;
+  z-index: 99;
+  background: rgba(9,9,11,.97);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  padding: 1.25rem 1.5rem 1.75rem;
+  transform: translateY(-8px);
+  opacity: 0;
+  transition: transform .25s ease, opacity .2s ease;
+  pointer-events: none;
+}
+.mobile-nav ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  margin-bottom: 1.25rem;
+}
+.mobile-nav ul a {
+  display: block;
+  padding: .7rem .5rem;
+  color: var(--text2);
+  text-decoration: none;
+  font-size: .82rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  transition: color .2s;
+}
+.mobile-nav ul a:hover { color: var(--amber); }
+.mobile-nav .mobile-cta {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: var(--amber);
+  color: var(--black);
+  padding: .75rem;
+  border-radius: var(--radius);
+  font-size: .82rem;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: .04em;
+}
+
+/* Show drawer when checked */
+#mobile-menu-toggle:checked ~ .mobile-nav {
+  pointer-events: auto;
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* Overlay to close on tap-outside */
+.mobile-nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 98;
+}
+#mobile-menu-toggle:checked ~ .mobile-nav-overlay {
+  display: block;
+}
+
 /* ── Mobile ── */
 @media (max-width: 1100px) {
   .hero-grid { grid-template-columns: 1fr; }
@@ -1202,25 +1316,197 @@ footer {
 
 @media (max-width: 800px) {
   .hero-meta,
-  .hero-surface-grid { grid-template-columns: 1fr; }
-  .editors-inner { max-width: 1180px; }
+  .hero-surface-grid { grid-template-columns: 1fr 1fr; }
+  .editors-inner { flex-direction: column; gap: 1.25rem; }
+  .works-with-inner { align-items: flex-start; }
+  .works-with-copy { max-width: 100%; }
 }
 
 @media (max-width: 640px) {
+  /* Show hamburger, hide desktop nav links */
+  .hamburger { display: flex; }
+  .mobile-nav { display: block; }
   .nav-links { display: none; }
+  .nav-cta { display: none; }
+
   nav { padding: 1rem 1.5rem; }
-  .hero { padding: 7rem 1.5rem 4rem; }
-  section { padding: 4rem 1.5rem; }
+  .hero { padding: 6.5rem 1.25rem 3.5rem; }
+  section { padding: 3.5rem 1.25rem; }
+  .security-strip { padding: 1.75rem 1.25rem 0; }
+  .editors { padding: 1.25rem 1.25rem; }
+
   .hero-meta { grid-template-columns: 1fr; }
-  footer { padding: 2rem 1.5rem; flex-direction: column; align-items: flex-start; }
-  .editors { padding: 1.25rem 1.5rem; }
+  .hero-meta-card { min-height: auto; }
+  .hero-surface-grid { grid-template-columns: 1fr; }
+
+  /* Category header — don't push desc to far right on narrow screens */
+  .category-header { flex-wrap: wrap; gap: .5rem; }
+  .category-desc { margin-left: 0; font-size: .7rem; width: 100%; }
+
+  /* Works-with — stack on small screens */
+  .editors-inner { flex-direction: column; gap: 1.25rem; }
+  .works-with-copy { max-width: 100%; }
+  .editors-list { gap: .5rem; }
+  .editor-tag { font-size: .72rem; padding: .28rem .6rem; }
+
+  /* Security strip */
+  .security-strip-head { flex-direction: column; align-items: flex-start; }
+
+  /* Stats */
   .stats-row { margin-bottom: 3rem; }
+
+  /* Footer */
+  footer { padding: 2rem 1.25rem; flex-direction: column; align-items: flex-start; }
+  .footer-links { gap: 1rem; }
+
+  /* Arch diagram */
+  .arch-diagram { padding: 1.5rem 1rem; }
+
+  /* Code blocks */
+  pre { font-size: .72rem; padding: 1rem 1rem; }
+}
+
+@media (max-width: 400px) {
+  .hero-meta { grid-template-columns: 1fr; }
+  .hero-surface-grid { grid-template-columns: 1fr; }
+  .hero-new-pills { flex-direction: column; }
+  .hero-actions { flex-direction: column; }
+  .hero-actions .btn-primary,
+  .hero-actions .btn-secondary { text-align: center; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .theme-swatches { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Theme toggle button ── */
+.theme-toggle {
+  width: 32px; height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color .2s, color .2s, background .2s;
+  font-family: var(--font-mono);
+}
+.theme-toggle:hover { border-color: var(--amber); color: var(--amber); }
+
+/* Hide desktop toggle on mobile — shown in drawer instead */
+@media (max-width: 640px) { nav .theme-toggle { display: none; } }
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --black:   #ffffff;
+  --black2:  #f4f4f5;
+  --surface: #e4e4e7;
+  --surface2:#d4d4d8;
+  --border:  #d1d5db;
+  --border2: #9ca3af;
+  --amber:   #d97706;
+  --amber2:  #f59e0b;
+  --amber3:  #92400e;
+  --green:   #059669;
+  --green2:  #10b981;
+  --blue:    #2563eb;
+  --red:     #dc2626;
+  --muted:   #9ca3af;
+  --subtle:  #6b7280;
+  --text:    #18181b;
+  --text2:   #52525b;
+  --white:   #09090b;
+}
+
+/* Component overrides that use hardcoded rgba instead of CSS vars */
+[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(rgba(0,0,0,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,.05) 1px, transparent 1px);
+}
+
+[data-theme="light"] nav {
+  background: rgba(255,255,255,.92);
+}
+
+[data-theme="light"] .mobile-nav {
+  background: rgba(255,255,255,.97);
+}
+
+[data-theme="light"] .hero-surface {
+  background:
+    radial-gradient(circle at top right, rgba(217,119,6,.09), transparent 38%),
+    radial-gradient(circle at bottom left, rgba(37,99,235,.06), transparent 35%),
+    var(--black2);
+}
+
+[data-theme="light"] .hero-meta-card {
+  background: linear-gradient(180deg, rgba(0,0,0,.01), rgba(0,0,0,0)), var(--surface);
+}
+
+[data-theme="light"] .security-strip-inner {
+  background: linear-gradient(180deg, rgba(217,119,6,.07), rgba(217,119,6,.01));
+  border-color: rgba(217,119,6,.25);
+}
+
+[data-theme="light"] .security-pill {
+  background: rgba(0,0,0,.02);
+  border-color: rgba(0,0,0,.08);
+}
+
+[data-theme="light"] .etr-glow {
+  background: radial-gradient(ellipse 600px 400px at 80% 40%, rgba(5,150,105,.05) 0%, transparent 70%);
+}
+
+[data-theme="light"] .token-glow {
+  background: radial-gradient(ellipse 600px 400px at 20% 50%, rgba(217,119,6,.05) 0%, transparent 70%);
+}
+
+[data-theme="light"] .workflow-card::before,
+[data-theme="light"] .arch-diagram::before {
+  background: linear-gradient(90deg, var(--amber), transparent);
+}
+
+/* Mobile drawer mobile-cta in light mode */
+[data-theme="light"] .mobile-nav .mobile-cta {
+  background: var(--amber2);
+  color: var(--black);
+}
+
+/* Ensure code syntax still readable in light mode */
+[data-theme="light"] pre .sym { color: var(--text); }
+
+/* prefers-color-scheme: light — system default when no saved preference */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --black:   #ffffff;
+    --black2:  #f4f4f5;
+    --surface: #e4e4e7;
+    --surface2:#d4d4d8;
+    --border:  #d1d5db;
+    --border2: #9ca3af;
+    --amber:   #d97706;
+    --amber2:  #f59e0b;
+    --amber3:  #92400e;
+    --green:   #059669;
+    --green2:  #10b981;
+    --blue:    #2563eb;
+    --muted:   #9ca3af;
+    --subtle:  #6b7280;
+    --text:    #18181b;
+    --text2:   #52525b;
+    --white:   #09090b;
+  }
 }
 </style>
 </head>
 <body>
 
-<!-- ── Nav ── -->
+<!-- ── Mobile nav toggle (CSS-only) ── -->
+<input type="checkbox" id="mobile-menu-toggle" aria-hidden="true"/>
 <nav>
   <a class="nav-logo" href="#"><span>agent</span>007</a>
   <ul class="nav-links">
@@ -1232,7 +1518,30 @@ footer {
     <li><a href="https://github.com/danieldear/agent007" target="_blank">GitHub ↗</a></li>
   </ul>
   <a class="nav-cta" href="#install">Get started →</a>
+  <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☀</button>
+  <label for="mobile-menu-toggle" class="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </label>
 </nav>
+
+<!-- Mobile nav drawer (shown via CSS :checked sibling) -->
+<div class="mobile-nav" aria-hidden="true">
+  <ul>
+    <li><a href="#features" onclick="document.getElementById('mobile-menu-toggle').checked=false">Features</a></li>
+    <li><a href="#etr" onclick="document.getElementById('mobile-menu-toggle').checked=false">ETR</a></li>
+    <li><a href="#token-savings" onclick="document.getElementById('mobile-menu-toggle').checked=false">Token Savings</a></li>
+    <li><a href="#workflows" onclick="document.getElementById('mobile-menu-toggle').checked=false">Workflows</a></li>
+    <li><a href="#install" onclick="document.getElementById('mobile-menu-toggle').checked=false">Install</a></li>
+    <li><a href="https://github.com/danieldear/agent007" target="_blank">GitHub ↗</a></li>
+  </ul>
+  <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:.75rem;">
+    <button class="theme-toggle" id="theme-toggle-mobile" aria-label="Toggle theme" style="width:auto;padding:.5rem .9rem;font-size:.75rem;letter-spacing:.06em;gap:.45rem;display:flex;">
+      <span class="theme-toggle-icon-m">☀</span><span class="theme-toggle-label-m">Light mode</span>
+    </button>
+  </div>
+  <a class="mobile-cta" href="#install" onclick="document.getElementById('mobile-menu-toggle').checked=false">Get started →</a>
+</div>
+<label for="mobile-menu-toggle" class="mobile-nav-overlay" aria-hidden="true"></label>
 
 <!-- ── Hero ── -->
 <section class="hero">
@@ -2198,6 +2507,44 @@ function copyCode(btn, text) {
   }
   badge.style.transition = 'opacity .4s';
   setInterval(cycle, 3200);
+})();
+
+// ── Theme toggle ──
+(function() {
+  var DARK = 'dark', LIGHT = 'light', KEY = 'a7theme';
+
+  function isDark() {
+    return document.documentElement.getAttribute('data-theme') === DARK;
+  }
+
+  function updateIcons(dark) {
+    // Desktop nav button
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = dark ? '☀' : '☾';
+
+    // Mobile drawer button
+    var mIcon = document.querySelector('.theme-toggle-icon-m');
+    var mLabel = document.querySelector('.theme-toggle-label-m');
+    if (mIcon) mIcon.textContent = dark ? '☀' : '☾';
+    if (mLabel) mLabel.textContent = dark ? 'Light mode' : 'Dark mode';
+  }
+
+  function applyTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? DARK : LIGHT);
+    localStorage.setItem(KEY, dark ? DARK : LIGHT);
+    updateIcons(dark);
+  }
+
+  // Sync icon state on load (theme already applied by FOUC script)
+  updateIcons(isDark());
+
+  // Desktop toggle
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.addEventListener('click', function() { applyTheme(!isDark()); });
+
+  // Mobile drawer toggle
+  var mBtn = document.getElementById('theme-toggle-mobile');
+  if (mBtn) mBtn.addEventListener('click', function() { applyTheme(!isDark()); });
 })();
 </script>
 </body>
