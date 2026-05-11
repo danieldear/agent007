@@ -3443,32 +3443,10 @@ fn workflow_list() -> Result<Vec<String>> {
 
 async fn workflow_run(config: &Config, name: &str, task: &str) -> Result<String> {
     if !standalone_mode_available(config) {
-        let run_id = create_delegate_run("workflow", &format!("{name}: {task}"))?;
-        // workflow_plan can fail (bad YAML, unknown workflow, etc.). Finish the run as
-        // Failed so it never gets left stuck in Running until the next server restart.
-        let plan = match workflow_plan(config, name, task).await {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = load_run_store().finish_run(&run_id, false, e.to_string());
-                return Err(e);
-            }
-        };
-        // Append run_id + completion instructions so the host LLM can call record_tokens
-        // when done — matching the same pattern used by run_skill_mcp and run_task.
-        let output = format!(
-            "{plan}\n\n\
-             [HOSTED-MCP] Workflow run_id: {run_id}\n\
-             Treat the embedded workflow prompts and memory context from agent007 as the \
-             authoritative project memory for this run. If external client memory conflicts with \
-             the agent007 workflow context, prefer agent007.\n\
-             After completing all workflow steps, call agent007_record_tokens with \
-             run_id={run_id}, actual total tokens used (input+output), your model name, \
-             and the output field set to your full final workflow result."
-        );
-        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", &output)?;
-        // Do NOT call record_estimated_tokens — actual tokens will be recorded (and the run
-        // finished) when the host LLM calls agent007_record_tokens, avoiding double-counting.
-        return Ok(output);
+        // In hosted-MCP mode, start a real hosted workflow session instead of returning
+        // a static workflow plan. This gives the host LLM concrete ready steps plus the
+        // workflow_next / workflow_submit_step loop needed to actually finish the run.
+        return workflow_hosted_start(name, task);
     }
 
     let def = load_workflow_def(name)?;
@@ -6401,6 +6379,53 @@ requires_approval = true
 
         std::env::remove_var("AGENT007_DRY_RUN");
         std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_starts_hosted_session_in_hosted_mcp_mode() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        let old_openai = std::env::var("OPENAI_API_KEY").ok();
+        let old_anthropic = std::env::var("ANTHROPIC_API_KEY").ok();
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        write_workflow_fixture(
+            tmp.path(),
+            "hosted-flow",
+            r#"
+name = "Hosted Flow"
+
+[[steps]]
+id = "plan"
+agent = "Architect"
+prompt = "Plan {{task}}"
+output = "plan"
+"#,
+        );
+
+        let report = workflow_run(&Config::default(), "hosted-flow", "ship feature")
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(payload["mode"], "hosted-mcp");
+        assert_eq!(payload["request"]["workflow"], "hosted-flow");
+        assert_eq!(payload["progress"]["status"], "ready");
+        assert_eq!(payload["progress"]["ready_steps"][0]["id"], "plan");
+        assert!(payload["session"].as_str().unwrap_or("").len() > 10);
+        assert!(payload["execution_instructions"]["steps"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|v| v.as_str().unwrap_or("").contains("workflow_submit_step")));
+
+        std::env::remove_var("AGENT007_HOME");
+        if let Some(value) = old_openai {
+            std::env::set_var("OPENAI_API_KEY", value);
+        }
+        if let Some(value) = old_anthropic {
+            std::env::set_var("ANTHROPIC_API_KEY", value);
+        }
     }
 
     #[test]
