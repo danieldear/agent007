@@ -2603,15 +2603,20 @@ pub async fn skill_import_handler(
 }
 
 pub async fn skill_registry_handler() -> impl IntoResponse {
-    let registry_url =
+    const REGISTRY_URL: &str =
         "https://raw.githubusercontent.com/danieldear/agent007/main/docs/registry.json";
+    const FALLBACK_REGISTRY_JSON: &str = include_str!("../../../docs/registry.json");
+
+    let fallback = serde_json::from_str::<serde_json::Value>(FALLBACK_REGISTRY_JSON)
+        .unwrap_or_else(|_| serde_json::json!([]));
+
     let client = reqwest::Client::new();
-    match client.get(registry_url).send().await {
+    match client.get(REGISTRY_URL).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(val) => Json(val).into_response(),
-            Err(_) => Json(serde_json::json!([])).into_response(),
+            Err(_) => Json(fallback).into_response(),
         },
-        _ => Json(serde_json::json!([])).into_response(),
+        _ => Json(fallback).into_response(),
     }
 }
 
@@ -4442,7 +4447,13 @@ fn skill_associations(skill: &agent007_skills::Skill) -> AssociatedAssets {
     extract_associations_from_text(skill.template(), &mut assets);
     if skill.is_package() {
         for file in list_package_files(skill.entry_path()) {
-            collect_association_from_ref(&file, &mut assets);
+            let path = skill.entry_path().join(&file);
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                extract_associations_from_text(&content, &mut assets);
+            }
         }
     }
     assets
@@ -5088,8 +5099,8 @@ pub async fn etr_cache_clear_handler(State(state): State<AppState>) -> impl Into
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_association_from_ref, parse_bundle_selection, tool_reference_keys,
-        EXTERNAL_WORKFLOW_CONTROL_ERROR,
+        collect_association_from_ref, load_skills_from_dir, parse_bundle_selection,
+        skill_associations, tool_reference_keys, EXTERNAL_WORKFLOW_CONTROL_ERROR,
     };
     use crate::server::WebServer;
     use axum::http::StatusCode;
@@ -5137,6 +5148,28 @@ mod tests {
     fn parse_bundle_selection_missing_means_all() {
         let items = parse_bundle_selection(None);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn package_skill_helper_files_do_not_become_ghost_script_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".agent007").join("skills");
+        let package_dir = skills_dir.join("pkg-skill");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(
+            package_dir.join("SKILL.md"),
+            "---\nname: pkg\ndescription: test\ntrigger: /pkg\nmodel: codex\n---\nUse {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(package_dir.join("ftm_engine.py"), "print('helper')\n").unwrap();
+
+        let skills = load_skills_from_dir(&skills_dir);
+        assert_eq!(skills.len(), 1);
+        let associations = skill_associations(&skills[0]);
+        assert!(
+            associations.scripts.is_empty(),
+            "package helper files should not be exposed as unresolved script refs"
+        );
     }
 
     #[tokio::test]

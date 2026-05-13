@@ -445,12 +445,20 @@ async function importFromUrl() {
 
       <!-- Tab: Browse Registry -->
       <div v-if="activeTab === 'browse'" class="space-y-4">
+        <div v-if="importStatus" class="alert alert-sm" :class="{
+          'alert-info': importStatus.type === 'loading',
+          'alert-success': importStatus.type === 'success',
+          'alert-error': importStatus.type === 'error',
+        }">
+          <span class="font-mono text-xs">{{ importStatus.message }}</span>
+        </div>
+
         <div class="flex items-center gap-3 flex-wrap">
           <div class="form-control flex-1 min-w-48">
             <input
               v-model="searchQuery"
               class="input input-sm input-bordered w-full font-mono"
-              placeholder="Filter local registry…"
+              placeholder="Filter curated registry…"
             />
           </div>
           <div class="flex items-center gap-1.5 text-xs font-mono text-base-content/40">
@@ -458,7 +466,7 @@ async function importFromUrl() {
             <button
               class="btn btn-xs btn-ghost font-mono border border-base-300"
               @click="$emit('navigate-external', 'extensions')"
-              title="Browse npm MCP packages and GitHub extensions"
+              title="Browse npm MCP packages and GitHub extensions. Skill search here is currently curated registry only."
             >⊞ Extensions →</button>
           </div>
         </div>
