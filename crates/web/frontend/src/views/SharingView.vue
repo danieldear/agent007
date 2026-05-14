@@ -39,7 +39,13 @@ const allPersonasSelected = computed(
 // API paths: tools/ml/infer.py → bundle key: ml/infer.py
 //            scripts/train.py  → bundle key: scripts/train.py
 function apiPathToBundleKey(path) {
-    return path.startsWith("tools/") ? path.slice("tools/".length) : path;
+    const normalized = String(path || "").replace(/^\.?\/*/, "");
+    const withoutAgentHome = normalized.startsWith(".agent007/")
+        ? normalized.slice(".agent007/".length)
+        : normalized;
+    return withoutAgentHome.startsWith("tools/")
+        ? withoutAgentHome.slice("tools/".length)
+        : withoutAgentHome;
 }
 
 const allTools = computed(() => {

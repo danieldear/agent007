@@ -144,6 +144,8 @@ impl WebServer {
             )
             .route("/api/skills/run", post(api::skills_run_handler))
             .route("/api/skills/import", post(api::skill_import_handler))
+            .route("/api/skills/preview", post(api::skill_preview_handler))
+            .route("/api/skills/discover", post(api::skill_discover_handler))
             .route("/api/skills/generate", post(api::skill_generate_handler))
             .route("/api/skills/detail/{trigger}", get(api::skill_get_handler))
             .route("/api/skill-registry", get(api::skill_registry_handler))
