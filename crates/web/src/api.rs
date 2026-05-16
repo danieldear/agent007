@@ -2545,6 +2545,36 @@ pub async fn skill_get_handler(
 #[derive(Deserialize)]
 pub struct SkillImportRequest {
     pub url: String,
+    #[serde(default)]
+    pub conflict_action: Option<String>,
+    #[serde(default)]
+    pub alias_trigger: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SkillPreviewRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SkillDiscoverRequest {
+    pub q: String,
+    #[serde(default)]
+    pub sources: Vec<String>,
+    #[serde(default = "default_skill_discover_limit")]
+    pub limit: usize,
+}
+
+fn default_skill_discover_limit() -> usize {
+    12
+}
+
+fn default_skill_discovery_sources() -> Vec<String> {
+    vec![
+        "https://github.com/openai/skills/tree/main/skills".to_string(),
+        "https://github.com/anthropics/skills/tree/main/skills".to_string(),
+        "https://github.com/vercel-labs/agent-skills/tree/main/skills".to_string(),
+    ]
 }
 
 pub async fn skill_import_handler(
@@ -2562,7 +2592,180 @@ pub async fn skill_import_handler(
         }
     };
 
-    let client = match reqwest::Client::builder().user_agent("agent007").build() {
+    let client = match reqwest::Client::builder()
+        .user_agent("agent007")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let mut imported = match fetch_imported_skill(&client, source, &payload.url).await {
+        Ok(imported) => imported,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let conflict_action = payload
+        .conflict_action
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let alias_trigger = payload
+        .alias_trigger
+        .as_deref()
+        .map(normalize_skill_trigger);
+
+    let existing_conflict = installed_skill_conflict_info(&imported.trigger);
+    if existing_conflict.is_some() {
+        match conflict_action.as_deref() {
+            None | Some("") => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!("skill trigger {} already exists", imported.trigger),
+                        "conflict": existing_conflict,
+                    })),
+                )
+                    .into_response()
+            }
+            Some("keep_existing") => {
+                return Json(serde_json::json!({
+                    "ok": true,
+                    "skipped": true,
+                    "trigger": imported.trigger,
+                    "conflict": existing_conflict,
+                }))
+                .into_response()
+            }
+            Some("alias") => {
+                let Some(alias_trigger) = alias_trigger.clone() else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": "alias_trigger is required when conflict_action=alias" })),
+                    )
+                        .into_response();
+                };
+                if installed_skill_conflict_info(&alias_trigger).is_some() {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({
+                            "error": format!("alias trigger {} already exists", alias_trigger),
+                            "conflict": installed_skill_conflict_info(&alias_trigger),
+                        })),
+                    )
+                        .into_response();
+                }
+                match rewrite_imported_skill_trigger(imported, &alias_trigger) {
+                    Ok(rewritten) => imported = rewritten,
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": e.to_string() })),
+                        )
+                            .into_response()
+                    }
+                }
+            }
+            Some("replace") => {}
+            Some(other) => return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({ "error": format!("unsupported conflict_action: {other}") }),
+                ),
+            )
+                .into_response(),
+        }
+    }
+
+    let skills_dir = agent007_write_home().join("skills");
+    let _ = std::fs::create_dir_all(&skills_dir);
+
+    match write_imported_skill(&skills_dir, imported) {
+        Ok((trigger, path)) => Json(serde_json::json!({
+            "ok": true,
+            "trigger": trigger,
+            "path": path.display().to_string()
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn skill_registry_handler() -> impl IntoResponse {
+    const FALLBACK_REGISTRY_JSON: &str = include_str!("../../../docs/registry.json");
+
+    let fallback = serde_json::from_str::<serde_json::Value>(FALLBACK_REGISTRY_JSON)
+        .unwrap_or_else(|_| serde_json::json!([]));
+    Json(fallback).into_response()
+}
+
+fn installed_skill_conflict_info(trigger: &str) -> Option<SkillConflictInfo> {
+    let global_dir = agent007_global_home().join("skills");
+    let mut variants = Vec::new();
+    for dir in skills_search_dirs() {
+        let source = if dir == global_dir {
+            "global"
+        } else {
+            "project"
+        };
+        for skill in load_skills_from_dir(&dir) {
+            if skill.trigger() != trigger {
+                continue;
+            }
+            variants.push(serde_json::json!({
+                "source": source,
+                "name": skill.name(),
+                "version": skill.version(),
+                "path": skill.entry_path().display().to_string(),
+            }));
+        }
+    }
+    if variants.is_empty() {
+        None
+    } else {
+        Some(SkillConflictInfo {
+            trigger: trigger.to_string(),
+            variants,
+        })
+    }
+}
+
+pub async fn skill_preview_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<SkillPreviewRequest>,
+) -> impl IntoResponse {
+    let source = match parse_skill_import_source(&payload.url) {
+        Ok(source) => source,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .user_agent("agent007")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2584,35 +2787,249 @@ pub async fn skill_import_handler(
         }
     };
 
-    let skills_dir = agent007_write_home().join("skills");
-    let _ = std::fs::create_dir_all(&skills_dir);
+    let (content, files, package) = match &imported.storage {
+        ImportedSkillStorage::Flat { content, .. } => (content.clone(), Vec::new(), false),
+        ImportedSkillStorage::Package { files, .. } => {
+            let skill_content = files
+                .iter()
+                .find(|(relative, _)| relative.eq_ignore_ascii_case("SKILL.md"))
+                .map(|(_, content)| content.clone())
+                .unwrap_or_default();
+            let file_list = files.iter().map(|(relative, _)| relative.clone()).collect();
+            (skill_content, file_list, true)
+        }
+    };
 
-    match write_imported_skill(&skills_dir, imported) {
-        Ok((trigger, path)) => Json(serde_json::json!({
-            "ok": true,
-            "trigger": trigger,
-            "path": path.display().to_string()
-        }))
-        .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
+    let fallback_slug = fallback_skill_slug_from_url(&payload.url);
+    let summary = match extract_skill_manifest_summary(&content, &fallback_slug, &payload.url) {
+        Some(summary) => summary,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "preview source does not look like a skill manifest" })),
+            )
+                .into_response()
+        }
+    };
+    let conflict = installed_skill_conflict_info(&summary.trigger);
+
+    Json(serde_json::json!({
+        "name": summary.name,
+        "trigger": summary.trigger,
+        "description": summary.description,
+        "model": summary.model,
+        "category": summary.category,
+        "version": summary.version,
+        "body": summary.body,
+        "url": payload.url,
+        "package": package,
+        "files": files,
+        "conflict": conflict,
+    }))
+    .into_response()
 }
 
-pub async fn skill_registry_handler() -> impl IntoResponse {
-    let registry_url =
-        "https://raw.githubusercontent.com/danieldear/agent007/main/docs/registry.json";
-    let client = reqwest::Client::new();
-    match client.get(registry_url).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
-            Ok(val) => Json(val).into_response(),
-            Err(_) => Json(serde_json::json!([])).into_response(),
-        },
-        _ => Json(serde_json::json!([])).into_response(),
+pub async fn skill_discover_handler(
+    State(_state): State<AppState>,
+    Json(payload): Json<SkillDiscoverRequest>,
+) -> impl IntoResponse {
+    let query = payload.q.trim().to_string();
+    if query.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "query is required" })),
+        )
+            .into_response();
     }
+
+    let client = match reqwest::Client::builder()
+        .user_agent("agent007")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let limit = payload.limit.clamp(1, 50);
+    let tokens = query_tokens(&query);
+    let mut results = Vec::new();
+    let mut seen_urls = std::collections::BTreeSet::new();
+
+    let sources = if payload.sources.is_empty() {
+        default_skill_discovery_sources()
+    } else {
+        payload.sources.clone()
+    };
+
+    for source_url in &sources {
+        let source = match parse_skill_discovery_source(source_url) {
+            Ok(source) => source,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("{source_url}: {e}") })),
+                )
+                    .into_response()
+            }
+        };
+
+        let tree_url =
+            github_tree_api_url(&source.owner, &source.repo, source.reference.as_deref());
+        let response = match client.get(&tree_url).send().await {
+            Ok(response) => response,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": format!("failed to query GitHub tree for {}: {e}", source.source_url) })),
+                )
+                    .into_response()
+            }
+        };
+        if !response.status().is_success() {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("GitHub tree fetch failed — HTTP {} for {}", response.status(), source.source_url) })),
+            )
+                .into_response();
+        }
+        let tree: GitHubTreeResponse = match response.json().await {
+            Ok(tree) => tree,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": format!("failed to parse GitHub tree response for {}: {e}", source.source_url) })),
+                )
+                    .into_response()
+            }
+        };
+        if tree.truncated {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("GitHub tree response was truncated for {}; narrow the source path", source.source_url) })),
+            )
+                .into_response();
+        }
+
+        let prefix = source.path.trim_matches('/').to_string();
+        let query_lc = query.to_ascii_lowercase();
+        let mut candidates: Vec<String> = tree
+            .tree
+            .into_iter()
+            .filter(|entry| entry.kind == "blob")
+            .filter(|entry| entry.path.ends_with(".md") || entry.path.ends_with(".MD"))
+            .filter(|entry| {
+                if prefix.is_empty() {
+                    true
+                } else {
+                    entry.path == prefix || entry.path.starts_with(&(prefix.clone() + "/"))
+                }
+            })
+            .filter(|entry| is_discoverable_skill_markdown_path(&entry.path, &prefix))
+            .map(|entry| entry.path)
+            .collect();
+        candidates.sort();
+        let mut source_matches: Vec<(i32, SkillDiscoverResult)> = Vec::new();
+
+        for path in candidates {
+            let is_package = FsPath::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+                .unwrap_or(false);
+            let file_url = github_raw_file_url(
+                &source.owner,
+                &source.repo,
+                source.reference.as_deref(),
+                &path,
+            );
+            let content = match fetch_text_async(&client, &file_url).await {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+            if !is_package && !has_skill_like_frontmatter(&content) {
+                continue;
+            }
+            let fallback_slug = fallback_skill_slug_from_url(&file_url);
+            let Some(summary) = extract_skill_manifest_summary(&content, &fallback_slug, &file_url)
+            else {
+                continue;
+            };
+            let Some(score) =
+                skill_summary_match_score(&summary, &path, &source, &query_lc, &tokens)
+            else {
+                continue;
+            };
+            let install_url = if is_package {
+                github_tree_html_url(
+                    &source.owner,
+                    &source.repo,
+                    source.reference.as_deref(),
+                    FsPath::new(&path)
+                        .parent()
+                        .map(|parent| parent.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                        .as_str(),
+                )
+            } else {
+                github_blob_html_url(
+                    &source.owner,
+                    &source.repo,
+                    source.reference.as_deref(),
+                    &path,
+                )
+            };
+
+            if !seen_urls.insert(install_url.clone()) {
+                continue;
+            }
+
+            let conflict = installed_skill_conflict_info(&summary.trigger);
+            source_matches.push((
+                score,
+                SkillDiscoverResult {
+                    name: summary.name,
+                    trigger: summary.trigger.clone(),
+                    description: summary.description,
+                    repo: format!("{}/{}", source.owner, source.repo),
+                    reference: source
+                        .reference
+                        .clone()
+                        .unwrap_or_else(|| "HEAD".to_string()),
+                    path: path.clone(),
+                    url: install_url,
+                    source_url: source.source_url.clone(),
+                    package: is_package,
+                    trust: "public".to_string(),
+                    version: summary.version,
+                    category: summary.category,
+                    model: summary.model,
+                    installed: conflict.is_some(),
+                    conflict,
+                },
+            ));
+        }
+
+        source_matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        for (_, result) in source_matches {
+            if results.len() >= limit {
+                break;
+            }
+            results.push(result);
+        }
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Json(serde_json::json!({ "results": results })).into_response()
 }
 
 #[derive(Debug)]
@@ -2657,6 +3074,9 @@ struct SkillImportFrontmatter {
     trigger: Option<String>,
     name: Option<String>,
     description: Option<String>,
+    model: Option<String>,
+    category: Option<String>,
+    version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2665,6 +3085,68 @@ struct GitHubContentEntry {
     #[serde(rename = "type")]
     kind: String,
     download_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeResponse {
+    tree: Vec<GitHubTreeEntry>,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Debug, Clone)]
+struct SkillManifestSummary {
+    trigger: String,
+    name: String,
+    description: String,
+    model: Option<String>,
+    category: Option<String>,
+    version: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Clone)]
+struct SkillDiscoverSource {
+    owner: String,
+    repo: String,
+    reference: Option<String>,
+    path: String,
+    source_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillConflictInfo {
+    trigger: String,
+    variants: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillDiscoverResult {
+    name: String,
+    trigger: String,
+    description: String,
+    repo: String,
+    reference: String,
+    path: String,
+    url: String,
+    source_url: String,
+    package: bool,
+    trust: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conflict: Option<SkillConflictInfo>,
 }
 
 fn parse_skill_import_source(url: &str) -> anyhow::Result<SkillImportSourceKind> {
@@ -2729,6 +3211,260 @@ fn parse_skill_import_source(url: &str) -> anyhow::Result<SkillImportSourceKind>
     Err(anyhow::anyhow!(
         "unsupported source — use a GitHub tree/blob/raw URL or direct https:// skill URL"
     ))
+}
+
+fn parse_skill_discovery_source(url: &str) -> anyhow::Result<SkillDiscoverSource> {
+    match parse_skill_import_source(url)? {
+        SkillImportSourceKind::GitHubDir {
+            owner,
+            repo,
+            reference,
+            path,
+        } => Ok(SkillDiscoverSource {
+            owner,
+            repo,
+            reference,
+            path,
+            source_url: url.trim().to_string(),
+        }),
+        SkillImportSourceKind::GitHubFile {
+            owner,
+            repo,
+            reference,
+            path,
+        } => Ok(SkillDiscoverSource {
+            owner,
+            repo,
+            reference,
+            path: FsPath::new(&path)
+                .parent()
+                .map(|parent| parent.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            source_url: url.trim().to_string(),
+        }),
+        SkillImportSourceKind::DirectFile { .. } => Err(anyhow::anyhow!(
+            "discovery sources must be GitHub repository, tree, or package URLs"
+        )),
+    }
+}
+
+fn is_discoverable_skill_markdown_path(path: &str, source_prefix: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("/references/")
+        || lower.contains("/reference/")
+        || lower.contains("/examples/")
+        || lower.contains("/example/")
+        || lower.contains("/assets/")
+        || lower.contains("/docs/")
+        || lower.ends_with("/readme.md")
+        || lower == "readme.md"
+    {
+        return false;
+    }
+    if !source_prefix.trim().is_empty() {
+        return lower.ends_with("/skill.md")
+            || lower == "skill.md"
+            || looks_like_flat_skill_markdown_path(&lower);
+    }
+    lower.ends_with("/skill.md")
+        || lower == "skill.md"
+        || looks_like_flat_skill_markdown_path(&lower)
+}
+
+fn looks_like_flat_skill_markdown_path(lower: &str) -> bool {
+    if let Some(rest) = lower.strip_prefix("skills/") {
+        return !rest.contains('/') && rest.ends_with(".md");
+    }
+    if let Some((_, rest)) = lower.split_once("/.codex/skills/") {
+        return !rest.contains('/') && rest.ends_with(".md");
+    }
+    if let Some((_, rest)) = lower.split_once("/.claude/") {
+        return !rest.contains('/') && rest.ends_with(".md");
+    }
+    false
+}
+
+fn has_skill_like_frontmatter(content: &str) -> bool {
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return false;
+    }
+    match serde_yaml::from_str::<SkillImportFrontmatter>(parts[1]) {
+        Ok(frontmatter) => frontmatter.trigger.is_some() || frontmatter.name.is_some(),
+        Err(_) => false,
+    }
+}
+
+fn extract_skill_manifest_summary(
+    content: &str,
+    fallback_slug: &str,
+    original_url: &str,
+) -> Option<SkillManifestSummary> {
+    let url_trigger = format!("/{fallback_slug}");
+    let fallback_name = fallback_slug
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return Some(SkillManifestSummary {
+            trigger: url_trigger,
+            name: fallback_name,
+            description: format!("Imported from {original_url}"),
+            model: None,
+            category: None,
+            version: None,
+            body: content.trim().to_string(),
+        });
+    }
+    let frontmatter = serde_yaml::from_str::<SkillImportFrontmatter>(parts[1]).ok();
+    let frontmatter = frontmatter.unwrap_or(SkillImportFrontmatter {
+        trigger: None,
+        name: None,
+        description: None,
+        model: None,
+        category: None,
+        version: None,
+    });
+    Some(SkillManifestSummary {
+        trigger: frontmatter.trigger.unwrap_or(url_trigger),
+        name: frontmatter.name.unwrap_or(fallback_name),
+        description: frontmatter
+            .description
+            .unwrap_or_else(|| format!("Imported from {original_url}")),
+        model: frontmatter.model,
+        category: frontmatter.category,
+        version: frontmatter.version,
+        body: parts[2].trim_start_matches('\n').to_string(),
+    })
+}
+
+fn skill_summary_match_score(
+    summary: &SkillManifestSummary,
+    path: &str,
+    source: &SkillDiscoverSource,
+    query_lc: &str,
+    tokens: &[String],
+) -> Option<i32> {
+    let name = summary.name.to_ascii_lowercase();
+    let trigger = summary.trigger.to_ascii_lowercase();
+    let description = summary.description.to_ascii_lowercase();
+    let path_lc = path.to_ascii_lowercase();
+    let repo = format!("{}/{}", source.owner, source.repo).to_ascii_lowercase();
+    let body = summary.body.to_ascii_lowercase();
+    let metadata = [
+        name.as_str(),
+        trigger.as_str(),
+        description.as_str(),
+        path_lc.as_str(),
+        repo.as_str(),
+    ]
+    .join(" ");
+    let combined = format!("{metadata}\n{body}");
+    let combined_tokens = query_tokens(&combined);
+    let short_exact_query = tokens.len() == 1 && query_lc.len() <= 2;
+
+    let phrase_in_name = field_matches_query(&name, query_lc, short_exact_query);
+    let phrase_in_trigger = field_matches_query(&trigger, query_lc, short_exact_query);
+    let phrase_in_description = field_matches_query(&description, query_lc, short_exact_query);
+    let phrase_in_path = field_matches_query(&path_lc, query_lc, short_exact_query);
+    let phrase_in_repo = field_matches_query(&repo, query_lc, short_exact_query);
+    let phrase_in_body = field_matches_query(&body, query_lc, short_exact_query);
+
+    let token_hits = tokens
+        .iter()
+        .filter(|token| combined_tokens.iter().any(|candidate| candidate == *token))
+        .count() as i32;
+    let all_tokens_match = !tokens.is_empty() && token_hits as usize == tokens.len();
+    let any_token_match = token_hits > 0;
+    let phrase_match = phrase_in_name
+        || phrase_in_trigger
+        || phrase_in_description
+        || phrase_in_path
+        || phrase_in_repo
+        || phrase_in_body;
+
+    if !phrase_match && !any_token_match {
+        return None;
+    }
+
+    let mut score = 0;
+    if phrase_in_name || phrase_in_trigger {
+        score += 140;
+    }
+    if phrase_in_description {
+        score += 110;
+    }
+    if phrase_in_path {
+        score += 90;
+    }
+    if phrase_in_repo {
+        score += 70;
+    }
+    if phrase_in_body {
+        score += 60;
+    }
+    if all_tokens_match {
+        score += 50;
+    } else {
+        score += token_hits * 15;
+    }
+    if summary.model.is_some() {
+        score += 2;
+    }
+    if summary.version.is_some() {
+        score += 1;
+    }
+
+    Some(score)
+}
+
+fn field_matches_query(field: &str, query_lc: &str, exact_token_only: bool) -> bool {
+    if exact_token_only {
+        return query_tokens(field).iter().any(|token| token == query_lc);
+    }
+    field.contains(query_lc)
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| token.len() >= 2)
+        .collect()
+}
+
+fn github_tree_api_url(owner: &str, repo: &str, reference: Option<&str>) -> String {
+    let reference = reference.unwrap_or("HEAD");
+    format!("https://api.github.com/repos/{owner}/{repo}/git/trees/{reference}?recursive=1")
+}
+
+fn github_blob_html_url(owner: &str, repo: &str, reference: Option<&str>, path: &str) -> String {
+    let reference = reference.unwrap_or("HEAD");
+    format!(
+        "https://github.com/{owner}/{repo}/blob/{reference}/{}",
+        path.trim_start_matches('/')
+    )
+}
+
+fn github_tree_html_url(owner: &str, repo: &str, reference: Option<&str>, path: &str) -> String {
+    let reference = reference.unwrap_or("HEAD");
+    if path.trim().is_empty() {
+        format!("https://github.com/{owner}/{repo}/tree/{reference}")
+    } else {
+        format!(
+            "https://github.com/{owner}/{repo}/tree/{reference}/{}",
+            path.trim_start_matches('/')
+        )
+    }
 }
 
 async fn fetch_imported_skill(
@@ -2893,6 +3629,49 @@ async fn fetch_text_async(client: &reqwest::Client, url: &str) -> anyhow::Result
         .map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))
 }
 
+fn rewrite_imported_skill_trigger(
+    mut imported: ImportedSkill,
+    new_trigger: &str,
+) -> anyhow::Result<ImportedSkill> {
+    match &mut imported.storage {
+        ImportedSkillStorage::Flat { filename, content } => {
+            *content = rewrite_skill_trigger_in_content(content, new_trigger)?;
+            *filename = format!("{}.md", sanitize_skill_slug(new_trigger, "imported-skill"));
+        }
+        ImportedSkillStorage::Package {
+            package_name,
+            files,
+        } => {
+            let skill_index = files
+                .iter()
+                .position(|(relative, _)| relative.eq_ignore_ascii_case("SKILL.md"))
+                .ok_or_else(|| anyhow::anyhow!("package is missing SKILL.md"))?;
+            files[skill_index].1 =
+                rewrite_skill_trigger_in_content(&files[skill_index].1, new_trigger)?;
+            *package_name = sanitize_skill_slug(new_trigger, "imported-skill");
+        }
+    }
+    imported.trigger = new_trigger.to_string();
+    Ok(imported)
+}
+
+fn rewrite_skill_trigger_in_content(content: &str, new_trigger: &str) -> anyhow::Result<String> {
+    let parts: Vec<&str> = content.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        anyhow::bail!("skill content is missing YAML frontmatter");
+    }
+    let mut frontmatter: serde_yaml::Mapping = serde_yaml::from_str(parts[1])
+        .map_err(|e| anyhow::anyhow!("failed to parse skill frontmatter: {e}"))?;
+    frontmatter.insert(
+        serde_yaml::Value::String("trigger".to_string()),
+        serde_yaml::Value::String(new_trigger.to_string()),
+    );
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|e| anyhow::anyhow!("failed to serialize skill frontmatter: {e}"))?;
+    let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml.as_str());
+    Ok(format!("---\n{}---\n{}", yaml, parts[2]))
+}
+
 fn write_imported_skill(
     skills_dir: &FsPath,
     imported: ImportedSkill,
@@ -2975,6 +3754,9 @@ fn normalize_skill_manifest_content(
                     trigger: None,
                     name: None,
                     description: None,
+                    model: None,
+                    category: None,
+                    version: None,
                 },
                 content.to_string(),
                 false,
@@ -2986,6 +3768,9 @@ fn normalize_skill_manifest_content(
                 trigger: None,
                 name: None,
                 description: None,
+                model: None,
+                category: None,
+                version: None,
             },
             content.to_string(),
             false,
@@ -4317,6 +5102,55 @@ fn list_package_files(package_dir: &FsPath) -> Vec<String> {
     files
 }
 
+const MAX_SKILL_ASSOCIATION_SCAN_FILES: usize = 32;
+const MAX_SKILL_ASSOCIATION_SCAN_BYTES: u64 = 128 * 1024;
+
+fn is_skill_association_scan_candidate(path: &FsPath) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        &*ext.to_ascii_lowercase(),
+        "md" | "markdown"
+            | "txt"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "json"
+            | "py"
+            | "sh"
+            | "js"
+            | "ts"
+            | "jsx"
+            | "tsx"
+            | "rs"
+    )
+}
+
+fn package_association_file_paths(package_dir: &FsPath) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for rel in list_package_files(package_dir) {
+        if out.len() >= MAX_SKILL_ASSOCIATION_SCAN_FILES {
+            break;
+        }
+        let path = package_dir.join(&rel);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.len() > MAX_SKILL_ASSOCIATION_SCAN_BYTES {
+            continue;
+        }
+        if !is_skill_association_scan_candidate(&path) {
+            continue;
+        }
+        out.push(path);
+    }
+    out
+}
+
 #[derive(Debug, Default, Clone)]
 struct AssociatedAssets {
     tools: std::collections::BTreeSet<String>,
@@ -4404,6 +5238,7 @@ fn collect_association_from_ref(reference: &str, assets: &mut AssociatedAssets) 
     if let Some(idx) = normalized.find(".agent007/") {
         let nested = &normalized[idx + ".agent007/".len()..];
         collect_association_from_ref(nested, assets);
+        return;
     }
 
     if let Some(idx) = normalized.find("tools/") {
@@ -4441,8 +5276,10 @@ fn skill_associations(skill: &agent007_skills::Skill) -> AssociatedAssets {
     let mut assets = AssociatedAssets::default();
     extract_associations_from_text(skill.template(), &mut assets);
     if skill.is_package() {
-        for file in list_package_files(skill.entry_path()) {
-            collect_association_from_ref(&file, &mut assets);
+        for path in package_association_file_paths(skill.entry_path()) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                extract_associations_from_text(&content, &mut assets);
+            }
         }
     }
     assets
@@ -5088,8 +5925,8 @@ pub async fn etr_cache_clear_handler(State(state): State<AppState>) -> impl Into
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_association_from_ref, parse_bundle_selection, tool_reference_keys,
-        EXTERNAL_WORKFLOW_CONTROL_ERROR,
+        collect_association_from_ref, load_skills_from_dir, parse_bundle_selection,
+        skill_associations, tool_reference_keys, EXTERNAL_WORKFLOW_CONTROL_ERROR,
     };
     use crate::server::WebServer;
     use axum::http::StatusCode;
@@ -5137,6 +5974,59 @@ mod tests {
     fn parse_bundle_selection_missing_means_all() {
         let items = parse_bundle_selection(None);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn package_association_file_paths_skip_large_and_non_text_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("small.md"),
+            "Use tools/demo.py
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("large.md"),
+            "x".repeat((super::MAX_SKILL_ASSOCIATION_SCAN_BYTES as usize) + 1),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("helper.bin"), [0_u8, 159, 146, 150]).unwrap();
+
+        let files = super::package_association_file_paths(dir.path());
+        let names: std::collections::BTreeSet<String> = files
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
+            .collect();
+
+        assert!(names.contains("small.md"));
+        assert!(!names.contains("large.md"));
+        assert!(!names.contains("helper.bin"));
+    }
+
+    #[test]
+    fn package_skill_helper_files_do_not_become_ghost_script_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".agent007").join("skills");
+        let package_dir = skills_dir.join("pkg-skill");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(
+            package_dir.join("SKILL.md"),
+            "---\nname: pkg\ndescription: test\ntrigger: /pkg\nmodel: codex\n---\nUse {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(package_dir.join("ftm_engine.py"), "print('helper')\n").unwrap();
+
+        let skills = load_skills_from_dir(&skills_dir);
+        assert_eq!(skills.len(), 1);
+        let associations = skill_associations(&skills[0]);
+        assert!(
+            associations.scripts.is_empty(),
+            "package helper files should not be exposed as unresolved script refs"
+        );
     }
 
     #[tokio::test]
@@ -5228,6 +6118,27 @@ mod tests {
         let mut assets = super::AssociatedAssets::default();
         collect_association_from_ref("tool:project-setup", &mut assets);
         assert!(assets.tools.iter().any(|tool| tool == "project-setup"));
+    }
+
+    #[test]
+    fn collect_association_normalizes_hidden_agent007_tool_paths() {
+        let mut assets = super::AssociatedAssets::default();
+        collect_association_from_ref(".agent007/tools/ftm_engine.py", &mut assets);
+        assert!(assets
+            .tools
+            .iter()
+            .any(|tool| tool == "tools/ftm_engine.py"));
+        assert!(assets
+            .scripts
+            .iter()
+            .any(|tool| tool == "tools/ftm_engine.py"));
+        assert!(
+            !assets
+                .scripts
+                .iter()
+                .any(|tool| tool == ".agent007/tools/ftm_engine.py"),
+            "hidden agent007-prefixed tool path should not survive as ghost script ref"
+        );
     }
 
     #[tokio::test]
@@ -6503,5 +7414,166 @@ requires_approval = true
         )
         .unwrap();
         assert_eq!(relative, "assets/example.txt");
+    }
+
+    #[test]
+    fn parse_skill_discovery_source_from_blob_uses_parent_path() {
+        let parsed = super::parse_skill_discovery_source(
+            "https://github.com/example/repo/blob/main/skills/review-skill/SKILL.md",
+        )
+        .unwrap();
+        assert_eq!(parsed.owner, "example");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.reference.as_deref(), Some("main"));
+        assert_eq!(parsed.path, "skills/review-skill");
+    }
+
+    #[test]
+    fn rewrite_imported_skill_trigger_updates_flat_skill_manifest() {
+        let imported = super::ImportedSkill {
+            trigger: "/old-skill".to_string(),
+            storage: super::ImportedSkillStorage::Flat {
+                filename: "old-skill.md".to_string(),
+                content:
+                    "---\nname: Old Skill\ntrigger: /old-skill\ndescription: Example\n---\nbody"
+                        .to_string(),
+            },
+        };
+        let rewritten = super::rewrite_imported_skill_trigger(imported, "/new-skill").unwrap();
+        assert_eq!(rewritten.trigger, "/new-skill");
+        match rewritten.storage {
+            super::ImportedSkillStorage::Flat { filename, content } => {
+                assert_eq!(filename, "new-skill.md");
+                assert!(content.contains("trigger: /new-skill"));
+            }
+            _ => panic!("expected flat skill"),
+        }
+    }
+
+    #[test]
+    fn extract_skill_manifest_summary_synthesizes_missing_trigger() {
+        let summary = super::extract_skill_manifest_summary(
+            "---\nname: External Skill\ndescription: Test external skill\n---\nBody text",
+            "external-skill",
+            "https://example.com/skills/external-skill/SKILL.md",
+        )
+        .expect("summary should be synthesized");
+        assert_eq!(summary.trigger, "/external-skill");
+        assert_eq!(summary.name, "External Skill");
+        assert_eq!(summary.description, "Test external skill");
+        assert_eq!(summary.body, "Body text");
+    }
+
+    #[test]
+    fn skill_summary_match_score_matches_body_tokens() {
+        let summary = super::SkillManifestSummary {
+            trigger: "/senior-ml-engineer".to_string(),
+            name: "Senior ML Engineer".to_string(),
+            description: "Production ML systems skill".to_string(),
+            model: None,
+            category: Some("ml".to_string()),
+            version: None,
+            body: "Use when you need an ML engineer for model deployment, MLOps, and training pipelines.".to_string(),
+        };
+        let source = super::SkillDiscoverSource {
+            owner: "anthropics".to_string(),
+            repo: "skills".to_string(),
+            reference: Some("main".to_string()),
+            path: "skills".to_string(),
+            source_url: "https://github.com/anthropics/skills/tree/main/skills".to_string(),
+        };
+        let tokens = super::query_tokens("ml engineer");
+        let score = super::skill_summary_match_score(
+            &summary,
+            "skills/senior-ml-engineer/SKILL.md",
+            &source,
+            "ml engineer",
+            &tokens,
+        );
+        assert!(
+            score.is_some(),
+            "body/token matching should find ML engineer"
+        );
+    }
+
+    #[test]
+    fn skill_summary_match_score_rejects_unrelated_query() {
+        let summary = super::SkillManifestSummary {
+            trigger: "/frontend-designer".to_string(),
+            name: "Frontend Designer".to_string(),
+            description: "UI polish and interface design".to_string(),
+            model: None,
+            category: Some("frontend".to_string()),
+            version: None,
+            body: "Craft polished layouts and improve CSS architecture.".to_string(),
+        };
+        let source = super::SkillDiscoverSource {
+            owner: "openai".to_string(),
+            repo: "skills".to_string(),
+            reference: Some("main".to_string()),
+            path: "skills".to_string(),
+            source_url: "https://github.com/openai/skills/tree/main/skills".to_string(),
+        };
+        let tokens = super::query_tokens("ml engineer");
+        let score = super::skill_summary_match_score(
+            &summary,
+            "skills/frontend-designer/SKILL.md",
+            &source,
+            "ml engineer",
+            &tokens,
+        );
+        assert!(score.is_none(), "unrelated skills should not match");
+    }
+
+    #[test]
+    fn skill_summary_match_score_does_not_match_ml_inside_yaml_or_toml() {
+        let summary = super::SkillManifestSummary {
+            trigger: "/openai-yaml".to_string(),
+            name: "OpenAI YAML".to_string(),
+            description: "Schema reference".to_string(),
+            model: None,
+            category: None,
+            version: None,
+            body: "YAML reference for config files.".to_string(),
+        };
+        let source = super::SkillDiscoverSource {
+            owner: "openai".to_string(),
+            repo: "skills".to_string(),
+            reference: Some("main".to_string()),
+            path: "skills".to_string(),
+            source_url: "https://github.com/openai/skills/tree/main/skills".to_string(),
+        };
+        let tokens = super::query_tokens("ml");
+        let score = super::skill_summary_match_score(
+            &summary,
+            "skills/openai_yaml.md",
+            &source,
+            "ml",
+            &tokens,
+        );
+        assert!(
+            score.is_none(),
+            "short token matching should not match YAML/TOML substrings"
+        );
+    }
+
+    #[test]
+    fn discoverable_skill_path_excludes_references_examples_and_docs() {
+        assert!(!super::is_discoverable_skill_markdown_path(
+            "skills/.curated/netlify-deploy/references/netlify-toml.md",
+            "",
+        ));
+        assert!(!super::is_discoverable_skill_markdown_path(
+            "skills/foo/examples/example.md",
+            "",
+        ));
+        assert!(super::is_discoverable_skill_markdown_path(
+            "skills/frontend-design/SKILL.md",
+            "",
+        ));
+        assert!(super::is_discoverable_skill_markdown_path(
+            "skills/review.md",
+            ""
+        ));
     }
 }

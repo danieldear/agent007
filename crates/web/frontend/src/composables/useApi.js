@@ -53,7 +53,22 @@ export function useApi() {
       const suffix = qs.toString() ? `?${qs.toString()}` : ''
       return fetchJson(`/api/skills/detail/${encodeURIComponent(trigger)}${suffix}`)
     },
-    importSkill: (url) => fetchJson('/api/skills/import', { method: 'POST', body: JSON.stringify({ url }) }),
+    importSkill: (url, opts = {}) =>
+      fetchJson('/api/skills/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          url,
+          conflict_action: opts.conflict_action,
+          alias_trigger: opts.alias_trigger,
+        }),
+      }),
+    previewSkillImport: (url) =>
+      fetchJson('/api/skills/preview', { method: 'POST', body: JSON.stringify({ url }) }),
+    discoverSkills: (q, sources = [], limit = 12) =>
+      fetchJson('/api/skills/discover', {
+        method: 'POST',
+        body: JSON.stringify({ q, sources, limit }),
+      }),
     deleteSkill: (trigger) => fetchJson(`/api/skills/${encodeURIComponent(trigger.replace(/^\//, ''))}`, { method: 'DELETE' }),
     getRegistry: () => fetchJson('/api/skill-registry'),
 

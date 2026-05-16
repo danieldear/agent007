@@ -1,29 +1,22 @@
 [
   {
-    "name": "Code Reviewer",
-    "trigger": "/code-review",
-    "description": "Full code review with actionable feedback on bugs, security, and design",
-    "category": "code",
+    "name": "Brainstorm",
+    "trigger": "/brainstorm",
+    "description": "Free-form ideation \u2014 explores a problem space, generates 3\u20135 distinct approaches with trade-offs, and produces a structured ideation document. Use before invoking the architect or PRD workflow.",
+    "category": "project",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-review.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/brainstorm.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
-    "name": "Test Generator",
-    "trigger": "/code-test-gen",
-    "description": "Generate comprehensive test suites with edge cases and mocking",
+    "name": "Documentation Writer",
+    "trigger": "/code-document",
+    "description": "Generate API docs, architecture docs, and inline documentation",
     "category": "code",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-test-gen.md",
-    "stars": 0
-  },
-  {
-    "name": "Security Auditor",
-    "trigger": "/code-security-audit",
-    "description": "Security audit covering OWASP Top 10, secrets, dependencies, and threat modeling",
-    "category": "security",
-    "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-security-audit.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/code-document.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
@@ -32,7 +25,8 @@
     "description": "Profile analysis and performance optimization suggestions",
     "category": "code",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-optimize.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/code-optimize.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
@@ -41,52 +35,98 @@
     "description": "Identify code smells and propose targeted improvements",
     "category": "code",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-refactor.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/code-refactor.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
-    "name": "PR Reviewer",
-    "trigger": "/dev-pr-review",
-    "description": "Thorough pull request review with actionable feedback",
-    "category": "devops",
-    "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/dev-pr-review.md",
-    "stars": 0
-  },
-  {
-    "name": "TDD Coach",
-    "trigger": "/dev-tdd",
-    "description": "Test-driven development cycle: red-green-refactor with coaching",
+    "name": "Security Auditor",
+    "trigger": "/code-security-audit",
+    "description": "Security audit covering OWASP, dependencies, and threat modeling",
     "category": "code",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/dev-tdd.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/code-security-audit.md",
+    "version": "1.1.0",
+    "stars": 0
+  },
+  {
+    "name": "Test Generator",
+    "trigger": "/code-test-gen",
+    "description": "Generate comprehensive test suites with edge cases",
+    "category": "code",
+    "author": "agent007",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/code-test-gen.md",
+    "version": "1.1.0",
+    "stars": 0
+  },
+  {
+    "name": "Architect",
+    "trigger": "/dev-architect",
+    "description": "Design system architecture from requirements",
+    "category": "dev",
+    "author": "agent007",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/dev-architect.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
     "name": "Debugger",
     "trigger": "/dev-debug",
     "description": "Systematic debugging with hypothesis-driven investigation",
-    "category": "code",
+    "category": "dev",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/dev-debug.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/dev-debug.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
-    "name": "Architect",
-    "trigger": "/dev-architect",
-    "description": "Design system architecture from requirements with diagrams",
-    "category": "architecture",
+    "name": "PR Reviewer",
+    "trigger": "/dev-pr-review",
+    "description": "Thorough pull request review with actionable feedback",
+    "category": "dev",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/dev-architect.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/dev-pr-review.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
-    "name": "Documentation Writer",
-    "trigger": "/code-document",
-    "description": "Generate API docs, architecture docs, and inline documentation",
-    "category": "docs",
+    "name": "TDD Coach",
+    "trigger": "/dev-tdd",
+    "description": "Test-driven development cycle (red-green-refactor)",
+    "category": "dev",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/code-document.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/dev-tdd.md",
+    "version": "1.1.0",
+    "stars": 0
+  },
+  {
+    "name": "Codebase Analyzer",
+    "trigger": "/meta-analyze-codebase",
+    "description": "Analyze codebase for tech stack, patterns, and architecture",
+    "category": "meta",
+    "author": "agent007",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/meta-analyze-codebase.md",
+    "version": "1.1.0",
+    "stars": 0
+  },
+  {
+    "name": "Agent Creator",
+    "trigger": "/meta-create-agent",
+    "description": "Guided wizard to create a custom agent persona",
+    "category": "meta",
+    "author": "agent007",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/meta-create-agent.md",
+    "version": "1.1.0",
+    "stars": 0
+  },
+  {
+    "name": "Changelog Generator",
+    "trigger": "/project-changelog",
+    "description": "Generate changelogs grouped by type from git history",
+    "category": "project",
+    "author": "agent007",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/project-changelog.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
@@ -95,7 +135,8 @@
     "description": "Break features into tasks with estimates and dependencies",
     "category": "project",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/project-plan.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/project-plan.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
@@ -104,43 +145,18 @@
     "description": "Product requirements document with user stories and constraints",
     "category": "project",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/project-prd.md",
-    "stars": 0
-  },
-  {
-    "name": "Changelog Generator",
-    "trigger": "/project-changelog",
-    "description": "Generate changelogs grouped by type from git history",
-    "category": "devops",
-    "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/project-changelog.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/project-prd.md",
+    "version": "1.1.0",
     "stars": 0
   },
   {
     "name": "Release Manager",
     "trigger": "/project-release",
     "description": "Version strategy, release notes, and rollback planning",
-    "category": "devops",
+    "category": "project",
     "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/project-release.md",
-    "stars": 0
-  },
-  {
-    "name": "Frontend Designer",
-    "trigger": "/frontend-designer",
-    "description": "Create distinctive, production-grade frontend interfaces with high design quality",
-    "category": "frontend",
-    "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/Frontend_Designer.md",
-    "stars": 0
-  },
-  {
-    "name": "Codebase Analyzer",
-    "trigger": "/meta-analyze-codebase",
-    "description": "Analyze codebase for tech stack, patterns, and architecture",
-    "category": "architecture",
-    "author": "agent007",
-    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/skills/meta-analyze-codebase.md",
+    "url": "https://raw.githubusercontent.com/danieldear/agent007/main/crates/cli/skills/project-release.md",
+    "version": "1.1.0",
     "stars": 0
   }
 ]

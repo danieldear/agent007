@@ -9,11 +9,28 @@ const activeTab = ref('installed')
 const showForm = ref(false)
 const editingTrigger = ref(null) // null = creating, string = editing existing
 const importUrl = ref('')
+const browseStatus = ref(null)
 const importStatus = ref(null)
 const searchQuery = ref('')
+const discoverQuery = ref('')
+const discoverSourcesText = ref('')
+const discoverResults = ref([])
+const discovering = ref(false)
+const previewLoading = ref(false)
+const previewError = ref(null)
+const previewOpen = ref(false)
+const previewData = ref(null)
+const previewMode = ref('replace')
+const previewAliasTrigger = ref('')
 const toast = ref(null)
 const promotingTrigger = ref(null)
 const deletingTrigger = ref(null)
+
+const DEFAULT_DISCOVER_SOURCES = [
+  'https://github.com/openai/skills/tree/main/skills',
+  'https://github.com/anthropics/skills/tree/main/skills',
+  'https://github.com/vercel-labs/agent-skills/tree/main/skills',
+]
 
 let toastTimer = null
 function showToast(message, type = 'success') {
@@ -86,7 +103,10 @@ const form = ref({
   template: '',
 })
 
-onMounted(loadSkills)
+onMounted(async () => {
+  loadDiscoverSources()
+  await loadSkills()
+})
 
 async function loadSkills() {
   const data = await api.listSkills()
@@ -105,7 +125,39 @@ async function loadRegistry() {
 
 function switchTab(tab) {
   activeTab.value = tab
-  if (tab === 'browse') loadRegistry()
+  if (tab === 'browse') {
+    importStatus.value = null
+    loadRegistry()
+  } else if (tab === 'import') {
+    browseStatus.value = null
+  }
+}
+
+function loadDiscoverSources() {
+  try {
+    const saved = localStorage.getItem('agent007.skillDiscoverSources')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed) && parsed.length) {
+        discoverSourcesText.value = parsed.join('\n')
+        return
+      }
+    }
+  } catch {}
+  discoverSourcesText.value = DEFAULT_DISCOVER_SOURCES.join('\n')
+}
+
+function normalizedDiscoverSources() {
+  return discoverSourcesText.value
+    .split('\n')
+    .map(v => v.trim())
+    .filter(Boolean)
+}
+
+function saveDiscoverSources() {
+  try {
+    localStorage.setItem('agent007.skillDiscoverSources', JSON.stringify(normalizedDiscoverSources()))
+  } catch {}
 }
 
 const categoryOrder = ['dev', 'code', 'project', 'meta', 'custom']
@@ -274,14 +326,14 @@ async function saveSkill() {
 
 async function installFromRegistry(item) {
   if (!item.url) return
-  importStatus.value = { type: 'loading', message: `Installing ${item.name}...` }
+  browseStatus.value = { type: 'loading', message: `Installing ${item.name}...` }
   try {
     await api.importSkill(item.url)
-    importStatus.value = { type: 'success', message: `${item.name} installed!` }
+    browseStatus.value = { type: 'success', message: `${item.name} installed!` }
     await loadSkills()
-    setTimeout(() => importStatus.value = null, 3000)
+    setTimeout(() => browseStatus.value = null, 3000)
   } catch (e) {
-    importStatus.value = { type: 'error', message: e.message }
+    browseStatus.value = { type: 'error', message: e.message }
   }
 }
 
@@ -296,6 +348,76 @@ async function importFromUrl() {
     setTimeout(() => importStatus.value = null, 3000)
   } catch (e) {
     importStatus.value = { type: 'error', message: e.message }
+  }
+}
+
+async function runDiscoverSearch() {
+  if (!discoverQuery.value.trim()) return
+  const sources = normalizedDiscoverSources()
+  if (!sources.length) {
+    browseStatus.value = { type: 'error', message: 'Add at least one GitHub source URL' }
+    return
+  }
+  saveDiscoverSources()
+  discovering.value = true
+  browseStatus.value = null
+  try {
+    const result = await api.discoverSkills(discoverQuery.value.trim(), sources, 16)
+    discoverResults.value = Array.isArray(result?.results) ? result.results : []
+  } catch (e) {
+    browseStatus.value = { type: 'error', message: e.message || 'Discover failed' }
+    discoverResults.value = []
+  } finally {
+    discovering.value = false
+  }
+}
+
+async function openPreview(url, installMode = 'preview') {
+  previewOpen.value = true
+  previewLoading.value = true
+  previewError.value = null
+  previewData.value = null
+  previewMode.value = 'replace'
+  previewAliasTrigger.value = ''
+  try {
+    previewData.value = await api.previewSkillImport(url)
+    if (installMode === 'install' && previewData.value?.conflict) {
+      previewMode.value = 'replace'
+      previewAliasTrigger.value = `${previewData.value.trigger}-alt`
+    }
+  } catch (e) {
+    previewError.value = e.message || 'Preview failed'
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function installFromPreview() {
+  if (!previewData.value?.url) return
+  browseStatus.value = { type: 'loading', message: `Installing ${previewData.value.name || previewData.value.trigger}...` }
+  try {
+    const opts = {}
+    if (previewData.value?.conflict) {
+      opts.conflict_action = previewMode.value
+      if (previewMode.value === 'alias') {
+        opts.alias_trigger = previewAliasTrigger.value.trim()
+      }
+    }
+    const result = await api.importSkill(previewData.value.url, opts)
+    if (result?.skipped) {
+      browseStatus.value = { type: 'success', message: `Kept existing ${result.trigger}` }
+    } else {
+      browseStatus.value = { type: 'success', message: `Installed ${result?.trigger || previewData.value.trigger}` }
+    }
+    previewOpen.value = false
+    previewData.value = null
+    await loadSkills()
+    if (discoverQuery.value.trim()) {
+      await runDiscoverSearch()
+    }
+    setTimeout(() => browseStatus.value = null, 3000)
+  } catch (e) {
+    browseStatus.value = { type: 'error', message: e.message || 'Install failed' }
   }
 }
 </script>
@@ -445,12 +567,20 @@ async function importFromUrl() {
 
       <!-- Tab: Browse Registry -->
       <div v-if="activeTab === 'browse'" class="space-y-4">
+        <div v-if="browseStatus" class="alert alert-sm" :class="{
+          'alert-info': browseStatus.type === 'loading',
+          'alert-success': browseStatus.type === 'success',
+          'alert-error': browseStatus.type === 'error',
+        }">
+          <span class="font-mono text-xs">{{ browseStatus.message }}</span>
+        </div>
+
         <div class="flex items-center gap-3 flex-wrap">
           <div class="form-control flex-1 min-w-48">
             <input
               v-model="searchQuery"
               class="input input-sm input-bordered w-full font-mono"
-              placeholder="Filter local registry…"
+              placeholder="Filter curated registry…"
             />
           </div>
           <div class="flex items-center gap-1.5 text-xs font-mono text-base-content/40">
@@ -458,7 +588,7 @@ async function importFromUrl() {
             <button
               class="btn btn-xs btn-ghost font-mono border border-base-300"
               @click="$emit('navigate-external', 'extensions')"
-              title="Browse npm MCP packages and GitHub extensions"
+              title="Browse npm MCP packages and GitHub extensions. Skill search here is currently curated registry only."
             >⊞ Extensions →</button>
           </div>
         </div>
@@ -496,6 +626,69 @@ async function importFromUrl() {
                 class="btn btn-xs btn-primary font-mono text-[10px]"
                 @click="installFromRegistry(item)"
               >install</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-4">
+          <div class="flex items-center gap-2 mb-3">
+            <div class="flex-1 h-px bg-base-content/10"></div>
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">discover across GitHub sources</span>
+            <div class="flex-1 h-px bg-base-content/10"></div>
+          </div>
+
+          <div class="grid grid-cols-1 xl:grid-cols-[1.3fr_0.9fr] gap-3 mb-3">
+            <div class="space-y-2">
+              <input
+                v-model="discoverQuery"
+                class="input input-sm input-bordered w-full font-mono"
+                placeholder="Search trigger, name, or description (for example: frontend-designer)"
+                @keyup.enter="runDiscoverSearch"
+              />
+              <div class="text-[10px] font-mono text-base-content/35">Uses built-in defaults for OpenAI, Anthropic, and Vercel if you leave custom sources empty. Duplicate variants are preserved by source.</div>
+            </div>
+            <div class="space-y-2">
+              <textarea
+                v-model="discoverSourcesText"
+                class="textarea textarea-bordered textarea-sm w-full font-mono min-h-[110px]"
+                placeholder="One GitHub repo/tree URL per line"
+              ></textarea>
+              <div class="flex justify-between items-center">
+                <div class="text-[10px] font-mono text-base-content/35">Use repo root, tree, or package URLs to add community or internal sources on top of the defaults.</div>
+                <button class="btn btn-sm btn-primary font-mono text-xs" :class="{ 'loading': discovering }" @click="runDiscoverSearch">
+                  {{ discovering ? 'searching' : 'search' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!discoverResults.length && !discovering" class="text-[11px] font-mono text-base-content/35 py-2">
+            No discovery results yet. Add one or more source URLs, search, then preview before install.
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+            <div
+              v-for="item in discoverResults"
+              :key="`${item.url}:${item.trigger}`"
+              class="bg-base-200 border border-base-300 rounded-lg p-4 border-l-2 border-l-info/40 min-h-[190px]"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="font-mono text-sm font-semibold break-words leading-snug">{{ item.name }}</div>
+                  <div class="text-[11px] font-mono text-base-content/45 mt-1 break-words leading-relaxed max-h-[3.6rem] overflow-hidden">{{ item.description }}</div>
+                  <div class="flex gap-1.5 mt-2 flex-wrap">
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ item.trigger }}</span>
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-base-content/20 text-base-content/55 break-all">{{ item.repo }}</span>
+                    <span v-if="item.version" class="text-[10px] font-mono text-base-content/35">v{{ item.version }}</span>
+                    <span v-if="item.installed" class="text-[10px] font-mono text-warning">conflict</span>
+                  </div>
+                  <div class="mt-2 text-[10px] font-mono text-base-content/35 truncate" :title="item.path">{{ item.path }}</div>
+                </div>
+                <div class="flex flex-col gap-1 shrink-0">
+                  <button class="btn btn-xs btn-ghost font-mono text-[10px]" @click="openPreview(item.url)">preview</button>
+                  <button class="btn btn-xs btn-primary font-mono text-[10px]" @click="openPreview(item.url, 'install')">install</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -547,6 +740,81 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
         </div>
       </div>
     </div>
+
+    <dialog :open="previewOpen" class="modal" :class="{ 'modal-open': previewOpen }">
+      <div class="modal-box max-w-3xl bg-base-100 border border-base-300 rounded-lg p-0 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
+          <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">
+            {{ previewData?.trigger || 'skill preview' }}
+          </span>
+          <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="previewOpen = false">✕</button>
+        </div>
+        <div class="p-5 space-y-4">
+          <div v-if="previewLoading" class="text-[11px] font-mono text-base-content/45">Loading preview…</div>
+          <div v-else-if="previewError" class="alert alert-error alert-sm">
+            <span class="font-mono text-xs">{{ previewError }}</span>
+          </div>
+          <template v-else-if="previewData">
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <div class="font-mono text-sm font-semibold">{{ previewData.name }}</div>
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/30 text-primary/70">{{ previewData.trigger }}</span>
+                <span v-if="previewData.version" class="text-[10px] font-mono text-base-content/35">v{{ previewData.version }}</span>
+                <span v-if="previewData.category" class="text-[10px] font-mono text-base-content/35">{{ previewData.category }}</span>
+              </div>
+              <div class="text-[11px] font-mono text-base-content/45 mt-1">{{ previewData.description }}</div>
+            </div>
+
+            <div v-if="previewData.conflict" class="border border-warning/30 bg-warning/5 rounded-lg p-3 space-y-2">
+              <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-warning">trigger conflict</div>
+              <div class="text-[11px] font-mono text-base-content/55">
+                Installed variants already exist for <code class="bg-base-200 px-1 rounded">{{ previewData.conflict.trigger }}</code>.
+              </div>
+              <div class="space-y-1">
+                <div
+                  v-for="variant in previewData.conflict.variants"
+                  :key="`${variant.path}:${variant.source}`"
+                  class="text-[10px] font-mono text-base-content/45"
+                >
+                  {{ variant.source }} · {{ variant.name }}<span v-if="variant.version"> · v{{ variant.version }}</span>
+                </div>
+              </div>
+              <div class="flex gap-3 flex-wrap pt-1">
+                <label class="label cursor-pointer gap-2 font-mono text-[11px]"><input v-model="previewMode" type="radio" class="radio radio-xs" value="replace" /> replace</label>
+                <label class="label cursor-pointer gap-2 font-mono text-[11px]"><input v-model="previewMode" type="radio" class="radio radio-xs" value="alias" /> alias</label>
+                <label class="label cursor-pointer gap-2 font-mono text-[11px]"><input v-model="previewMode" type="radio" class="radio radio-xs" value="keep_existing" /> keep existing</label>
+              </div>
+              <input
+                v-if="previewMode === 'alias'"
+                v-model="previewAliasTrigger"
+                class="input input-sm input-bordered w-full font-mono"
+                placeholder="/frontend-designer-alt"
+              />
+            </div>
+
+            <div v-if="previewData.package && previewData.files?.length" class="space-y-2">
+              <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">package files</div>
+              <div class="max-h-28 overflow-auto rounded border border-base-300 bg-base-200 p-2 text-[10px] font-mono text-base-content/50">
+                <div v-for="file in previewData.files" :key="file">{{ file }}</div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">prompt preview</div>
+              <pre class="bg-base-200 border border-base-300 rounded-lg p-3 overflow-auto max-h-80 text-[11px] font-mono text-base-content/70 whitespace-pre-wrap">{{ previewData.body }}</pre>
+            </div>
+          </template>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
+          <button class="btn btn-sm btn-ghost font-mono text-xs" @click="previewOpen = false">close</button>
+          <button
+            v-if="previewData && !previewLoading && !previewError"
+            class="btn btn-sm btn-primary font-mono text-xs"
+            @click="installFromPreview"
+          >install</button>
+        </div>
+      </div>
+    </dialog>
 
     <!-- Create / Edit modal -->
     <dialog :open="showForm" class="modal" :class="{ 'modal-open': showForm }">

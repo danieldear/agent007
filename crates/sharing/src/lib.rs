@@ -30,6 +30,17 @@ impl BundleAsset {
     }
 }
 
+fn read_bundle_text_asset(path: &Path) -> Result<String> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read bundle asset '{}'", path.display()))?;
+    String::from_utf8(bytes).map_err(|_| {
+        anyhow::anyhow!(
+            ".a7bundle v1 only supports text assets; binary or non-UTF-8 file detected: {}",
+            path.display()
+        )
+    })
+}
+
 /// A portable bundle of skills and/or workflows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
@@ -185,7 +196,7 @@ impl BundleBuilder {
                     if path.extension().and_then(|e| e.to_str()) != Some("md") {
                         continue;
                     }
-                    let content = std::fs::read_to_string(&path)?;
+                    let content = read_bundle_text_asset(&path)?;
                     let stem = path
                         .file_stem()
                         .and_then(|s| s.to_str())
@@ -215,7 +226,7 @@ impl BundleBuilder {
                 if !manifest.is_file() {
                     continue;
                 }
-                let manifest_content = std::fs::read_to_string(&manifest)?;
+                let manifest_content = read_bundle_text_asset(&manifest)?;
                 let package_name = path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -274,7 +285,7 @@ impl BundleBuilder {
                 if rel.is_empty() {
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
+                let content = read_bundle_text_asset(&path)?;
                 if seen.insert(rel.clone()) {
                     assets.push(BundleAsset::new(rel, content));
                 }
@@ -409,7 +420,7 @@ impl BundleBuilder {
                                 if !package_file.is_file() {
                                     continue;
                                 }
-                                let package_content = std::fs::read_to_string(&package_file)?;
+                                let package_content = read_bundle_text_asset(&package_file)?;
                                 seen.insert(rel_file.clone());
                                 assets.push(BundleAsset::new(rel_file, package_content));
                             }
@@ -432,9 +443,15 @@ impl BundleBuilder {
                             consumed = true;
                             break;
                         }
-                        let content = std::fs::read_to_string(&flat_file)?;
+                        let content = read_bundle_text_asset(&flat_file)?;
                         seen.insert(rel_file.clone());
                         assets.push(BundleAsset::new(rel_file, content));
+                        maybe_collect_flat_tool_dependency_dir(
+                            &flat_file,
+                            tools_dir,
+                            &mut assets,
+                            &mut seen,
+                        )?;
                         consumed = true;
                         break;
                     }
@@ -457,9 +474,15 @@ impl BundleBuilder {
                                 consumed = true;
                                 break 'ext_search;
                             }
-                            let content = std::fs::read_to_string(&candidate)?;
+                            let content = read_bundle_text_asset(&candidate)?;
                             seen.insert(rel_file.clone());
                             assets.push(BundleAsset::new(rel_file, content));
+                            maybe_collect_flat_tool_dependency_dir(
+                                &candidate,
+                                tools_dir,
+                                &mut assets,
+                                &mut seen,
+                            )?;
                             consumed = true;
                             break 'ext_search;
                         }
@@ -478,7 +501,7 @@ impl BundleBuilder {
                         if seen.contains(&rel_file) {
                             break;
                         }
-                        let content = std::fs::read_to_string(&flat_script)?;
+                        let content = read_bundle_text_asset(&flat_script)?;
                         seen.insert(rel_file.clone());
                         assets.push(BundleAsset::new(rel_file, content));
                         break;
@@ -497,7 +520,7 @@ impl BundleBuilder {
                         if !path.is_file() {
                             continue;
                         }
-                        let content = std::fs::read_to_string(&path)?;
+                        let content = read_bundle_text_asset(&path)?;
                         seen.insert(rel_norm.clone());
                         assets.push(BundleAsset::new(rel_norm.clone(), content));
                         break;
@@ -513,9 +536,15 @@ impl BundleBuilder {
                     if !path.is_file() {
                         continue;
                     }
-                    let content = std::fs::read_to_string(&path)?;
+                    let content = read_bundle_text_asset(&path)?;
                     seen.insert(rel_norm.clone());
                     assets.push(BundleAsset::new(rel_norm.clone(), content));
+                    maybe_collect_flat_tool_dependency_dir(
+                        &path,
+                        tools_dir,
+                        &mut assets,
+                        &mut seen,
+                    )?;
                     // If this file is inside a manifest-based tool package (tools/<name>/...),
                     // include sibling package files for dependency closure.
                     if let Some(package_name) = rel_norm.split('/').next() {
@@ -536,7 +565,7 @@ impl BundleBuilder {
                                     if !package_file.is_file() {
                                         continue;
                                     }
-                                    let package_content = std::fs::read_to_string(&package_file)?;
+                                    let package_content = read_bundle_text_asset(&package_file)?;
                                     seen.insert(rel_file.clone());
                                     assets.push(BundleAsset::new(rel_file, package_content));
                                 }
@@ -588,7 +617,7 @@ impl BundleBuilder {
                         if !package_file.is_file() {
                             continue;
                         }
-                        let content = std::fs::read_to_string(&package_file)?;
+                        let content = read_bundle_text_asset(&package_file)?;
                         seen.insert(rel_file.clone());
                         assets.push(BundleAsset::new(rel_file, content));
                     }
@@ -602,8 +631,14 @@ impl BundleBuilder {
                     if rel.is_empty() || !seen.insert(rel.clone()) {
                         continue;
                     }
-                    let content = std::fs::read_to_string(&path)?;
+                    let content = read_bundle_text_asset(&path)?;
                     assets.push(BundleAsset::new(rel, content));
+                    maybe_collect_flat_tool_dependency_dir(
+                        &path,
+                        tools_dir,
+                        &mut assets,
+                        &mut seen,
+                    )?;
                 }
             }
         }
@@ -624,7 +659,7 @@ impl BundleBuilder {
                 if !path.is_file() {
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
+                let content = read_bundle_text_asset(&path)?;
                 assets.push(BundleAsset::new(rel_norm, content));
             }
         }
@@ -694,7 +729,7 @@ impl BundleBuilder {
                 if filename.is_empty() || !seen.insert(filename.clone()) {
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)?;
+                let content = read_bundle_text_asset(&path)?;
                 assets.push(BundleAsset::new(filename, content));
             }
         }
@@ -715,7 +750,7 @@ impl BundleBuilder {
                     if path.extension().and_then(|e| e.to_str()) != Some("md") {
                         continue;
                     }
-                    let content = std::fs::read_to_string(&path)?;
+                    let content = read_bundle_text_asset(&path)?;
                     let Some(trigger) = parse_frontmatter_value(&content, "trigger") else {
                         continue;
                     };
@@ -735,7 +770,7 @@ impl BundleBuilder {
                 if !manifest.is_file() {
                     continue;
                 }
-                let manifest_content = std::fs::read_to_string(&manifest)?;
+                let manifest_content = read_bundle_text_asset(&manifest)?;
                 let Some(trigger) = parse_frontmatter_value(&manifest_content, "trigger") else {
                     continue;
                 };
@@ -932,7 +967,7 @@ fn collect_files_recursive(
         if rel.is_empty() || !seen.insert(rel.clone()) {
             continue;
         }
-        let content = std::fs::read_to_string(&path)?;
+        let content = read_bundle_text_asset(&path)?;
         out.push(BundleAsset::new(rel, content));
     }
     Ok(())
@@ -945,7 +980,13 @@ fn collect_files_recursive_paths(
 ) -> Result<()> {
     for entry in std::fs::read_dir(root)?.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
             collect_files_recursive_paths(&path, base_dir, out)?;
             continue;
         }
@@ -960,6 +1001,51 @@ fn collect_files_recursive_paths(
         }
     }
     Ok(())
+}
+
+fn collect_flat_tool_sibling_dir_assets(
+    sibling_dir: &Path,
+    tools_dir: &Path,
+    assets: &mut Vec<BundleAsset>,
+    seen: &mut HashSet<String>,
+) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(sibling_dir) else {
+        return Ok(());
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Ok(());
+    }
+    let mut sibling_files = Vec::new();
+    collect_files_recursive_paths(sibling_dir, tools_dir, &mut sibling_files)?;
+    for rel_file in sibling_files {
+        if seen.contains(&rel_file) {
+            continue;
+        }
+        let sibling_file = tools_dir.join(&rel_file);
+        if !sibling_file.is_file() {
+            continue;
+        }
+        let sibling_content = read_bundle_text_asset(&sibling_file)?;
+        seen.insert(rel_file.clone());
+        assets.push(BundleAsset::new(rel_file, sibling_content));
+    }
+    Ok(())
+}
+
+fn maybe_collect_flat_tool_dependency_dir(
+    tool_file: &Path,
+    tools_dir: &Path,
+    assets: &mut Vec<BundleAsset>,
+    seen: &mut HashSet<String>,
+) -> Result<()> {
+    let Some(stem) = tool_file.file_stem().and_then(|s| s.to_str()) else {
+        return Ok(());
+    };
+    if stem.is_empty() {
+        return Ok(());
+    }
+    let sibling_dir = tool_file.parent().unwrap_or(tools_dir).join(stem);
+    collect_flat_tool_sibling_dir_assets(&sibling_dir, tools_dir, assets, seen)
 }
 
 fn has_tool_manifest(dir: &Path) -> bool {
@@ -1636,6 +1722,193 @@ mod tests {
 
         assert_eq!(bundle.tools.len(), 1);
         assert_eq!(bundle.tools[0].filename, "quick-tool.py");
+    }
+
+    #[test]
+    fn builder_flat_tool_export_includes_same_stem_dependency_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("main_test").join("relatedfiles")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---\nname: plain\ndescription: d\ntrigger: /plain\nmodel: codex\n---\nNo refs\n",
+        )
+        .unwrap();
+        std::fs::write(tools_dir.join("main_test.py"), "print('ok')\n").unwrap();
+        std::fs::write(
+            tools_dir
+                .join("main_test")
+                .join("relatedfiles")
+                .join("helper.txt"),
+            "helper\n",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(&["plain"], &["__none__"], &["__none__"], &["main_test.py"])
+            .unwrap();
+
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("main_test.py"));
+        assert!(filenames.contains("main_test/relatedfiles/helper.txt"));
+    }
+
+    #[test]
+    fn builder_flat_tool_export_uses_colocated_dependency_dir_for_nested_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("ml").join("infer").join("related")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---
+name: plain
+description: d
+trigger: /plain
+model: codex
+---
+No refs
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("ml").join("infer.py"),
+            "print('ok')
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir
+                .join("ml")
+                .join("infer")
+                .join("related")
+                .join("helper.txt"),
+            "helper
+",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(&["plain"], &["__none__"], &["__none__"], &["ml/infer.py"])
+            .unwrap();
+
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("ml/infer.py"));
+        assert!(filenames.contains("ml/infer/related/helper.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn builder_flat_tool_export_skips_symlinked_dependency_files() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        let outside = dir.path().join("outside.txt");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("sample_tool")).unwrap();
+        std::fs::write(
+            &outside, "secret
+",
+        )
+        .unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---
+name: plain
+description: d
+trigger: /plain
+model: codex
+---
+No refs
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("sample_tool.py"),
+            "print('ok')
+",
+        )
+        .unwrap();
+        symlink(
+            &outside,
+            tools_dir.join("sample_tool").join("outside-link.txt"),
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(
+                &["plain"],
+                &["__none__"],
+                &["__none__"],
+                &["sample_tool.py"],
+            )
+            .unwrap();
+
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("sample_tool.py"));
+        assert!(!filenames.contains("sample_tool/outside-link.txt"));
+    }
+
+    #[test]
+    fn builder_rejects_binary_tool_assets_with_clear_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        let package_dir = tools_dir.join("binpack");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&package_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---\nname: plain\ndescription: d\ntrigger: /plain\nmodel: codex\n---\nNo refs\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package_dir.join("TOOL.yaml"),
+            "name: binpack\ndescription: test\nruntime: shell\nentrypoint: run.sh\n",
+        )
+        .unwrap();
+        std::fs::write(package_dir.join("run.sh"), "#!/usr/bin/env sh\necho ok\n").unwrap();
+        std::fs::write(package_dir.join("helper.bin"), [0_u8, 159, 146, 150]).unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let err = builder
+            .build(&["__none__"], &["__none__"], &["__none__"], &["binpack"])
+            .expect_err("binary payload should be rejected clearly");
+        let msg = err.to_string();
+        assert!(msg.contains(".a7bundle v1 only supports text assets"));
+        assert!(msg.contains("helper.bin"));
     }
 
     #[test]
