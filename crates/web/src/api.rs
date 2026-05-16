@@ -212,6 +212,81 @@ fn default_cleanup_limit() -> usize {
     1000
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct RuntimeSessionsQuery {
+    #[serde(default = "default_runtime_sessions_limit")]
+    pub limit: usize,
+}
+
+fn default_runtime_sessions_limit() -> usize {
+    12
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeSessionCounts {
+    pub total: usize,
+    pub active: usize,
+    pub running: usize,
+    pub blocked: usize,
+    pub failed: usize,
+    pub succeeded: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeWorkflowSummary {
+    pub workflow: String,
+    pub status: String,
+    pub completed_steps: usize,
+    pub total_steps: usize,
+    pub running_steps: Vec<String>,
+    pub ready_steps: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending_approval_step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeSessionSummary {
+    pub id: String,
+    pub kind: String,
+    pub task: String,
+    pub status: String,
+    pub lifecycle: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<String>,
+    pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub finished_at: Option<String>,
+    pub age_seconds: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub duration_seconds: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub output_preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow: Option<RuntimeWorkflowSummary>,
+    pub action_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeSessionsResponse {
+    pub generated_at: String,
+    pub counts: RuntimeSessionCounts,
+    pub sessions: Vec<RuntimeSessionSummary>,
+}
+
 #[derive(Debug, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "frontend/src/types/")]
 pub struct CleanupAwaitingRunsRequest {
@@ -774,6 +849,198 @@ pub async fn regression_evaluate_handler(
         "violations": evaluation.violations,
     }))
     .into_response()
+}
+
+/// `GET /api/runtime/sessions` — compact runtime/session inventory for dashboard and TUI clients.
+pub async fn runtime_sessions_handler(
+    Query(query): Query<RuntimeSessionsQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.clamp(1, 100);
+    let store = run_store_for_web();
+    match store.list_runs(limit) {
+        Ok(runs) => {
+            let mut counts = RuntimeSessionCounts {
+                total: runs.len(),
+                active: 0,
+                running: 0,
+                blocked: 0,
+                failed: 0,
+                succeeded: 0,
+            };
+            let sessions = runs
+                .into_iter()
+                .map(|run| {
+                    let workflow = store
+                        .read_json_artifact_optional::<WorkflowRunState>(
+                            &run.id,
+                            "workflow-state.json",
+                        )
+                        .ok()
+                        .flatten()
+                        .map(runtime_workflow_summary);
+                    match run.status {
+                        agent007_core::RunStatus::Running => {
+                            counts.active += 1;
+                            counts.running += 1;
+                        }
+                        agent007_core::RunStatus::AwaitingApproval => {
+                            counts.active += 1;
+                            counts.blocked += 1;
+                        }
+                        agent007_core::RunStatus::Failed => counts.failed += 1,
+                        agent007_core::RunStatus::Succeeded => counts.succeeded += 1,
+                    }
+                    runtime_session_summary(run, workflow)
+                })
+                .collect::<Vec<_>>();
+
+            Json(RuntimeSessionsResponse {
+                generated_at: Utc::now().to_rfc3339(),
+                counts,
+                sessions,
+            })
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+fn runtime_workflow_summary(state: WorkflowRunState) -> RuntimeWorkflowSummary {
+    let running_steps = state
+        .steps
+        .iter()
+        .filter(|step| matches!(step.status, agent007_workflows::WorkflowStepStatus::Running))
+        .map(|step| step.id.clone())
+        .collect::<Vec<_>>();
+    let workflow_def = load_workflow_from_dashboard_dirs(&state.workflow).ok();
+    let ready_steps = state
+        .steps
+        .iter()
+        .filter(|step| matches!(step.status, agent007_workflows::WorkflowStepStatus::Pending))
+        .filter(|step| {
+            workflow_def
+                .as_ref()
+                .and_then(|def| def.steps.iter().find(|def_step| def_step.id == step.id))
+                .map(|def_step| {
+                    def_step
+                        .depends_on
+                        .as_ref()
+                        .map(|deps| deps.iter().all(|dep| state.completed_steps.contains(dep)))
+                        .unwrap_or(true)
+                })
+                .unwrap_or(false)
+        })
+        .map(|step| step.id.clone())
+        .take(8)
+        .collect::<Vec<_>>();
+
+    RuntimeWorkflowSummary {
+        workflow: state.workflow,
+        status: serde_json::to_value(state.status)
+            .ok()
+            .and_then(|v| v.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "running".to_string()),
+        completed_steps: state.steps_completed,
+        total_steps: state.steps_total,
+        running_steps,
+        ready_steps,
+        pending_approval_step: state.pending_approval.map(|approval| approval.step_id),
+        last_error: state.last_error,
+    }
+}
+
+fn runtime_session_summary(
+    run: agent007_core::RunMetadata,
+    workflow: Option<RuntimeWorkflowSummary>,
+) -> RuntimeSessionSummary {
+    let now = Utc::now();
+    let age_seconds = (now - run.started_at).num_seconds().max(0);
+    let duration_seconds = run
+        .finished_at
+        .map(|finished| (finished - run.started_at).num_seconds().max(0));
+    let lifecycle = runtime_lifecycle(&run.status, workflow.as_ref()).to_string();
+    let action_hint = runtime_action_hint(&run, workflow.as_ref()).to_string();
+    RuntimeSessionSummary {
+        id: run.id,
+        kind: run.kind,
+        task: run.task,
+        status: serde_json::to_value(&run.status)
+            .ok()
+            .and_then(|v| v.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "running".to_string()),
+        lifecycle,
+        mode: run.mode,
+        provider: run.provider,
+        started_at: run.started_at.to_rfc3339(),
+        finished_at: run.finished_at.map(|value| value.to_rfc3339()),
+        age_seconds,
+        duration_seconds,
+        output_preview: run.output_preview,
+        workflow,
+        action_hint,
+    }
+}
+
+fn runtime_lifecycle(
+    status: &agent007_core::RunStatus,
+    workflow: Option<&RuntimeWorkflowSummary>,
+) -> &'static str {
+    match status {
+        agent007_core::RunStatus::Running => {
+            if workflow.and_then(|w| w.last_error.as_ref()).is_some() {
+                "attention"
+            } else if workflow
+                .map(|w| !w.running_steps.is_empty())
+                .unwrap_or(false)
+            {
+                "running"
+            } else if workflow.map(|w| !w.ready_steps.is_empty()).unwrap_or(false) {
+                "ready"
+            } else {
+                "running"
+            }
+        }
+        agent007_core::RunStatus::AwaitingApproval => "blocked",
+        agent007_core::RunStatus::Succeeded => "complete",
+        agent007_core::RunStatus::Failed => "failed",
+    }
+}
+
+fn runtime_action_hint(
+    run: &agent007_core::RunMetadata,
+    workflow: Option<&RuntimeWorkflowSummary>,
+) -> &'static str {
+    if let Some(workflow) = workflow {
+        if workflow.pending_approval_step.is_some()
+            || run.status == agent007_core::RunStatus::AwaitingApproval
+        {
+            return if dashboard_controls_workflow(&run.kind) {
+                "approval needed in dashboard"
+            } else {
+                "approval needed in originating client"
+            };
+        }
+        if workflow.last_error.is_some() || run.status == agent007_core::RunStatus::Failed {
+            return "inspect workflow error";
+        }
+        if !workflow.ready_steps.is_empty() {
+            return "host should submit ready steps";
+        }
+        if !workflow.running_steps.is_empty() {
+            return "monitor running steps";
+        }
+    }
+
+    match run.status {
+        agent007_core::RunStatus::Running => "monitor run",
+        agent007_core::RunStatus::AwaitingApproval => "approval needed",
+        agent007_core::RunStatus::Succeeded => "review output",
+        agent007_core::RunStatus::Failed => "inspect failure",
+    }
 }
 
 pub async fn runs_handler(State(_state): State<AppState>) -> impl IntoResponse {
@@ -6553,6 +6820,92 @@ mod tests {
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn api_runtime_sessions_returns_compact_inventory() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let original_agent_home = std::env::var("AGENT007_HOME").ok();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "workflow-cli-feature",
+                "task": "ship runtime visibility",
+                "mode": "hosted-mcp",
+                "provider": "codex",
+                "started_at": chrono::Utc::now(),
+                "finished_at": null,
+                "status": "awaiting-approval",
+                "output_preview": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("workflow-state.json"),
+            serde_json::json!({
+                "workflow": "feature",
+                "task": "ship runtime visibility",
+                "status": "waiting-approval",
+                "steps_total": 2,
+                "steps_completed": 1,
+                "completed_steps": ["plan"],
+                "skipped_steps": [],
+                "retry_counts": {},
+                "recovery_retry_counts": {},
+                "outputs": {},
+                "budget_used": { "tokens": 0, "estimated_usd": 0.0 },
+                "degradation_count": 0,
+                "reliability_transitions": [],
+                "reliability_events": [],
+                "eval_gate_decision": null,
+                "routing_recommendations": [],
+                "steps": [
+                    { "id": "plan", "agent": "Planner", "status": "completed", "attempts": 1, "output_key": "plan", "output_preview": "done", "selected_route": null, "selected_target": null, "error": null },
+                    { "id": "approval", "agent": "Reviewer", "status": "awaiting-approval", "attempts": 1, "output_key": null, "output_preview": null, "selected_route": null, "selected_target": null, "error": null }
+                ],
+                "pending_approval": {
+                    "step_id": "approval",
+                    "agent": "Reviewer",
+                    "output_key": null,
+                    "content": "approve?",
+                    "content_preview": "approve?",
+                    "approval_prompt": null
+                },
+                "approval_decisions": {},
+                "last_error": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts.get("/api/runtime/sessions").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["counts"]["active"].as_u64(), Some(1));
+        assert_eq!(body["counts"]["blocked"].as_u64(), Some(1));
+        assert_eq!(body["sessions"][0]["lifecycle"].as_str(), Some("blocked"));
+        assert_eq!(
+            body["sessions"][0]["workflow"]["pending_approval_step"].as_str(),
+            Some("approval")
+        );
+        assert_eq!(
+            body["sessions"][0]["action_hint"].as_str(),
+            Some("approval needed in originating client")
+        );
+
+        if let Some(home) = original_agent_home {
+            std::env::set_var("AGENT007_HOME", home);
+        } else {
+            std::env::remove_var("AGENT007_HOME");
+        }
     }
 
     #[tokio::test]

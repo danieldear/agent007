@@ -14,6 +14,7 @@ const metrics = ref(null)
 const taskInput = ref('')
 const taskStatus = ref('')
 const runs = ref([])
+const runtimeSessions = ref(null)
 const selectedRun = ref(null)
 const selectedRunId = ref(null)
 const approvalStatus = ref('')
@@ -127,18 +128,10 @@ let refreshTimer = null
 let detailTimer = null
 
 onMounted(async () => {
-  health.value = await api.health()
-  metrics.value = await api.getStats() || null
-  await refreshRuns()
+  try { health.value = await api.health() } catch {}
+  await refreshDashboardSnapshots()
   loadEtrCacheStats()
-  refreshTimer = setInterval(async () => {
-    try {
-      metrics.value = await api.getStats() || metrics.value
-      await refreshRuns()
-    } catch {
-      // Keep the last successful snapshot when background refresh fails.
-    }
-  }, 5000)
+  refreshTimer = setInterval(refreshDashboardSnapshots, 5000)
   detailTimer = setInterval(async () => {
     if (expandedRunId.value) {
       try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
@@ -159,6 +152,19 @@ watch(() => props.events?.length, async () => {
   if (expandedRunId.value) {
     try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
   }
+})
+
+const runtime = computed(() => runtimeSessions.value || {
+  generated_at: null,
+  counts: { total: 0, active: 0, running: 0, blocked: 0, failed: 0, succeeded: 0 },
+  sessions: [],
+})
+
+const runtimeFocusSessions = computed(() => {
+  const sessions = runtime.value.sessions || []
+  const active = sessions.filter(s => ['running', 'ready', 'blocked', 'attention'].includes(s.lifecycle))
+  if (active.length) return active.slice(0, 6)
+  return sessions.slice(0, 6)
 })
 
 const m = computed(() => metrics.value || {
@@ -184,6 +190,35 @@ function fmtTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
   return String(n)
+}
+
+function fmtAgeSeconds(seconds) {
+  const secs = Number(seconds || 0)
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
+  return `${Math.floor(secs / 86400)}d ${Math.floor((secs % 86400) / 3600)}h`
+}
+
+function runtimeLifecycleClass(lifecycle) {
+  return {
+    'border-info/50 bg-info/5': lifecycle === 'running',
+    'border-primary/50 bg-primary/5': lifecycle === 'ready',
+    'border-warning/60 bg-warning/10': lifecycle === 'blocked' || lifecycle === 'attention',
+    'border-success/40 bg-success/5': lifecycle === 'complete',
+    'border-error/50 bg-error/5': lifecycle === 'failed',
+  }
+}
+
+function runtimeBadgeClass(lifecycle) {
+  return {
+    'badge-info': lifecycle === 'running',
+    'badge-primary': lifecycle === 'ready',
+    'badge-warning': lifecycle === 'blocked' || lifecycle === 'attention',
+    'badge-success': lifecycle === 'complete',
+    'badge-error': lifecycle === 'failed',
+    'badge-ghost': !['running', 'ready', 'blocked', 'attention', 'complete', 'failed'].includes(lifecycle),
+  }
 }
 
 function fmtMs(ms) {
@@ -365,6 +400,22 @@ async function loadEtrCacheStats() {
 async function clearEtrCache() {
   await api.etrCacheClear()
   loadEtrCacheStats()
+}
+
+async function refreshRuntimeSessions() {
+  runtimeSessions.value = await api.getRuntimeSessions(12) || runtimeSessions.value
+}
+
+async function refreshDashboardSnapshots() {
+  const results = await Promise.allSettled([
+    api.getStats(),
+    refreshRuns(),
+    refreshRuntimeSessions(),
+  ])
+  if (results[0].status === 'fulfilled' && results[0].value) {
+    metrics.value = results[0].value
+  }
+  // Keep the last successful snapshots when any individual refresh fails.
 }
 
 async function refreshRuns() {
@@ -679,6 +730,60 @@ async function submitTask() {
         <span class="text-[9px] font-mono text-base-content/30">last {{ tokenSparkline.length }} tasks · latest {{ fmtTokens(tokenSparkline[tokenSparkline.length - 1]) }} tok</span>
       </div>
 
+      <!-- Runtime Sessions: compact control-center view -->
+      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runtime Sessions</span>
+            <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }} active</span>
+          </div>
+          <div class="flex items-center gap-3 text-[10px] font-mono text-base-content/30">
+            <span>{{ runtime.counts.running }} running</span>
+            <span>{{ runtime.counts.blocked }} blocked</span>
+            <span>{{ runtime.counts.failed }} failed</span>
+            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuntimeSessions">↺ refresh</button>
+          </div>
+        </div>
+        <div v-if="runtimeFocusSessions.length" class="grid grid-cols-1 xl:grid-cols-2 gap-2 p-3">
+          <button
+            v-for="session in runtimeFocusSessions"
+            :key="session.id"
+            class="text-left rounded-lg border p-3 transition-all hover:border-primary/40 hover:bg-base-300/20"
+            :class="runtimeLifecycleClass(session.lifecycle)"
+            @click="toggleRun(session.id)"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-mono text-xs font-semibold text-base-content/80 truncate max-w-[18rem]" :title="session.kind">{{ session.kind }}</span>
+                  <span class="badge badge-xs font-mono" :class="runtimeBadgeClass(session.lifecycle)">{{ session.lifecycle }}</span>
+                </div>
+                <div class="font-mono text-xs text-base-content/50 truncate" :title="session.task">{{ session.task }}</div>
+              </div>
+              <div class="text-right shrink-0">
+                <div class="text-[10px] font-mono text-base-content/35">{{ fmtAgeSeconds(session.age_seconds) }}</div>
+                <div class="text-[10px] font-mono text-base-content/25">{{ session.mode }}</div>
+              </div>
+            </div>
+            <div class="mt-2 flex items-center gap-2 flex-wrap">
+              <span v-if="session.provider" class="badge badge-xs badge-ghost font-mono">{{ session.provider }}</span>
+              <span v-if="session.workflow" class="badge badge-xs badge-outline font-mono">{{ session.workflow.workflow }} {{ session.workflow.completed_steps }}/{{ session.workflow.total_steps }}</span>
+              <span v-if="session.workflow?.running_steps?.length" class="text-[10px] font-mono text-info/70">run: {{ session.workflow.running_steps.join(', ') }}</span>
+              <span v-if="session.workflow?.ready_steps?.length" class="text-[10px] font-mono text-primary/70">ready: {{ session.workflow.ready_steps.join(', ') }}</span>
+              <span v-if="session.workflow?.pending_approval_step" class="text-[10px] font-mono text-warning/80">gate: {{ session.workflow.pending_approval_step }}</span>
+            </div>
+            <div class="mt-2 flex items-center justify-between gap-3">
+              <span class="text-[10px] font-mono text-base-content/35 truncate" :title="session.action_hint">→ {{ session.action_hint }}</span>
+              <span class="text-[10px] font-mono text-base-content/25 shrink-0">{{ session.id.slice(0, 8) }}</span>
+            </div>
+            <div v-if="session.workflow?.last_error || session.output_preview" class="mt-2 text-[10px] font-mono text-base-content/35 truncate" :title="session.workflow?.last_error || session.output_preview">
+              {{ session.workflow?.last_error || session.output_preview }}
+            </div>
+          </button>
+        </div>
+        <div v-else class="p-6 text-center text-base-content/30 text-sm font-mono">No runtime sessions yet</div>
+      </div>
+
       <!-- Recent Tasks (session) -->
       <div class="bg-base-200 rounded-xl border border-base-300 flex flex-col" style="max-height: 26vh">
         <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center shrink-0">
@@ -749,12 +854,12 @@ async function submitTask() {
             placeholder="search runs…"
           />
           <button
-            v-for="s in ['', 'running', 'completed', 'failed', 'awaiting_approval']"
+            v-for="s in ['', 'running', 'succeeded', 'failed', 'awaiting-approval']"
             :key="s"
             class="btn btn-xs font-mono text-[10px]"
             :class="runStatusFilter === s ? 'btn-primary' : 'btn-ghost'"
             @click="runStatusFilter = s"
-          >{{ s === '' ? 'all' : s.replace('_', ' ') }}</button>
+          >{{ s === '' ? 'all' : s.replace('-', ' ') }}</button>
         </div>
         <div v-if="cleanupStatus" class="px-4 py-2 text-[10px] font-mono text-base-content/45 border-b border-base-300/40">
           {{ cleanupStatus }}
