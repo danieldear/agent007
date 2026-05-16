@@ -4,6 +4,12 @@
 
 Main config at `~/.agent007/config.toml`. Created by `agent007 init`.
 
+Provider onboarding direction:
+
+- **Current:** direct config/env setup is supported and remains valid
+- **Planned:** dashboard-first provider onboarding/validation will manage the same runtime configuration model instead of replacing it
+- **Always supported:** headless/manual setups via `config.toml` and environment variables
+
 ```toml
 [core]
 max_agents = 8              # Maximum concurrent agents
@@ -32,6 +38,22 @@ default         = "claude"     # Fallback
 ```
 
 All fields are optional — agent007 uses sensible defaults if omitted.
+
+## Provider setup modes
+
+Today, standalone runtime availability is determined from:
+
+1. `ANTHROPIC_API_KEY`
+2. `OPENAI_API_KEY`
+3. reachable `[models.ollama]` config
+
+If none are available, agent007 remains usable in **hosted-MCP** mode, where the connected host/editor LLM executes reasoning and tool orchestration through MCP.
+
+Planned UX direction:
+
+- the **web dashboard** becomes the primary setup and validation surface for providers
+- manual config/env setup remains compatible
+- future OpenAI-compatible endpoint setup should also be manageable from dashboard
 
 ---
 
