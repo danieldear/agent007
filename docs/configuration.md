@@ -41,13 +41,13 @@ All fields are optional — agent007 uses sensible defaults if omitted.
 
 ## Provider setup modes
 
-Today, standalone runtime availability is determined from:
+Today, real provider-backed standalone runtime availability is determined from:
 
 1. `ANTHROPIC_API_KEY`
 2. `OPENAI_API_KEY`
 3. reachable `[models.ollama]` config
 
-If none are available, agent007 remains usable in **hosted-MCP** mode, where the connected host/editor LLM executes reasoning and tool orchestration through MCP.
+If none are available, agent007 remains usable in **hosted-MCP** mode, where the connected host/editor LLM executes reasoning and tool orchestration through MCP. For tests and demos, `AGENT007_DRY_RUN=1` can also enable standalone execution with the mock provider; it is not a real model provider setup.
 
 Planned UX direction:
 

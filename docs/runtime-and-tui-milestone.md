@@ -1,12 +1,12 @@
 # M4 — Runtime Sessions, Agent Collaboration, and TUI Usability
 
 ## Goal
-Strengthen agent007 as a long-lived orchestration runtime by improving session persistence, agent-to-agent coordination, memory flow, browser/provider UX, compact runtime visibility, and terminal usability without changing the product into a terminal-first clone of jcode.
+Strengthen agent007 as a long-lived orchestration runtime by improving session persistence, agent-to-agent coordination, memory flow, browser/provider UX, compact runtime visibility, and terminal usability without changing the product into a terminal-first clone of jcode (a neighboring AI coding-agent harness focused on persistent terminal sessions).
 
 ## Non-Goals
 1. Rebuild agent007 around a custom terminal renderer.
 2. Replace the web dashboard as the primary control surface.
-3. Chase full parity with jcode swarm/runtime features.
+3. Chase full parity with jcode-style swarm/runtime features.
 4. Introduce speculative distributed execution before single-host session semantics are solid.
 
 ## Why This Milestone Exists
@@ -31,10 +31,10 @@ Add a clearer long-lived session model around the existing MCP/runtime surfaces.
 
 **Scope**
 - candidate crates/files:
-  - `/Users/neo/workspace/agent007/crates/cli/src/commands/serve.rs`
-  - `/Users/neo/workspace/agent007/crates/workflows/`
-  - `/Users/neo/workspace/agent007/crates/web/src/api.rs`
-  - `/Users/neo/workspace/agent007/crates/web/frontend/src/views/`
+  - `crates/cli/src/commands/serve.rs`
+  - `crates/workflows/`
+  - `crates/web/src/api.rs`
+  - `crates/web/frontend/src/views/`
 
 **Deliverables**
 1. Session inventory API:
@@ -63,9 +63,9 @@ Make collaboration explicit instead of implicit via only workflow state.
 
 **Scope**
 - candidate crates/files:
-  - `/Users/neo/workspace/agent007/crates/workflows/`
-  - `/Users/neo/workspace/agent007/crates/core/`
-  - `/Users/neo/workspace/agent007/crates/web/src/api.rs`
+  - `crates/workflows/`
+  - `crates/core/`
+  - `crates/web/src/api.rs`
   - dashboard session/run detail views
 
 **Deliverables**
@@ -97,9 +97,9 @@ Improve how useful memory is captured, compacted, and reused.
 
 **Scope**
 - candidate crates/files:
-  - `/Users/neo/workspace/agent007/crates/memory/`
-  - `/Users/neo/workspace/agent007/crates/learning/`
-  - `/Users/neo/workspace/agent007/crates/web/src/api.rs`
+  - `crates/memory/`
+  - `crates/learning/`
+  - `crates/web/src/api.rs`
   - memory views in frontend
 
 **Deliverables**
@@ -126,8 +126,8 @@ Reduce friction for setup and day-to-day usage.
 
 **Scope**
 - candidate crates/files:
-  - `/Users/neo/workspace/agent007/crates/web/frontend/src/views/`
-  - `/Users/neo/workspace/agent007/crates/web/src/api.rs`
+  - `crates/web/frontend/src/views/`
+  - `crates/web/src/api.rs`
   - provider/browser config surfaces
 
 **Operating model**
@@ -200,7 +200,7 @@ Make the terminal experience genuinely usable for monitoring and control.
 
 **Scope**
 - candidate CLI/TUI surfaces in:
-  - `/Users/neo/workspace/agent007/crates/cli/`
+  - `crates/cli/`
   - dashboard parity for status concepts
 
 **Deliverables**
@@ -229,9 +229,9 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 
 **Scope**
 - candidate crates/files:
-  - `/Users/neo/workspace/agent007/crates/web/src/api.rs`
-  - `/Users/neo/workspace/agent007/crates/web/frontend/src/views/`
-  - `/Users/neo/workspace/agent007/crates/web/frontend/src/components/`
+  - `crates/web/src/api.rs`
+  - `crates/web/frontend/src/views/`
+  - `crates/web/frontend/src/components/`
   - candidate artifact-serving helpers in web/runtime crates
 
 **Why this belongs here**
