@@ -156,6 +156,7 @@ impl WebServer {
                 "/api/regression/evaluate",
                 get(api::regression_evaluate_handler),
             )
+            .route("/api/runtime/sessions", get(api::runtime_sessions_handler))
             .route("/api/runs", get(api::runs_handler))
             .route(
                 "/api/runs/cleanup-awaiting",
