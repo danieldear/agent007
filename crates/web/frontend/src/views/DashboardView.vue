@@ -128,18 +128,10 @@ let refreshTimer = null
 let detailTimer = null
 
 onMounted(async () => {
-  health.value = await api.health()
-  metrics.value = await api.getStats() || null
-  await Promise.all([refreshRuns(), refreshRuntimeSessions()])
+  try { health.value = await api.health() } catch {}
+  await refreshDashboardSnapshots()
   loadEtrCacheStats()
-  refreshTimer = setInterval(async () => {
-    try {
-      metrics.value = await api.getStats() || metrics.value
-      await Promise.all([refreshRuns(), refreshRuntimeSessions()])
-    } catch {
-      // Keep the last successful snapshot when background refresh fails.
-    }
-  }, 5000)
+  refreshTimer = setInterval(refreshDashboardSnapshots, 5000)
   detailTimer = setInterval(async () => {
     if (expandedRunId.value) {
       try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
@@ -412,6 +404,18 @@ async function clearEtrCache() {
 
 async function refreshRuntimeSessions() {
   runtimeSessions.value = await api.getRuntimeSessions(12) || runtimeSessions.value
+}
+
+async function refreshDashboardSnapshots() {
+  const results = await Promise.allSettled([
+    api.getStats(),
+    refreshRuns(),
+    refreshRuntimeSessions(),
+  ])
+  if (results[0].status === 'fulfilled' && results[0].value) {
+    metrics.value = results[0].value
+  }
+  // Keep the last successful snapshots when any individual refresh fails.
 }
 
 async function refreshRuns() {
