@@ -7,6 +7,7 @@ pub mod init;
 pub mod persona;
 pub mod replay;
 pub mod run;
+pub mod runtime_status;
 pub mod serve;
 pub mod serve_lsp;
 pub mod serve_web;
