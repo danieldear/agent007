@@ -980,7 +980,13 @@ fn collect_files_recursive_paths(
 ) -> Result<()> {
     for entry in std::fs::read_dir(root)?.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
             collect_files_recursive_paths(&path, base_dir, out)?;
             continue;
         }
@@ -1003,7 +1009,10 @@ fn collect_flat_tool_sibling_dir_assets(
     assets: &mut Vec<BundleAsset>,
     seen: &mut HashSet<String>,
 ) -> Result<()> {
-    if !sibling_dir.is_dir() {
+    let Ok(meta) = std::fs::symlink_metadata(sibling_dir) else {
+        return Ok(());
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
         return Ok(());
     }
     let mut sibling_files = Vec::new();
@@ -1035,7 +1044,7 @@ fn maybe_collect_flat_tool_dependency_dir(
     if stem.is_empty() {
         return Ok(());
     }
-    let sibling_dir = tools_dir.join(stem);
+    let sibling_dir = tool_file.parent().unwrap_or(tools_dir).join(stem);
     collect_flat_tool_sibling_dir_assets(&sibling_dir, tools_dir, assets, seen)
 }
 
@@ -1752,6 +1761,121 @@ mod tests {
             .collect();
         assert!(filenames.contains("main_test.py"));
         assert!(filenames.contains("main_test/relatedfiles/helper.txt"));
+    }
+
+    #[test]
+    fn builder_flat_tool_export_uses_colocated_dependency_dir_for_nested_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("ml").join("infer").join("related")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---
+name: plain
+description: d
+trigger: /plain
+model: codex
+---
+No refs
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("ml").join("infer.py"),
+            "print('ok')
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir
+                .join("ml")
+                .join("infer")
+                .join("related")
+                .join("helper.txt"),
+            "helper
+",
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(&["plain"], &["__none__"], &["__none__"], &["ml/infer.py"])
+            .unwrap();
+
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("ml/infer.py"));
+        assert!(filenames.contains("ml/infer/related/helper.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn builder_flat_tool_export_skips_symlinked_dependency_files() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let tools_dir = dir.path().join("tools");
+        let outside = dir.path().join("outside.txt");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(tools_dir.join("sample_tool")).unwrap();
+        std::fs::write(
+            &outside, "secret
+",
+        )
+        .unwrap();
+
+        std::fs::write(
+            skills_dir.join("plain.md"),
+            "---
+name: plain
+description: d
+trigger: /plain
+model: codex
+---
+No refs
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tools_dir.join("sample_tool.py"),
+            "print('ok')
+",
+        )
+        .unwrap();
+        symlink(
+            &outside,
+            tools_dir.join("sample_tool").join("outside-link.txt"),
+        )
+        .unwrap();
+
+        let builder = BundleBuilder::new([&skills_dir], [&workflows_dir]);
+        let bundle = builder
+            .build(
+                &["plain"],
+                &["__none__"],
+                &["__none__"],
+                &["sample_tool.py"],
+            )
+            .unwrap();
+
+        let filenames: HashSet<String> = bundle
+            .tools
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+        assert!(filenames.contains("sample_tool.py"));
+        assert!(!filenames.contains("sample_tool/outside-link.txt"));
     }
 
     #[test]

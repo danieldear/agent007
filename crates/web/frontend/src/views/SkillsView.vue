@@ -9,6 +9,7 @@ const activeTab = ref('installed')
 const showForm = ref(false)
 const editingTrigger = ref(null) // null = creating, string = editing existing
 const importUrl = ref('')
+const browseStatus = ref(null)
 const importStatus = ref(null)
 const searchQuery = ref('')
 const discoverQuery = ref('')
@@ -124,7 +125,12 @@ async function loadRegistry() {
 
 function switchTab(tab) {
   activeTab.value = tab
-  if (tab === 'browse') loadRegistry()
+  if (tab === 'browse') {
+    importStatus.value = null
+    loadRegistry()
+  } else if (tab === 'import') {
+    browseStatus.value = null
+  }
 }
 
 function loadDiscoverSources() {
@@ -320,14 +326,14 @@ async function saveSkill() {
 
 async function installFromRegistry(item) {
   if (!item.url) return
-  importStatus.value = { type: 'loading', message: `Installing ${item.name}...` }
+  browseStatus.value = { type: 'loading', message: `Installing ${item.name}...` }
   try {
     await api.importSkill(item.url)
-    importStatus.value = { type: 'success', message: `${item.name} installed!` }
+    browseStatus.value = { type: 'success', message: `${item.name} installed!` }
     await loadSkills()
-    setTimeout(() => importStatus.value = null, 3000)
+    setTimeout(() => browseStatus.value = null, 3000)
   } catch (e) {
-    importStatus.value = { type: 'error', message: e.message }
+    browseStatus.value = { type: 'error', message: e.message }
   }
 }
 
@@ -349,17 +355,17 @@ async function runDiscoverSearch() {
   if (!discoverQuery.value.trim()) return
   const sources = normalizedDiscoverSources()
   if (!sources.length) {
-    importStatus.value = { type: 'error', message: 'Add at least one GitHub source URL' }
+    browseStatus.value = { type: 'error', message: 'Add at least one GitHub source URL' }
     return
   }
   saveDiscoverSources()
   discovering.value = true
-  importStatus.value = null
+  browseStatus.value = null
   try {
     const result = await api.discoverSkills(discoverQuery.value.trim(), sources, 16)
     discoverResults.value = Array.isArray(result?.results) ? result.results : []
   } catch (e) {
-    importStatus.value = { type: 'error', message: e.message || 'Discover failed' }
+    browseStatus.value = { type: 'error', message: e.message || 'Discover failed' }
     discoverResults.value = []
   } finally {
     discovering.value = false
@@ -388,7 +394,7 @@ async function openPreview(url, installMode = 'preview') {
 
 async function installFromPreview() {
   if (!previewData.value?.url) return
-  importStatus.value = { type: 'loading', message: `Installing ${previewData.value.name || previewData.value.trigger}...` }
+  browseStatus.value = { type: 'loading', message: `Installing ${previewData.value.name || previewData.value.trigger}...` }
   try {
     const opts = {}
     if (previewData.value?.conflict) {
@@ -399,9 +405,9 @@ async function installFromPreview() {
     }
     const result = await api.importSkill(previewData.value.url, opts)
     if (result?.skipped) {
-      importStatus.value = { type: 'success', message: `Kept existing ${result.trigger}` }
+      browseStatus.value = { type: 'success', message: `Kept existing ${result.trigger}` }
     } else {
-      importStatus.value = { type: 'success', message: `Installed ${result?.trigger || previewData.value.trigger}` }
+      browseStatus.value = { type: 'success', message: `Installed ${result?.trigger || previewData.value.trigger}` }
     }
     previewOpen.value = false
     previewData.value = null
@@ -409,9 +415,9 @@ async function installFromPreview() {
     if (discoverQuery.value.trim()) {
       await runDiscoverSearch()
     }
-    setTimeout(() => importStatus.value = null, 3000)
+    setTimeout(() => browseStatus.value = null, 3000)
   } catch (e) {
-    importStatus.value = { type: 'error', message: e.message || 'Install failed' }
+    browseStatus.value = { type: 'error', message: e.message || 'Install failed' }
   }
 }
 </script>
@@ -561,12 +567,12 @@ async function installFromPreview() {
 
       <!-- Tab: Browse Registry -->
       <div v-if="activeTab === 'browse'" class="space-y-4">
-        <div v-if="importStatus" class="alert alert-sm" :class="{
-          'alert-info': importStatus.type === 'loading',
-          'alert-success': importStatus.type === 'success',
-          'alert-error': importStatus.type === 'error',
+        <div v-if="browseStatus" class="alert alert-sm" :class="{
+          'alert-info': browseStatus.type === 'loading',
+          'alert-success': browseStatus.type === 'success',
+          'alert-error': browseStatus.type === 'error',
         }">
-          <span class="font-mono text-xs">{{ importStatus.message }}</span>
+          <span class="font-mono text-xs">{{ browseStatus.message }}</span>
         </div>
 
         <div class="flex items-center gap-3 flex-wrap">

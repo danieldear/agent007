@@ -2842,7 +2842,11 @@ pub async fn skill_discover_handler(
             .into_response();
     }
 
-    let client = match reqwest::Client::builder().user_agent("agent007").build() {
+    let client = match reqwest::Client::builder()
+        .user_agent("agent007")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -5098,6 +5102,55 @@ fn list_package_files(package_dir: &FsPath) -> Vec<String> {
     files
 }
 
+const MAX_SKILL_ASSOCIATION_SCAN_FILES: usize = 32;
+const MAX_SKILL_ASSOCIATION_SCAN_BYTES: u64 = 128 * 1024;
+
+fn is_skill_association_scan_candidate(path: &FsPath) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        &*ext.to_ascii_lowercase(),
+        "md" | "markdown"
+            | "txt"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "json"
+            | "py"
+            | "sh"
+            | "js"
+            | "ts"
+            | "jsx"
+            | "tsx"
+            | "rs"
+    )
+}
+
+fn package_association_file_paths(package_dir: &FsPath) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for rel in list_package_files(package_dir) {
+        if out.len() >= MAX_SKILL_ASSOCIATION_SCAN_FILES {
+            break;
+        }
+        let path = package_dir.join(&rel);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.len() > MAX_SKILL_ASSOCIATION_SCAN_BYTES {
+            continue;
+        }
+        if !is_skill_association_scan_candidate(&path) {
+            continue;
+        }
+        out.push(path);
+    }
+    out
+}
+
 #[derive(Debug, Default, Clone)]
 struct AssociatedAssets {
     tools: std::collections::BTreeSet<String>,
@@ -5223,11 +5276,7 @@ fn skill_associations(skill: &agent007_skills::Skill) -> AssociatedAssets {
     let mut assets = AssociatedAssets::default();
     extract_associations_from_text(skill.template(), &mut assets);
     if skill.is_package() {
-        for file in list_package_files(skill.entry_path()) {
-            let path = skill.entry_path().join(&file);
-            if !path.is_file() {
-                continue;
-            }
+        for path in package_association_file_paths(skill.entry_path()) {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 extract_associations_from_text(&content, &mut assets);
             }
@@ -5925,6 +5974,37 @@ mod tests {
     fn parse_bundle_selection_missing_means_all() {
         let items = parse_bundle_selection(None);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn package_association_file_paths_skip_large_and_non_text_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("small.md"),
+            "Use tools/demo.py
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("large.md"),
+            "x".repeat((super::MAX_SKILL_ASSOCIATION_SCAN_BYTES as usize) + 1),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("helper.bin"), [0_u8, 159, 146, 150]).unwrap();
+
+        let files = super::package_association_file_paths(dir.path());
+        let names: std::collections::BTreeSet<String> = files
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
+            .collect();
+
+        assert!(names.contains("small.md"));
+        assert!(!names.contains("large.md"));
+        assert!(!names.contains("helper.bin"));
     }
 
     #[test]

@@ -96,7 +96,7 @@ Each entry must carry:
 
 Notes:
 
-- `encoding` is `utf-8` for text assets and omitted or `binary` for raw assets.
+- `encoding` is required: use `utf-8` for text assets and `binary` for raw assets.
 - `executable` preserves tool/script executability on import.
 - `dependency_group` ties flat files to sibling support trees.
 
