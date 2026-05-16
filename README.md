@@ -15,6 +15,7 @@ agent007 runs as an MCP server that gives your AI editor a broad orchestration t
 - **Learning** — passive feedback recording → future PromptOptimizer
 - **Git agent** — AI-powered branch, commit, PR, and impact analysis
 - **Web dashboard** — live run/task/memory inspector at `http://localhost:8007`, with standalone task execution when a local provider such as Ollama is configured
+- **Dashboard-first provider UX (planned)** — provider health, setup validation, and onboarding will be centered in the web dashboard while preserving config/env-based setup for headless use
 - **LSP context controls** — configure LSP servers + category injection from config and dashboard (`/api/lsp/config`)
 - **ETR built-ins** — low-latency deterministic extraction/query/metrics tools to reduce shell+parsing overhead
 
