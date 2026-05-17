@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -15,9 +15,25 @@ pub struct StatusArgs {
     /// Number of recent sessions to inspect.
     #[arg(long, short = 'n', default_value_t = 12)]
     pub limit: usize,
+    /// Filter sessions shown in the table. Counts still summarize the inspected window.
+    #[arg(long, value_enum, default_value_t = StatusFilter::All)]
+    pub state: StatusFilter,
+    /// Refresh the compact table every N seconds until interrupted.
+    #[arg(long, num_args = 0..=1, default_missing_value = "2")]
+    pub watch: Option<u64>,
     /// Emit machine-readable JSON instead of the compact table.
     #[arg(long, default_value_t = false)]
     pub json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatusFilter {
+    All,
+    Active,
+    Blocked,
+    Failed,
+    Complete,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,20 +82,56 @@ struct WorkflowRow {
 
 pub async fn execute(_config: Arc<Config>, args: StatusArgs) -> Result<()> {
     let limit = args.limit.clamp(1, 100);
+    let filter = args.state;
+
+    if let Some(interval) = args.watch {
+        if args.json {
+            bail!("--watch cannot be combined with --json");
+        }
+        let interval = interval.clamp(1, 60);
+        loop {
+            print!("\x1B[2J\x1B[H");
+            let snapshot = load_snapshot(limit, filter)?;
+            print_snapshot(&snapshot, Some(interval));
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
+    }
+
+    let snapshot = load_snapshot(limit, filter)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    } else {
+        print_snapshot(&snapshot, None);
+    }
+    Ok(())
+}
+
+fn load_snapshot(limit: usize, filter: StatusFilter) -> Result<RuntimeStatusSnapshot> {
     let sessions_dir = status_sessions_dir();
-    let snapshot = if sessions_dir.is_dir() {
+    let mut snapshot = if sessions_dir.is_dir() {
         let store = RunStore::new(sessions_dir);
         build_snapshot(&store, limit)?
     } else {
         empty_snapshot()
     };
+    apply_filter(&mut snapshot, filter);
+    Ok(snapshot)
+}
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&snapshot)?);
-    } else {
-        print_snapshot(&snapshot);
+fn apply_filter(snapshot: &mut RuntimeStatusSnapshot, filter: StatusFilter) {
+    if filter == StatusFilter::All {
+        return;
     }
-    Ok(())
+    snapshot.sessions.retain(|session| match filter {
+        StatusFilter::All => true,
+        StatusFilter::Active => matches!(
+            session.lifecycle.as_str(),
+            "running" | "ready" | "blocked" | "attention"
+        ),
+        StatusFilter::Blocked => session.lifecycle == "blocked",
+        StatusFilter::Failed => session.lifecycle == "failed",
+        StatusFilter::Complete => session.lifecycle == "complete",
+    });
 }
 
 fn status_sessions_dir() -> std::path::PathBuf {
@@ -241,28 +293,40 @@ fn run_status_label(status: &RunStatus) -> &'static str {
     }
 }
 
-fn print_snapshot(snapshot: &RuntimeStatusSnapshot) {
-    println!("agent007 runtime status");
+fn print_snapshot(snapshot: &RuntimeStatusSnapshot, watch_interval: Option<u64>) {
     println!(
-        "active={} running={} blocked={} failed={} total={}",
+        "agent007 runtime status · {}",
+        snapshot.generated_at.format("%Y-%m-%d %H:%M:%SZ")
+    );
+    if let Some(interval) = watch_interval {
+        println!("watching every {interval}s — press Ctrl-C to stop");
+    }
+    println!(
+        "active={} running={} blocked={} failed={} complete={} total={} shown={}",
         snapshot.counts.active,
         snapshot.counts.running,
         snapshot.counts.blocked,
         snapshot.counts.failed,
-        snapshot.counts.total
+        snapshot.counts.succeeded,
+        snapshot.counts.total,
+        snapshot.sessions.len()
     );
     println!();
 
     if snapshot.sessions.is_empty() {
-        println!("No recorded sessions yet.");
+        if snapshot.counts.total == 0 {
+            println!("No recorded sessions yet.");
+        } else {
+            println!("No sessions match the current filter.");
+        }
         return;
     }
 
     println!(
-        "{:<9} {:<18} {:<18} {:<15} {:<10} {}",
-        "state", "session", "kind", "workflow", "age", "hint"
+        "{:<9} {:<18} {:<18} {:<15} {:<14} {:<10} {}",
+        "state", "session", "kind", "workflow", "runtime", "age", "hint"
     );
-    println!("{}", "─".repeat(96));
+    println!("{}", "─".repeat(112));
     for session in &snapshot.sessions {
         let workflow = session
             .workflow
@@ -270,11 +334,12 @@ fn print_snapshot(snapshot: &RuntimeStatusSnapshot) {
             .map(format_workflow)
             .unwrap_or_else(|| "—".to_string());
         println!(
-            "{:<9} {:<18} {:<18} {:<15} {:<10} {}",
+            "{:<9} {:<18} {:<18} {:<15} {:<14} {:<10} {}",
             session.lifecycle,
             truncate(&session.id, 18),
             truncate(&session.kind, 18),
             truncate(&workflow, 15),
+            truncate(&format_runtime(session), 14),
             format_age(session.age_seconds),
             session.action_hint
         );
@@ -288,6 +353,13 @@ fn print_snapshot(snapshot: &RuntimeStatusSnapshot) {
         } else if let Some(preview) = &session.output_preview {
             println!("  output: {}", truncate(&compact_line(preview), 87));
         }
+    }
+}
+
+fn format_runtime(session: &RuntimeSessionRow) -> String {
+    match session.provider.as_deref() {
+        Some(provider) if !provider.is_empty() => format!("{}/{}", session.mode, provider),
+        _ => session.mode.clone(),
     }
 }
 
@@ -358,6 +430,61 @@ mod tests {
             compact_line("first line\nsecond\tline"),
             "first line second line"
         );
+    }
+
+    #[test]
+    fn status_filter_keeps_requested_lifecycle_rows() {
+        let mut snapshot = empty_snapshot();
+        snapshot.sessions = vec![
+            RuntimeSessionRow {
+                id: "r1".to_string(),
+                kind: "workflow".to_string(),
+                task: "blocked".to_string(),
+                status: "awaiting-approval".to_string(),
+                lifecycle: "blocked".to_string(),
+                mode: "hosted-mcp".to_string(),
+                provider: None,
+                age_seconds: 1,
+                workflow: None,
+                action_hint: "approval needed".to_string(),
+                output_preview: None,
+            },
+            RuntimeSessionRow {
+                id: "r2".to_string(),
+                kind: "task".to_string(),
+                task: "done".to_string(),
+                status: "succeeded".to_string(),
+                lifecycle: "complete".to_string(),
+                mode: "standalone".to_string(),
+                provider: Some("codex".to_string()),
+                age_seconds: 2,
+                workflow: None,
+                action_hint: "review output".to_string(),
+                output_preview: None,
+            },
+        ];
+
+        apply_filter(&mut snapshot, StatusFilter::Blocked);
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].id, "r1");
+    }
+
+    #[test]
+    fn format_runtime_includes_provider_when_present() {
+        let row = RuntimeSessionRow {
+            id: "r1".to_string(),
+            kind: "task".to_string(),
+            task: "demo".to_string(),
+            status: "running".to_string(),
+            lifecycle: "running".to_string(),
+            mode: "standalone".to_string(),
+            provider: Some("codex".to_string()),
+            age_seconds: 1,
+            workflow: None,
+            action_hint: "monitor".to_string(),
+            output_preview: None,
+        };
+        assert_eq!(format_runtime(&row), "standalone/codex");
     }
 
     #[test]
@@ -456,6 +583,8 @@ mod tests {
             Arc::new(Config::default()),
             StatusArgs {
                 limit: 3,
+                state: StatusFilter::All,
+                watch: None,
                 json: true,
             },
         )

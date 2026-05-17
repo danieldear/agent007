@@ -27,7 +27,7 @@ What it lacks is a stronger **runtime layer**:
 ## Current Status
 M4 is active and shipping in small, reviewable slices. The current branch covers:
 
-- **Runtime visibility v1:** compact dashboard/session inventory and CLI status are available.
+- **Runtime visibility v1:** compact dashboard/session inventory and CLI status are available, including terminal filters and watch mode.
 - **Provider readiness v1:** dashboard-safe provider status reports runtime mode, configured providers, and actionable setup hints without exposing secrets.
 - **Artifact/mock viewer v1:** run details can preview markdown, JSON/text, rendered Mermaid diagrams, sandboxed HTML, and image artifacts from the dashboard; oversized or binary artifacts fall back to raw/open handling.
 
@@ -208,6 +208,9 @@ Expose runtime state in a compact, operator-friendly way.
 ### W6 — TUI Usability
 Make the terminal experience genuinely usable for monitoring and control.
 
+**Current slice**
+- `agent007 status` now supports compact runtime filtering and watch mode for terminal monitoring without raw JSON dumps.
+
 **Scope**
 - candidate CLI/TUI surfaces in:
   - `crates/cli/`
@@ -311,7 +314,7 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 - align summary shape with terminal output
 
 ### Slice C — First Usable TUI
-- sessions list
+- sessions list (terminal filter/watch shipped for `agent007 status`)
 - run detail
 - approval queue
 
