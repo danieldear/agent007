@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -344,6 +344,36 @@ pub struct RuntimeSessionsQuery {
 fn default_runtime_sessions_limit() -> usize {
     12
 }
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RunArtifactQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RunArtifactPreviewResponse {
+    pub run_id: String,
+    pub path: String,
+    pub kind: String,
+    pub mime: String,
+    pub size_bytes: u64,
+    pub truncated: bool,
+    pub raw_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content: Option<String>,
+}
+
+#[derive(Debug)]
+struct ArtifactSelection {
+    path: String,
+    disk_path: PathBuf,
+    mime: String,
+    size_bytes: u64,
+}
+
+const MAX_ARTIFACT_PREVIEW_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/types/")]
@@ -1263,6 +1293,194 @@ pub async fn runs_cleanup_awaiting_handler(
         "errors": errors,
     }))
     .into_response()
+}
+
+fn is_safe_run_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+fn is_safe_artifact_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let artifact = FsPath::new(path);
+    if artifact.is_absolute() {
+        return false;
+    }
+    artifact
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn artifact_mime(path: &str) -> String {
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string()
+}
+
+fn artifact_kind(path: &str, mime: &str) -> String {
+    let ext = FsPath::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "md" | "markdown" => "markdown".to_string(),
+        "mmd" | "mermaid" => "mermaid".to_string(),
+        "html" | "htm" => "html".to_string(),
+        "json" => "json".to_string(),
+        "svg" => "image".to_string(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" => "image".to_string(),
+        _ if mime.starts_with("text/") => "text".to_string(),
+        _ => "binary".to_string(),
+    }
+}
+
+fn artifact_is_inline_text(kind: &str, mime: &str) -> bool {
+    matches!(kind, "markdown" | "mermaid" | "html" | "json" | "text")
+        || mime.starts_with("text/")
+        || mime == "application/json"
+        || mime == "image/svg+xml"
+}
+
+fn url_query_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn validate_artifact_selection(
+    store: &agent007_core::RunStore,
+    run_id: &str,
+    requested_path: &str,
+) -> Result<ArtifactSelection, (StatusCode, String)> {
+    if !is_safe_run_id(run_id) {
+        return Err((StatusCode::BAD_REQUEST, "invalid run id".to_string()));
+    }
+    if !is_safe_artifact_path(requested_path) {
+        return Err((StatusCode::BAD_REQUEST, "invalid artifact path".to_string()));
+    }
+
+    let artifacts = store
+        .list_artifacts(run_id)
+        .map_err(|error| (StatusCode::NOT_FOUND, error.to_string()))?;
+    if !artifacts.iter().any(|artifact| artifact == requested_path) {
+        return Err((StatusCode::NOT_FOUND, "artifact not found".to_string()));
+    }
+
+    let disk_path = agent007_write_home()
+        .join("sessions")
+        .join(run_id)
+        .join(requested_path);
+    let metadata = std::fs::symlink_metadata(&disk_path)
+        .map_err(|error| (StatusCode::NOT_FOUND, error.to_string()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "artifact must be a regular file".to_string(),
+        ));
+    }
+
+    Ok(ArtifactSelection {
+        path: requested_path.to_string(),
+        disk_path,
+        mime: artifact_mime(requested_path),
+        size_bytes: metadata.len(),
+    })
+}
+
+pub async fn run_artifact_preview_handler(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<RunArtifactQuery>,
+) -> impl IntoResponse {
+    let store = run_store_for_web();
+    let selection = match validate_artifact_selection(&store, &id, &query.path) {
+        Ok(selection) => selection,
+        Err((status, error)) => {
+            return (status, Json(serde_json::json!({ "error": error }))).into_response();
+        }
+    };
+
+    let kind = artifact_kind(&selection.path, &selection.mime);
+    let truncated = selection.size_bytes > MAX_ARTIFACT_PREVIEW_BYTES;
+    let content = if !truncated && artifact_is_inline_text(&kind, &selection.mime) {
+        std::fs::read_to_string(&selection.disk_path).ok()
+    } else {
+        None
+    };
+    let raw_url = format!(
+        "/api/runs/{}/artifacts/raw?path={}",
+        id,
+        url_query_encode(&selection.path)
+    );
+
+    Json(RunArtifactPreviewResponse {
+        run_id: id,
+        path: selection.path,
+        kind,
+        mime: selection.mime,
+        size_bytes: selection.size_bytes,
+        truncated,
+        raw_url,
+        content,
+    })
+    .into_response()
+}
+
+pub async fn run_artifact_raw_handler(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<RunArtifactQuery>,
+) -> impl IntoResponse {
+    let store = run_store_for_web();
+    let selection = match validate_artifact_selection(&store, &id, &query.path) {
+        Ok(selection) => selection,
+        Err((status, error)) => {
+            return (status, Json(serde_json::json!({ "error": error }))).into_response();
+        }
+    };
+    let bytes = match std::fs::read(&selection.disk_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&selection.mime)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'",
+        ),
+    );
+    (headers, bytes).into_response()
 }
 
 pub async fn run_detail_handler(
@@ -6948,6 +7166,62 @@ mod tests {
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn api_run_artifact_preview_serves_safe_inline_artifacts() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions").join("session-1");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let original_agent_home = std::env::var("AGENT007_HOME").ok();
+        std::env::set_var("AGENT007_HOME", home.path());
+
+        std::fs::write(
+            sessions.join("meta.json"),
+            serde_json::json!({
+                "id": "session-1",
+                "kind": "task",
+                "task": "render artifact",
+                "mode": "hosted-mcp",
+                "provider": null,
+                "started_at": chrono::Utc::now(),
+                "finished_at": null,
+                "status": "succeeded",
+                "output_preview": null
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            sessions.join("design.md"),
+            "# Design\n\n```mermaid\ngraph TD\n```",
+        )
+        .unwrap();
+
+        let ts = test_server();
+        let response = ts
+            .get("/api/runs/session-1/artifacts/preview?path=design.md")
+            .await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["kind"].as_str(), Some("markdown"));
+        assert_eq!(
+            body["content"].as_str(),
+            Some("# Design\n\n```mermaid\ngraph TD\n```")
+        );
+        assert_eq!(body["truncated"].as_bool(), Some(false));
+
+        let blocked = ts
+            .get("/api/runs/session-1/artifacts/preview?path=../meta.json")
+            .await;
+        blocked.assert_status_bad_request();
+
+        if let Some(value) = original_agent_home {
+            std::env::set_var("AGENT007_HOME", value);
+        } else {
+            std::env::remove_var("AGENT007_HOME");
+        }
     }
 
     #[tokio::test]

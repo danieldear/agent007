@@ -197,6 +197,14 @@ impl WebServer {
                 post(api::runs_cleanup_awaiting_handler),
             )
             .route("/api/runs/{id}", get(api::run_detail_handler))
+            .route(
+                "/api/runs/{id}/artifacts/preview",
+                get(api::run_artifact_preview_handler),
+            )
+            .route(
+                "/api/runs/{id}/artifacts/raw",
+                get(api::run_artifact_raw_handler),
+            )
             .route("/api/runs/{id}/approval", post(api::run_approval_handler))
             .route("/api/runs/{id}/resume", post(api::run_resume_handler))
             .route(

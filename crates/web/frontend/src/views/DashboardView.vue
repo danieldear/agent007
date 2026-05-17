@@ -18,6 +18,9 @@ const runtimeSessions = ref(null)
 const providerStatus = ref(null)
 const selectedRun = ref(null)
 const selectedRunId = ref(null)
+const selectedArtifactPath = ref('')
+const selectedArtifactPreview = ref(null)
+const artifactPreviewStatus = ref('')
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
@@ -204,6 +207,13 @@ function fmtTokens(n) {
   return String(n)
 }
 
+function fmtBytes(n) {
+  const bytes = Number(n || 0)
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
 function fmtAgeSeconds(seconds) {
   const secs = Number(seconds || 0)
   if (secs < 60) return `${secs}s`
@@ -345,6 +355,11 @@ const selectedPersonaPolicyWarning = computed(() => selectedRun.value?.persona_p
 const selectedRunTokenSummary = computed(() => selectedRun.value?.token_summary || null)
 const dashboardOwnsSelectedWorkflow = computed(() => selectedRunKind.value.startsWith('workflow-web-'))
 const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
+const selectedArtifactIsRenderable = computed(() => {
+  const kind = selectedArtifactPreview.value?.kind
+  return ['markdown', 'html', 'json', 'mermaid', 'text', 'image'].includes(kind)
+})
+const selectedArtifactRawUrl = computed(() => selectedArtifactPreview.value?.raw_url || '')
 const selectedRunResumeTargetStatus = computed(() => selectedRun.value?.resume_target_status || null)
 const selectedRunAlreadyResumed = computed(() => {
   if (!selectedRunArtifacts.value.includes('resume-target.json')) return false
@@ -471,6 +486,7 @@ async function toggleRun(id) {
     expandedRunId.value = null
     selectedRunId.value = null
     selectedRun.value = null
+    clearArtifactPreview()
     approvalStatus.value = ''
     resumeStatus.value = ''
   } else {
@@ -484,6 +500,26 @@ async function selectRun(id) {
   selectedRun.value = await api.getRunDetail(id)
   approvalEditContent.value = selectedRun.value?.workflow_state?.pending_approval?.content || ''
   resumeStatus.value = ''
+  clearArtifactPreview()
+}
+
+function clearArtifactPreview() {
+  selectedArtifactPath.value = ''
+  selectedArtifactPreview.value = null
+  artifactPreviewStatus.value = ''
+}
+
+async function previewArtifact(path) {
+  if (!selectedRunId.value || !path) return
+  selectedArtifactPath.value = path
+  artifactPreviewStatus.value = 'Loading artifact preview...'
+  try {
+    selectedArtifactPreview.value = await api.previewRunArtifact(selectedRunId.value, path)
+    artifactPreviewStatus.value = ''
+  } catch (error) {
+    selectedArtifactPreview.value = null
+    artifactPreviewStatus.value = error?.message || 'Unable to load artifact preview'
+  }
 }
 
 async function recordApproval(decision) {
@@ -1024,6 +1060,68 @@ async function submitTask() {
                 <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
                   v-html="renderMarkdown(selectedRunOutput)"
                 /></div>
+
+              <!-- Artifacts -->
+              <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Artifacts</div>
+                    <div class="font-mono text-xs text-base-content/45 mt-1">Preview generated reports, diagrams, mocks, text, and images without leaving the dashboard.</div>
+                  </div>
+                  <span class="badge badge-sm badge-ghost font-mono">{{ selectedRunArtifacts.length }} file(s)</span>
+                </div>
+
+                <div class="grid grid-cols-12 gap-3">
+                  <div class="col-span-4 space-y-1 max-h-56 overflow-auto pr-1">
+                    <button
+                      v-for="artifact in selectedRunArtifacts"
+                      :key="artifact"
+                      class="btn btn-xs h-auto min-h-0 w-full justify-start normal-case font-mono text-left py-2 px-2"
+                      :class="selectedArtifactPath === artifact ? 'btn-primary' : 'btn-ghost'"
+                      :title="artifact"
+                      @click="previewArtifact(artifact)"
+                    >
+                      <span class="truncate">{{ artifact }}</span>
+                    </button>
+                  </div>
+
+                  <div class="col-span-8 rounded-lg border border-base-300/60 bg-base-100 min-h-56 overflow-hidden">
+                    <div v-if="artifactPreviewStatus" class="p-4 font-mono text-xs text-warning">{{ artifactPreviewStatus }}</div>
+                    <div v-else-if="!selectedArtifactPreview" class="h-full min-h-56 flex items-center justify-center text-center p-6">
+                      <div>
+                        <div class="text-2xl mb-2">▣</div>
+                        <div class="font-mono text-xs text-base-content/45">Select an artifact to preview.</div>
+                      </div>
+                    </div>
+                    <div v-else>
+                      <div class="flex items-center justify-between gap-3 border-b border-base-300/60 px-3 py-2">
+                        <div class="min-w-0">
+                          <div class="font-mono text-xs text-base-content/80 truncate" :title="selectedArtifactPreview.path">{{ selectedArtifactPreview.path }}</div>
+                          <div class="font-mono text-[10px] text-base-content/35">{{ selectedArtifactPreview.kind }} · {{ selectedArtifactPreview.mime }} · {{ fmtBytes(selectedArtifactPreview.size_bytes) }}</div>
+                        </div>
+                        <a class="btn btn-xs btn-ghost" :href="selectedArtifactRawUrl" target="_blank" rel="noreferrer">raw</a>
+                      </div>
+
+                      <div v-if="selectedArtifactPreview.truncated" class="p-4 font-mono text-xs text-warning">Artifact is larger than the inline preview limit. Open the raw artifact instead.</div>
+                      <div v-else-if="selectedArtifactPreview.kind === 'markdown'" class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto" v-html="renderMarkdown(selectedArtifactPreview.content || '')" />
+                      <iframe
+                        v-else-if="selectedArtifactPreview.kind === 'html'"
+                        class="w-full h-96 bg-white"
+                        sandbox
+                        :srcdoc="selectedArtifactPreview.content || ''"
+                      />
+                      <img
+                        v-else-if="selectedArtifactPreview.kind === 'image'"
+                        class="max-h-96 max-w-full mx-auto p-3 object-contain"
+                        :src="selectedArtifactRawUrl"
+                        :alt="selectedArtifactPreview.path"
+                      />
+                      <pre v-else-if="selectedArtifactIsRenderable" class="p-4 text-xs whitespace-pre-wrap max-h-96 overflow-auto"><code>{{ selectedArtifactPreview.content || '' }}</code></pre>
+                      <div v-else class="p-4 font-mono text-xs text-base-content/50">Binary artifact. Open the raw artifact to inspect it.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <!-- Retrieval Telemetry -->
               <div v-if="selectedRetrievalTelemetry">
