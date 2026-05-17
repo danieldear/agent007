@@ -5,8 +5,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::commands::run::{
-    agent007_global_home, build_stack_for_web, runtime_mode_label, selected_runtime_model,
-    selected_runtime_provider, standalone_mode_available,
+    agent007_global_home, build_stack_for_web, provider_readiness_response, runtime_mode_label,
+    selected_runtime_model, selected_runtime_provider, standalone_mode_available,
 };
 use crate::config::Config;
 use agent007_web::WebServer;
@@ -43,7 +43,8 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         _ => "hosted-mcp".to_string(),
     };
 
-    let web = WebServer::new(
+    let provider_readiness = provider_readiness_response(&config);
+    let web = WebServer::new_with_provider_readiness(
         stack.dispatcher.clone(),
         stack.learning_dispatcher.clone(),
         stack.model_router.clone(),
@@ -52,6 +53,7 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
         standalone_mode,
         runtime_mode,
         provider_label,
+        provider_readiness,
     );
 
     tracing::info!("starting axum serve loop");

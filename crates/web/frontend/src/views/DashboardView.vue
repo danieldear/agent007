@@ -15,8 +15,13 @@ const taskInput = ref('')
 const taskStatus = ref('')
 const runs = ref([])
 const runtimeSessions = ref(null)
+const providerStatus = ref(null)
 const selectedRun = ref(null)
 const selectedRunId = ref(null)
+const selectedArtifactPath = ref('')
+const selectedArtifactPreview = ref(null)
+const artifactPreviewStatus = ref('')
+const artifactPreviewRef = ref(null)
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
@@ -154,6 +159,17 @@ watch(() => props.events?.length, async () => {
   }
 })
 
+const providerReadiness = computed(() => providerStatus.value || {
+  runtime_mode: m.value.runtime_mode || 'hosted-mcp',
+  selected_provider: null,
+  selected_model: m.value.model_provider || null,
+  standalone_available: !!m.value.local_execution_available,
+  providers: [],
+  hints: [],
+})
+
+const providerCards = computed(() => providerReadiness.value.providers || [])
+
 const runtime = computed(() => runtimeSessions.value || {
   generated_at: null,
   counts: { total: 0, active: 0, running: 0, blocked: 0, failed: 0, succeeded: 0 },
@@ -192,6 +208,13 @@ function fmtTokens(n) {
   return String(n)
 }
 
+function fmtBytes(n) {
+  const bytes = Number(n || 0)
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
 function fmtAgeSeconds(seconds) {
   const secs = Number(seconds || 0)
   if (secs < 60) return `${secs}s`
@@ -218,6 +241,24 @@ function runtimeBadgeClass(lifecycle) {
     'badge-success': lifecycle === 'complete',
     'badge-error': lifecycle === 'failed',
     'badge-ghost': !['running', 'ready', 'blocked', 'attention', 'complete', 'failed'].includes(lifecycle),
+  }
+}
+
+function providerCardClass(status) {
+  return {
+    'border-success/45 bg-success/5': status === 'ready',
+    'border-warning/45 bg-warning/5': status === 'fallback' || status === 'unreachable',
+    'border-base-300/70 bg-base-200': status === 'needs-config' || status === 'not-configured',
+    'border-error/45 bg-error/5': status === 'error',
+  }
+}
+
+function providerBadgeClass(status) {
+  return {
+    'badge-success': status === 'ready',
+    'badge-warning': status === 'fallback' || status === 'unreachable',
+    'badge-ghost': status === 'needs-config' || status === 'not-configured',
+    'badge-error': status === 'error',
   }
 }
 
@@ -264,6 +305,56 @@ function renderMarkdown(raw) {
   if (!raw) return ''
   const dirty = marked.parse(raw)
   return DOMPurify.sanitize(dirty, { ADD_TAGS: ['pre', 'code'], ADD_ATTR: ['class'] })
+}
+
+let mermaidInstance = null
+async function ensureMermaid() {
+  if (mermaidInstance) return mermaidInstance
+  const mermaid = (await import('mermaid')).default
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'strict',
+    themeVariables: {
+      background: '#1d232a',
+      primaryColor: '#7480ff',
+      primaryTextColor: '#a6adbb',
+      primaryBorderColor: '#2a323c',
+      lineColor: '#4b5563',
+      secondaryColor: '#2a323c',
+      tertiaryColor: '#191e24',
+      edgeLabelBackground: '#1d232a',
+      fontFamily: 'ui-monospace, monospace',
+    },
+  })
+  mermaidInstance = mermaid
+  return mermaid
+}
+
+async function renderArtifactMermaid() {
+  const kind = selectedArtifactPreview.value?.kind
+  if (!['markdown', 'mermaid'].includes(kind)) return
+  await nextTick()
+  const root = artifactPreviewRef.value
+  if (!root) return
+
+  root.querySelectorAll('.language-mermaid').forEach(block => {
+    const source = block.textContent || ''
+    const container = block.closest('pre') || block
+    const target = document.createElement('div')
+    target.className = 'artifact-mermaid-block'
+    target.textContent = source
+    container.replaceWith(target)
+  })
+
+  const blocks = root.querySelectorAll('.artifact-mermaid-block')
+  if (!blocks.length) return
+  try {
+    const mermaid = await ensureMermaid()
+    await mermaid.run({ nodes: Array.from(blocks) })
+  } catch (error) {
+    console.warn('artifact mermaid render error:', error)
+  }
 }
 
 function toggleRawStep(stepId) {
@@ -315,6 +406,11 @@ const selectedPersonaPolicyWarning = computed(() => selectedRun.value?.persona_p
 const selectedRunTokenSummary = computed(() => selectedRun.value?.token_summary || null)
 const dashboardOwnsSelectedWorkflow = computed(() => selectedRunKind.value.startsWith('workflow-web-'))
 const selectedRunArtifacts = computed(() => selectedRun.value?.run?.artifacts || [])
+const selectedArtifactIsRenderable = computed(() => {
+  const kind = selectedArtifactPreview.value?.kind
+  return ['markdown', 'html', 'json', 'mermaid', 'text', 'image'].includes(kind)
+})
+const selectedArtifactRawUrl = computed(() => selectedArtifactPreview.value?.raw_url || '')
 const selectedRunResumeTargetStatus = computed(() => selectedRun.value?.resume_target_status || null)
 const selectedRunAlreadyResumed = computed(() => {
   if (!selectedRunArtifacts.value.includes('resume-target.json')) return false
@@ -411,9 +507,13 @@ async function refreshDashboardSnapshots() {
     api.getStats(),
     refreshRuns(),
     refreshRuntimeSessions(),
+    api.getProviderStatus(),
   ])
   if (results[0].status === 'fulfilled' && results[0].value) {
     metrics.value = results[0].value
+  }
+  if (results[3].status === 'fulfilled' && results[3].value) {
+    providerStatus.value = results[3].value
   }
   // Keep the last successful snapshots when any individual refresh fails.
 }
@@ -437,6 +537,7 @@ async function toggleRun(id) {
     expandedRunId.value = null
     selectedRunId.value = null
     selectedRun.value = null
+    clearArtifactPreview()
     approvalStatus.value = ''
     resumeStatus.value = ''
   } else {
@@ -450,6 +551,27 @@ async function selectRun(id) {
   selectedRun.value = await api.getRunDetail(id)
   approvalEditContent.value = selectedRun.value?.workflow_state?.pending_approval?.content || ''
   resumeStatus.value = ''
+  clearArtifactPreview()
+}
+
+function clearArtifactPreview() {
+  selectedArtifactPath.value = ''
+  selectedArtifactPreview.value = null
+  artifactPreviewStatus.value = ''
+}
+
+async function previewArtifact(path) {
+  if (!selectedRunId.value || !path) return
+  selectedArtifactPath.value = path
+  artifactPreviewStatus.value = 'Loading artifact preview...'
+  try {
+    selectedArtifactPreview.value = await api.previewRunArtifact(selectedRunId.value, path)
+    artifactPreviewStatus.value = ''
+    await renderArtifactMermaid()
+  } catch (error) {
+    selectedArtifactPreview.value = null
+    artifactPreviewStatus.value = error?.message || 'Unable to load artifact preview'
+  }
 }
 
 async function recordApproval(decision) {
@@ -678,6 +800,49 @@ async function submitTask() {
           <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Uptime</div>
           <div class="text-base font-bold font-mono text-base-content tabular-nums mt-0.5">{{ uptime }}</div>
           <div class="text-[9px] text-base-content/25 font-mono mt-0.5 truncate">{{ m.model_provider || '—' }}</div>
+        </div>
+      </div>
+
+      <!-- Provider readiness: dashboard-first onboarding status -->
+      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center gap-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Provider Readiness</span>
+            <span class="badge badge-xs font-mono" :class="providerReadiness.standalone_available ? 'badge-success' : 'badge-warning'">
+              {{ providerReadiness.runtime_mode || 'hosted-mcp' }}
+            </span>
+            <span v-if="providerReadiness.selected_model" class="text-[10px] font-mono text-base-content/35 truncate hidden md:block">
+              {{ providerReadiness.selected_model }}
+            </span>
+          </div>
+          <div class="text-[10px] font-mono text-base-content/30 truncate max-w-[44rem]">
+            {{ providerReadiness.hints?.[0] || 'Provider status is loaded from local config and environment.' }}
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2 p-3">
+          <div
+            v-for="provider in providerCards"
+            :key="provider.id"
+            class="rounded-lg border p-3 min-h-28 flex flex-col justify-between"
+            :class="providerCardClass(provider.status)"
+          >
+            <div>
+              <div class="flex items-start justify-between gap-2 mb-1">
+                <div class="font-mono text-xs font-semibold text-base-content/80 truncate" :title="provider.label">{{ provider.label }}</div>
+                <span class="badge badge-xs font-mono shrink-0" :class="providerBadgeClass(provider.status)">{{ provider.status }}</span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/35 truncate" :title="provider.model || provider.source">
+                {{ provider.model || provider.source || '—' }}
+              </div>
+            </div>
+            <div class="mt-3 space-y-1">
+              <div class="flex items-center gap-2 text-[10px] font-mono">
+                <span class="w-1.5 h-1.5 rounded-full" :class="provider.available ? 'bg-success' : provider.configured ? 'bg-warning' : 'bg-base-content/20'"></span>
+                <span class="text-base-content/40">{{ provider.selected ? 'selected' : provider.available ? 'available' : provider.configured ? 'configured' : 'not configured' }}</span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/30 line-clamp-2" :title="provider.hint">{{ provider.hint }}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -947,6 +1112,76 @@ async function submitTask() {
                 <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
                   v-html="renderMarkdown(selectedRunOutput)"
                 /></div>
+
+              <!-- Artifacts -->
+              <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Artifacts</div>
+                    <div class="font-mono text-xs text-base-content/45 mt-1">Preview generated reports, diagrams, mocks, text, and images without leaving the dashboard.</div>
+                  </div>
+                  <span class="badge badge-sm badge-ghost font-mono">{{ selectedRunArtifacts.length }} file(s)</span>
+                </div>
+
+                <div class="grid grid-cols-12 gap-3">
+                  <div class="col-span-4 space-y-1 max-h-56 overflow-auto pr-1">
+                    <button
+                      v-for="artifact in selectedRunArtifacts"
+                      :key="artifact"
+                      class="btn btn-xs h-auto min-h-0 w-full justify-start normal-case font-mono text-left py-2 px-2"
+                      :class="selectedArtifactPath === artifact ? 'btn-primary' : 'btn-ghost'"
+                      :title="artifact"
+                      @click="previewArtifact(artifact)"
+                    >
+                      <span class="truncate">{{ artifact }}</span>
+                    </button>
+                  </div>
+
+                  <div class="col-span-8 rounded-lg border border-base-300/60 bg-base-100 min-h-56 overflow-hidden">
+                    <div v-if="artifactPreviewStatus" class="p-4 font-mono text-xs text-warning">{{ artifactPreviewStatus }}</div>
+                    <div v-else-if="!selectedArtifactPreview" class="h-full min-h-56 flex items-center justify-center text-center p-6">
+                      <div>
+                        <div class="text-2xl mb-2">▣</div>
+                        <div class="font-mono text-xs text-base-content/45">Select an artifact to preview.</div>
+                      </div>
+                    </div>
+                    <div v-else>
+                      <div class="flex items-center justify-between gap-3 border-b border-base-300/60 px-3 py-2">
+                        <div class="min-w-0">
+                          <div class="font-mono text-xs text-base-content/80 truncate" :title="selectedArtifactPreview.path">{{ selectedArtifactPreview.path }}</div>
+                          <div class="font-mono text-[10px] text-base-content/35">{{ selectedArtifactPreview.kind }} · {{ selectedArtifactPreview.mime }} · {{ fmtBytes(selectedArtifactPreview.size_bytes) }}</div>
+                        </div>
+                        <a class="btn btn-xs btn-ghost" :href="selectedArtifactRawUrl" target="_blank" rel="noreferrer">raw</a>
+                      </div>
+
+                      <div v-if="selectedArtifactPreview.truncated" class="p-4 font-mono text-xs text-warning">Artifact is larger than the inline preview limit. Open the raw artifact instead.</div>
+                      <div
+                        v-else-if="selectedArtifactPreview.kind === 'markdown'"
+                        ref="artifactPreviewRef"
+                        class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto"
+                        v-html="renderMarkdown(selectedArtifactPreview.content || '')"
+                      />
+                      <iframe
+                        v-else-if="selectedArtifactPreview.kind === 'html'"
+                        class="w-full h-96 bg-white"
+                        sandbox
+                        :srcdoc="selectedArtifactPreview.content || ''"
+                      />
+                      <img
+                        v-else-if="selectedArtifactPreview.kind === 'image'"
+                        class="max-h-96 max-w-full mx-auto p-3 object-contain"
+                        :src="selectedArtifactRawUrl"
+                        :alt="selectedArtifactPreview.path"
+                      />
+                      <div v-else-if="selectedArtifactPreview.kind === 'mermaid'" ref="artifactPreviewRef" class="p-4 max-h-96 overflow-auto">
+                        <div class="artifact-mermaid-block">{{ selectedArtifactPreview.content || '' }}</div>
+                      </div>
+                      <pre v-else-if="selectedArtifactIsRenderable" class="p-4 text-xs whitespace-pre-wrap max-h-96 overflow-auto"><code>{{ selectedArtifactPreview.content || '' }}</code></pre>
+                      <div v-else class="p-4 font-mono text-xs text-base-content/50">Binary artifact. Open the raw artifact to inspect it.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <!-- Retrieval Telemetry -->
               <div v-if="selectedRetrievalTelemetry">
@@ -1584,4 +1819,18 @@ async function submitTask() {
 .md-step-output :deep(strong) { color: oklch(var(--bc)); font-weight: 700; }
 .md-step-output :deep(em)     { color: oklch(var(--bc) / 0.75); font-style: italic; }
 .md-step-output :deep(del)    { color: oklch(var(--bc) / 0.35); text-decoration: line-through; }
+
+.md-step-output :deep(.artifact-mermaid-block),
+.artifact-mermaid-block {
+  margin: 0.75em 0;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid oklch(var(--b3));
+  background: oklch(var(--b3) / 0.25);
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+.md-step-output :deep(.artifact-mermaid-block svg),
+.artifact-mermaid-block :deep(svg) { max-width: 100%; height: auto; }
 </style>

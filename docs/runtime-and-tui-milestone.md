@@ -24,6 +24,15 @@ What it lacks is a stronger **runtime layer**:
 - compact live status in both web and terminal views
 - a TUI that is usable for daily runtime monitoring
 
+## Current Status
+M4 is active and shipping in small, reviewable slices. The current branch covers:
+
+- **Runtime visibility v1:** compact dashboard/session inventory and CLI status are available.
+- **Provider readiness v1:** dashboard-safe provider status reports runtime mode, configured providers, and actionable setup hints without exposing secrets.
+- **Artifact/mock viewer v1:** run details can preview markdown, JSON/text, rendered Mermaid diagrams, sandboxed HTML, and image artifacts from the dashboard; oversized or binary artifacts fall back to raw/open handling.
+
+Still deferred to later slices: full TUI control flows, agent-to-agent messaging, memory lifecycle changes, provider onboarding wizards/OAuth flows, and `.a7bundle` v2 implementation.
+
 ## Workstreams
 
 ### W1 — Session Server Model
@@ -137,7 +146,7 @@ Reduce friction for setup and day-to-day usage.
 - hosted-MCP mode remains valid even when no standalone provider is configured
 
 **Deliverables**
-1. Provider status card:
+1. Provider status card (**v1 shipped**):
    - configured / missing / degraded
    - endpoint in use
    - auth state
@@ -162,11 +171,12 @@ Reduce friction for setup and day-to-day usage.
    - never require dashboard usage for automation/headless setups
 
 **Acceptance**
-- users can set up or validate a provider from the dashboard
+- users can validate provider readiness from the dashboard
 - users can tell why a provider/browser feature is unavailable
 - setup failures are actionable
 - quick validation works from dashboard
 - manual config/env workflows continue to work unchanged
+- later onboarding flows can build on the same status surface
 
 ### W5 — Compact Runtime Visibility
 Expose runtime state in a compact, operator-friendly way.
@@ -246,14 +256,14 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 3. rendering flow/mermaid/architecture diagrams
 
 **Deliverables**
-1. Viewer surface in dashboard:
+1. Viewer surface in dashboard (**v1 shipped as a run-detail artifact pane**):
    - modal, drawer, or dedicated artifact pane
    - linked from run/workflow outputs
 2. Render modes:
    - Mermaid text → rendered diagram
    - static image preview (PNG/SVG/WebP)
    - HTML/CSS mock preview in a sandboxed iframe
-   - raw source fallback
+   - markdown, JSON/text, and raw source fallback
 3. Artifact metadata:
    - type
    - size
@@ -311,7 +321,7 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 - message inspection UI
 
 ### Slice E — Provider / Browser UX
-- provider health/status
+- provider health/status (v1 shipped)
 - browser health/status
 - setup validation and fix hints
 
@@ -321,8 +331,8 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 - retrieval summary visibility
 
 ### Slice G — Mock Viewer and Diagram Preview
-- artifact viewer panel/modal
-- Mermaid renderer
+- artifact viewer panel/modal (v1 shipped as run-detail pane)
+- Mermaid renderer (v1 shipped for artifact previews)
 - static image preview
 - sandboxed HTML/CSS mock preview
 - raw source fallback

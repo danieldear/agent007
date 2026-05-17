@@ -97,6 +97,7 @@ export function useApi() {
     getStatus: () => fetchJson('/api/status'),
     getStats: () => fetchJson('/api/stats'),
     getRuntimeSessions: (limit = 12) => fetchJson(`/api/runtime/sessions?limit=${encodeURIComponent(limit)}`),
+    getProviderStatus: () => fetchJson('/api/providers/status'),
     getScorecards: (limit = 100) => fetchJson(`/api/scorecards?limit=${encodeURIComponent(limit)}`),
     evaluateRegression: (params = {}) => {
       const query = new URLSearchParams()
@@ -112,6 +113,11 @@ export function useApi() {
     cleanupAwaitingRuns: (data) =>
       fetchJson('/api/runs/cleanup-awaiting', { method: 'POST', body: JSON.stringify(data || {}) }),
     getRunDetail: (id) => fetchJson(`/api/runs/${encodeURIComponent(id)}`),
+    previewRunArtifact: (id, path) => {
+      const qs = new URLSearchParams()
+      qs.set('path', path)
+      return fetchJson(`/api/runs/${encodeURIComponent(id)}/artifacts/preview?${qs.toString()}`)
+    },
     approveRunStep: (id, data) => fetchJson(`/api/runs/${encodeURIComponent(id)}/approval`, { method: 'POST', body: JSON.stringify(data) }),
     resumeRun: (id) => fetchJson(`/api/runs/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
 

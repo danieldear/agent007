@@ -32,6 +32,7 @@ pub struct AppState {
     pub metrics: MetricsState,
     pub standalone_mode: bool,
     pub runtime_mode: String,
+    pub provider_readiness: api::ProviderReadinessResponse,
     /// Directory name of the project this server is serving (e.g. "my-app").
     pub project_name: String,
     /// Full path to the project root (parent of .agent007/).
@@ -53,6 +54,37 @@ impl WebServer {
         standalone_mode: bool,
         runtime_mode: impl Into<String>,
         model_provider: impl Into<String>,
+    ) -> Self {
+        let runtime_mode = runtime_mode.into();
+        let model_provider = model_provider.into();
+        let provider_readiness = api::ProviderReadinessResponse::from_runtime(
+            standalone_mode,
+            runtime_mode.clone(),
+            model_provider.clone(),
+        );
+        Self::new_with_provider_readiness(
+            dispatcher,
+            learning_dispatcher,
+            model_router,
+            workflow_runner,
+            cancel,
+            standalone_mode,
+            runtime_mode,
+            model_provider,
+            provider_readiness,
+        )
+    }
+
+    pub fn new_with_provider_readiness(
+        dispatcher: Arc<LocalDispatcher>,
+        learning_dispatcher: Arc<LearningDispatcher>,
+        model_router: Arc<ModelRouter>,
+        workflow_runner: Option<Arc<WorkflowRunner>>,
+        cancel: CancellationToken,
+        standalone_mode: bool,
+        runtime_mode: impl Into<String>,
+        model_provider: impl Into<String>,
+        provider_readiness: api::ProviderReadinessResponse,
     ) -> Self {
         let runtime_mode = runtime_mode.into();
         let metrics_state = metrics::new_metrics_state_with_runtime(
@@ -89,6 +121,7 @@ impl WebServer {
                 metrics: metrics_state,
                 standalone_mode,
                 runtime_mode,
+                provider_readiness,
                 project_name,
                 project_path,
             },
@@ -157,12 +190,21 @@ impl WebServer {
                 get(api::regression_evaluate_handler),
             )
             .route("/api/runtime/sessions", get(api::runtime_sessions_handler))
+            .route("/api/providers/status", get(api::provider_status_handler))
             .route("/api/runs", get(api::runs_handler))
             .route(
                 "/api/runs/cleanup-awaiting",
                 post(api::runs_cleanup_awaiting_handler),
             )
             .route("/api/runs/{id}", get(api::run_detail_handler))
+            .route(
+                "/api/runs/{id}/artifacts/preview",
+                get(api::run_artifact_preview_handler),
+            )
+            .route(
+                "/api/runs/{id}/artifacts/raw",
+                get(api::run_artifact_raw_handler),
+            )
             .route("/api/runs/{id}/approval", post(api::run_approval_handler))
             .route("/api/runs/{id}/resume", post(api::run_resume_handler))
             .route(
