@@ -249,6 +249,162 @@ pub fn selected_runtime_model(config: &Config) -> Option<String> {
         .map(|provider| config.models.default_model_for_provider(&provider))
 }
 
+pub fn provider_readiness_response(
+    config: &Config,
+) -> agent007_web::api::ProviderReadinessResponse {
+    let runtime_mode = runtime_mode_label(config).to_string();
+    let selected_provider = selected_runtime_provider(config);
+    let selected_model = selected_runtime_model(config);
+    let standalone_available = standalone_mode_available(config);
+    let mut providers = Vec::new();
+
+    providers.push(agent007_web::api::ProviderReadinessCard {
+        id: "hosted-mcp".to_string(),
+        label: "Hosted MCP".to_string(),
+        status: if runtime_mode == "hosted-mcp" {
+            "ready"
+        } else {
+            "fallback"
+        }
+        .to_string(),
+        configured: true,
+        available: true,
+        selected: runtime_mode == "hosted-mcp",
+        model: None,
+        source: "MCP host".to_string(),
+        hint: if runtime_mode == "hosted-mcp" {
+            "Use Codex, Claude, Cursor, or another MCP host to execute tasks."
+        } else {
+            "Available as fallback when using an editor-hosted MCP client."
+        }
+        .to_string(),
+    });
+
+    let dry_run = is_dry_run();
+    providers.push(agent007_web::api::ProviderReadinessCard {
+        id: "mock".to_string(),
+        label: "Dry Run".to_string(),
+        status: if dry_run { "ready" } else { "not-configured" }.to_string(),
+        configured: dry_run,
+        available: dry_run,
+        selected: selected_provider.as_deref() == Some("mock"),
+        model: Some("mock".to_string()),
+        source: "AGENT007_DRY_RUN".to_string(),
+        hint: if dry_run {
+            "Offline dry-run provider is active."
+        } else {
+            "Set AGENT007_DRY_RUN=1 for offline smoke tests."
+        }
+        .to_string(),
+    });
+
+    let claude_configured = has_anthropic_api_key();
+    providers.push(agent007_web::api::ProviderReadinessCard {
+        id: "claude".to_string(),
+        label: "Claude".to_string(),
+        status: if claude_configured {
+            "ready"
+        } else {
+            "needs-config"
+        }
+        .to_string(),
+        configured: claude_configured,
+        available: claude_configured,
+        selected: selected_provider.as_deref() == Some("claude"),
+        model: Some(config.models.default_model_for_provider("claude")),
+        source: "ANTHROPIC_API_KEY".to_string(),
+        hint: if claude_configured {
+            "ANTHROPIC_API_KEY is present; secret value is not exposed."
+        } else {
+            "Set ANTHROPIC_API_KEY to enable Claude standalone execution."
+        }
+        .to_string(),
+    });
+
+    let codex_configured = has_openai_api_key();
+    providers.push(agent007_web::api::ProviderReadinessCard {
+        id: "codex".to_string(),
+        label: "OpenAI / Codex".to_string(),
+        status: if codex_configured {
+            "ready"
+        } else {
+            "needs-config"
+        }
+        .to_string(),
+        configured: codex_configured,
+        available: codex_configured,
+        selected: selected_provider.as_deref() == Some("codex"),
+        model: Some(config.models.default_model_for_provider("codex")),
+        source: "OPENAI_API_KEY".to_string(),
+        hint: if codex_configured {
+            "OPENAI_API_KEY is present; secret value is not exposed."
+        } else {
+            "Set OPENAI_API_KEY to enable OpenAI/Codex standalone execution."
+        }
+        .to_string(),
+    });
+
+    let ollama_configured = config.models.ollama.is_some();
+    let ollama_available = ollama_provider_available(config);
+    let ollama_model = config
+        .models
+        .ollama
+        .as_ref()
+        .map(|ollama| ollama.default_model.clone());
+    let ollama_source = config
+        .models
+        .ollama
+        .as_ref()
+        .map(|ollama| ollama.base_url.clone())
+        .unwrap_or_else(|| "[models.ollama]".to_string());
+    providers.push(agent007_web::api::ProviderReadinessCard {
+        id: "ollama".to_string(),
+        label: "Ollama".to_string(),
+        status: if ollama_available {
+            "ready"
+        } else if ollama_configured {
+            "unreachable"
+        } else {
+            "needs-config"
+        }
+        .to_string(),
+        configured: ollama_configured,
+        available: ollama_available,
+        selected: selected_provider.as_deref() == Some("ollama"),
+        model: ollama_model,
+        source: ollama_source,
+        hint: if ollama_available {
+            "Ollama is configured and reachable."
+        } else if ollama_configured {
+            "Ollama is configured but not reachable; start Ollama or check base_url."
+        } else {
+            "Add [models.ollama] to config to use local models."
+        }
+        .to_string(),
+    });
+
+    let mut hints = Vec::new();
+    if standalone_available {
+        hints.push("Standalone dashboard execution is available.".to_string());
+    } else {
+        hints.push("No standalone model provider is ready; dashboard task execution stays in hosted MCP mode.".to_string());
+        hints.push(
+            "Configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or [models.ollama] for direct execution."
+                .to_string(),
+        );
+    }
+
+    agent007_web::api::ProviderReadinessResponse {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        runtime_mode,
+        selected_provider,
+        selected_model,
+        standalone_available,
+        providers,
+        hints,
+    }
+}
+
 fn should_use_non_interactive_mode() -> bool {
     is_dry_run()
         || std::env::var("AGENT007_NO_TUI")
@@ -1539,6 +1695,54 @@ mod tests {
         assert!(!standalone_mode_available(&config));
         assert_eq!(runtime_mode_label(&config), "hosted-mcp");
         assert!(available_runtime_providers(&config).is_empty());
+    }
+
+    #[test]
+    fn provider_readiness_does_not_expose_secrets() {
+        let _guard = env_lock();
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("AGENT007_SKIP_OLLAMA_HEALTHCHECK");
+
+        let config = Config::default();
+        let status = provider_readiness_response(&config);
+        assert_eq!(status.runtime_mode, "hosted-mcp");
+        assert!(!status.standalone_available);
+        assert!(status.selected_provider.is_none());
+        assert!(status
+            .providers
+            .iter()
+            .any(|p| p.id == "hosted-mcp" && p.available));
+        assert!(status
+            .providers
+            .iter()
+            .any(|p| p.id == "claude" && !p.configured));
+        let encoded = serde_json::to_string(&status).unwrap();
+        assert!(!encoded.contains("sk-"));
+        assert!(!encoded.contains("ANTHROPIC_API_KEY="));
+        assert!(!encoded.contains("OPENAI_API_KEY="));
+    }
+
+    #[test]
+    fn provider_readiness_marks_openai_ready_without_leaking_key() {
+        let _guard = env_lock();
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("OPENAI_API_KEY", "sk-test-secret-value");
+        std::env::remove_var("AGENT007_SKIP_OLLAMA_HEALTHCHECK");
+
+        let config = Config::default();
+        let status = provider_readiness_response(&config);
+        assert!(status.standalone_available);
+        assert_eq!(status.selected_provider.as_deref(), Some("codex"));
+        let codex = status.providers.iter().find(|p| p.id == "codex").unwrap();
+        assert_eq!(codex.status, "ready");
+        assert!(codex.configured);
+        assert!(codex.available);
+        let encoded = serde_json::to_string(&status).unwrap();
+        assert!(!encoded.contains("sk-test-secret-value"));
+        std::env::remove_var("OPENAI_API_KEY");
     }
 
     #[tokio::test]

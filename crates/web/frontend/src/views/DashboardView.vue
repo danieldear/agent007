@@ -15,6 +15,7 @@ const taskInput = ref('')
 const taskStatus = ref('')
 const runs = ref([])
 const runtimeSessions = ref(null)
+const providerStatus = ref(null)
 const selectedRun = ref(null)
 const selectedRunId = ref(null)
 const approvalStatus = ref('')
@@ -154,6 +155,17 @@ watch(() => props.events?.length, async () => {
   }
 })
 
+const providerReadiness = computed(() => providerStatus.value || {
+  runtime_mode: m.value.runtime_mode || 'hosted-mcp',
+  selected_provider: null,
+  selected_model: m.value.model_provider || null,
+  standalone_available: !!m.value.local_execution_available,
+  providers: [],
+  hints: [],
+})
+
+const providerCards = computed(() => providerReadiness.value.providers || [])
+
 const runtime = computed(() => runtimeSessions.value || {
   generated_at: null,
   counts: { total: 0, active: 0, running: 0, blocked: 0, failed: 0, succeeded: 0 },
@@ -218,6 +230,24 @@ function runtimeBadgeClass(lifecycle) {
     'badge-success': lifecycle === 'complete',
     'badge-error': lifecycle === 'failed',
     'badge-ghost': !['running', 'ready', 'blocked', 'attention', 'complete', 'failed'].includes(lifecycle),
+  }
+}
+
+function providerCardClass(status) {
+  return {
+    'border-success/45 bg-success/5': status === 'ready',
+    'border-warning/45 bg-warning/5': status === 'fallback' || status === 'unreachable',
+    'border-base-300/70 bg-base-200': status === 'needs-config' || status === 'not-configured',
+    'border-error/45 bg-error/5': status === 'error',
+  }
+}
+
+function providerBadgeClass(status) {
+  return {
+    'badge-success': status === 'ready',
+    'badge-warning': status === 'fallback' || status === 'unreachable',
+    'badge-ghost': status === 'needs-config' || status === 'not-configured',
+    'badge-error': status === 'error',
   }
 }
 
@@ -411,9 +441,13 @@ async function refreshDashboardSnapshots() {
     api.getStats(),
     refreshRuns(),
     refreshRuntimeSessions(),
+    api.getProviderStatus(),
   ])
   if (results[0].status === 'fulfilled' && results[0].value) {
     metrics.value = results[0].value
+  }
+  if (results[3].status === 'fulfilled' && results[3].value) {
+    providerStatus.value = results[3].value
   }
   // Keep the last successful snapshots when any individual refresh fails.
 }
@@ -678,6 +712,49 @@ async function submitTask() {
           <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Uptime</div>
           <div class="text-base font-bold font-mono text-base-content tabular-nums mt-0.5">{{ uptime }}</div>
           <div class="text-[9px] text-base-content/25 font-mono mt-0.5 truncate">{{ m.model_provider || '—' }}</div>
+        </div>
+      </div>
+
+      <!-- Provider readiness: dashboard-first onboarding status -->
+      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
+        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center gap-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Provider Readiness</span>
+            <span class="badge badge-xs font-mono" :class="providerReadiness.standalone_available ? 'badge-success' : 'badge-warning'">
+              {{ providerReadiness.runtime_mode || 'hosted-mcp' }}
+            </span>
+            <span v-if="providerReadiness.selected_model" class="text-[10px] font-mono text-base-content/35 truncate hidden md:block">
+              {{ providerReadiness.selected_model }}
+            </span>
+          </div>
+          <div class="text-[10px] font-mono text-base-content/30 truncate max-w-[44rem]">
+            {{ providerReadiness.hints?.[0] || 'Provider status is loaded from local config and environment.' }}
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2 p-3">
+          <div
+            v-for="provider in providerCards"
+            :key="provider.id"
+            class="rounded-lg border p-3 min-h-28 flex flex-col justify-between"
+            :class="providerCardClass(provider.status)"
+          >
+            <div>
+              <div class="flex items-start justify-between gap-2 mb-1">
+                <div class="font-mono text-xs font-semibold text-base-content/80 truncate" :title="provider.label">{{ provider.label }}</div>
+                <span class="badge badge-xs font-mono shrink-0" :class="providerBadgeClass(provider.status)">{{ provider.status }}</span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/35 truncate" :title="provider.model || provider.source">
+                {{ provider.model || provider.source || '—' }}
+              </div>
+            </div>
+            <div class="mt-3 space-y-1">
+              <div class="flex items-center gap-2 text-[10px] font-mono">
+                <span class="w-1.5 h-1.5 rounded-full" :class="provider.available ? 'bg-success' : provider.configured ? 'bg-warning' : 'bg-base-content/20'"></span>
+                <span class="text-base-content/40">{{ provider.selected ? 'selected' : provider.available ? 'available' : provider.configured ? 'configured' : 'not configured' }}</span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/30 line-clamp-2" :title="provider.hint">{{ provider.hint }}</div>
+            </div>
+          </div>
         </div>
       </div>
 

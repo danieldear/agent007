@@ -123,6 +123,129 @@ pub struct LspConfigResponse {
     pub inject_for_categories: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderReadinessResponse {
+    pub generated_at: String,
+    pub runtime_mode: String,
+    pub selected_provider: Option<String>,
+    pub selected_model: Option<String>,
+    pub standalone_available: bool,
+    pub providers: Vec<ProviderReadinessCard>,
+    pub hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderReadinessCard {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub configured: bool,
+    pub available: bool,
+    pub selected: bool,
+    pub model: Option<String>,
+    pub source: String,
+    pub hint: String,
+}
+
+impl ProviderReadinessResponse {
+    pub fn from_runtime(
+        standalone_available: bool,
+        runtime_mode: impl Into<String>,
+        model_provider: impl Into<String>,
+    ) -> Self {
+        let runtime_mode = runtime_mode.into();
+        let model_provider = model_provider.into();
+        let selected_provider = if runtime_mode == "hosted-mcp" {
+            None
+        } else if model_provider.trim().is_empty() {
+            None
+        } else {
+            Some(
+                model_provider
+                    .split('/')
+                    .next()
+                    .unwrap_or("unknown")
+                    .trim()
+                    .to_string(),
+            )
+        };
+        let selected_model = if model_provider.trim().is_empty() {
+            None
+        } else {
+            Some(model_provider.clone())
+        };
+        let mut providers = Vec::new();
+        providers.push(ProviderReadinessCard {
+            id: "hosted-mcp".to_string(),
+            label: "Hosted MCP".to_string(),
+            status: if runtime_mode == "hosted-mcp" {
+                "ready"
+            } else {
+                "fallback"
+            }
+            .to_string(),
+            configured: true,
+            available: true,
+            selected: runtime_mode == "hosted-mcp",
+            model: None,
+            source: "client".to_string(),
+            hint: if runtime_mode == "hosted-mcp" {
+                "Use Codex, Claude, Cursor, or another MCP host to execute steps."
+            } else {
+                "Available as fallback for editor-hosted workflows."
+            }
+            .to_string(),
+        });
+        if runtime_mode == "dry-run" {
+            providers.push(ProviderReadinessCard {
+                id: "mock".to_string(),
+                label: "Dry Run".to_string(),
+                status: "ready".to_string(),
+                configured: true,
+                available: true,
+                selected: true,
+                model: Some("mock".to_string()),
+                source: "AGENT007_DRY_RUN".to_string(),
+                hint: "Offline dry-run provider is active.".to_string(),
+            });
+        } else if standalone_available {
+            providers.push(ProviderReadinessCard {
+                id: selected_provider
+                    .clone()
+                    .unwrap_or_else(|| "standalone".to_string()),
+                label: "Standalone Provider".to_string(),
+                status: "ready".to_string(),
+                configured: true,
+                available: true,
+                selected: true,
+                model: selected_model.clone(),
+                source: "config/env".to_string(),
+                hint: "Dashboard can execute tasks directly with the selected provider."
+                    .to_string(),
+            });
+        }
+        let hints = if standalone_available {
+            vec!["Standalone execution is available.".to_string()]
+        } else {
+            vec!["Configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or [models.ollama] for direct dashboard execution.".to_string()]
+        };
+        Self {
+            generated_at: Utc::now().to_rfc3339(),
+            runtime_mode,
+            selected_provider,
+            selected_model,
+            standalone_available,
+            providers,
+            hints,
+        }
+    }
+
+    pub fn with_generated_at(mut self) -> Self {
+        self.generated_at = Utc::now().to_rfc3339();
+        self
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ToolImportApiRequest {
     pub provider: String,
@@ -907,6 +1030,11 @@ pub async fn runtime_sessions_handler(
         )
             .into_response(),
     }
+}
+
+/// `GET /api/providers/status` — provider readiness without exposing secrets.
+pub async fn provider_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.provider_readiness.clone().with_generated_at()).into_response()
 }
 
 fn runtime_workflow_summary(state: WorkflowRunState) -> RuntimeWorkflowSummary {
@@ -6820,6 +6948,22 @@ mod tests {
         response.assert_status_ok();
         let body: serde_json::Value = response.json();
         assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn api_provider_status_returns_redacted_readiness() {
+        let ts = test_server();
+        let response = ts.get("/api/providers/status").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["runtime_mode"].as_str(), Some("dry-run"));
+        assert_eq!(body["standalone_available"].as_bool(), Some(true));
+        assert!(body["providers"].as_array().unwrap().iter().any(|p| {
+            p["id"].as_str() == Some("mock") && p["available"].as_bool() == Some(true)
+        }));
+        let encoded = serde_json::to_string(&body).unwrap();
+        assert!(!encoded.contains("API_KEY"));
+        assert!(!encoded.contains("sk-"));
     }
 
     #[tokio::test]

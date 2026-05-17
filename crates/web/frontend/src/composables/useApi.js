@@ -97,6 +97,7 @@ export function useApi() {
     getStatus: () => fetchJson('/api/status'),
     getStats: () => fetchJson('/api/stats'),
     getRuntimeSessions: (limit = 12) => fetchJson(`/api/runtime/sessions?limit=${encodeURIComponent(limit)}`),
+    getProviderStatus: () => fetchJson('/api/providers/status'),
     getScorecards: (limit = 100) => fetchJson(`/api/scorecards?limit=${encodeURIComponent(limit)}`),
     evaluateRegression: (params = {}) => {
       const query = new URLSearchParams()

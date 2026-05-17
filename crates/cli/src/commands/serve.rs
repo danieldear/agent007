@@ -21,8 +21,8 @@ use serde_json::Map;
 
 use super::run::{
     agent007_global_home, agent007_home, agent007_project_home, agent007_write_home, build_stack,
-    build_stack_for_web, runtime_mode_label, selected_runtime_model, selected_runtime_provider,
-    standalone_mode_available,
+    build_stack_for_web, provider_readiness_response, runtime_mode_label, selected_runtime_model,
+    selected_runtime_provider, standalone_mode_available,
 };
 use super::skill::SkillSummary;
 use super::slash_commands::sync_claude_slash_commands_for_home;
@@ -5259,7 +5259,8 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
             });
             super::run::spawn_learning_runtime_workers(&stack);
 
-            let web = agent007_web::WebServer::new(
+            let provider_readiness = provider_readiness_response(&config);
+            let web = agent007_web::WebServer::new_with_provider_readiness(
                 stack.dispatcher.clone(),
                 stack.learning_dispatcher.clone(),
                 stack.model_router.clone(),
@@ -5268,6 +5269,7 @@ pub async fn execute(config: Arc<Config>, dashboard_port: u16, no_dashboard: boo
                 standalone_mode,
                 runtime_mode,
                 provider_label,
+                provider_readiness,
             );
 
             tokio::spawn(async move {
