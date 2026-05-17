@@ -21,6 +21,7 @@ const selectedRunId = ref(null)
 const selectedArtifactPath = ref('')
 const selectedArtifactPreview = ref(null)
 const artifactPreviewStatus = ref('')
+const artifactPreviewRef = ref(null)
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
@@ -306,6 +307,56 @@ function renderMarkdown(raw) {
   return DOMPurify.sanitize(dirty, { ADD_TAGS: ['pre', 'code'], ADD_ATTR: ['class'] })
 }
 
+let mermaidInstance = null
+async function ensureMermaid() {
+  if (mermaidInstance) return mermaidInstance
+  const mermaid = (await import('mermaid')).default
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'strict',
+    themeVariables: {
+      background: '#1d232a',
+      primaryColor: '#7480ff',
+      primaryTextColor: '#a6adbb',
+      primaryBorderColor: '#2a323c',
+      lineColor: '#4b5563',
+      secondaryColor: '#2a323c',
+      tertiaryColor: '#191e24',
+      edgeLabelBackground: '#1d232a',
+      fontFamily: 'ui-monospace, monospace',
+    },
+  })
+  mermaidInstance = mermaid
+  return mermaid
+}
+
+async function renderArtifactMermaid() {
+  const kind = selectedArtifactPreview.value?.kind
+  if (!['markdown', 'mermaid'].includes(kind)) return
+  await nextTick()
+  const root = artifactPreviewRef.value
+  if (!root) return
+
+  root.querySelectorAll('.language-mermaid').forEach(block => {
+    const source = block.textContent || ''
+    const container = block.closest('pre') || block
+    const target = document.createElement('div')
+    target.className = 'artifact-mermaid-block'
+    target.textContent = source
+    container.replaceWith(target)
+  })
+
+  const blocks = root.querySelectorAll('.artifact-mermaid-block')
+  if (!blocks.length) return
+  try {
+    const mermaid = await ensureMermaid()
+    await mermaid.run({ nodes: Array.from(blocks) })
+  } catch (error) {
+    console.warn('artifact mermaid render error:', error)
+  }
+}
+
 function toggleRawStep(stepId) {
   const next = new Set(rawStepView.value)
   if (next.has(stepId)) next.delete(stepId)
@@ -516,6 +567,7 @@ async function previewArtifact(path) {
   try {
     selectedArtifactPreview.value = await api.previewRunArtifact(selectedRunId.value, path)
     artifactPreviewStatus.value = ''
+    await renderArtifactMermaid()
   } catch (error) {
     selectedArtifactPreview.value = null
     artifactPreviewStatus.value = error?.message || 'Unable to load artifact preview'
@@ -1103,7 +1155,12 @@ async function submitTask() {
                       </div>
 
                       <div v-if="selectedArtifactPreview.truncated" class="p-4 font-mono text-xs text-warning">Artifact is larger than the inline preview limit. Open the raw artifact instead.</div>
-                      <div v-else-if="selectedArtifactPreview.kind === 'markdown'" class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto" v-html="renderMarkdown(selectedArtifactPreview.content || '')" />
+                      <div
+                        v-else-if="selectedArtifactPreview.kind === 'markdown'"
+                        ref="artifactPreviewRef"
+                        class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto"
+                        v-html="renderMarkdown(selectedArtifactPreview.content || '')"
+                      />
                       <iframe
                         v-else-if="selectedArtifactPreview.kind === 'html'"
                         class="w-full h-96 bg-white"
@@ -1116,6 +1173,9 @@ async function submitTask() {
                         :src="selectedArtifactRawUrl"
                         :alt="selectedArtifactPreview.path"
                       />
+                      <div v-else-if="selectedArtifactPreview.kind === 'mermaid'" ref="artifactPreviewRef" class="p-4 max-h-96 overflow-auto">
+                        <div class="artifact-mermaid-block">{{ selectedArtifactPreview.content || '' }}</div>
+                      </div>
                       <pre v-else-if="selectedArtifactIsRenderable" class="p-4 text-xs whitespace-pre-wrap max-h-96 overflow-auto"><code>{{ selectedArtifactPreview.content || '' }}</code></pre>
                       <div v-else class="p-4 font-mono text-xs text-base-content/50">Binary artifact. Open the raw artifact to inspect it.</div>
                     </div>
@@ -1759,4 +1819,18 @@ async function submitTask() {
 .md-step-output :deep(strong) { color: oklch(var(--bc)); font-weight: 700; }
 .md-step-output :deep(em)     { color: oklch(var(--bc) / 0.75); font-style: italic; }
 .md-step-output :deep(del)    { color: oklch(var(--bc) / 0.35); text-decoration: line-through; }
+
+.md-step-output :deep(.artifact-mermaid-block),
+.artifact-mermaid-block {
+  margin: 0.75em 0;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid oklch(var(--b3));
+  background: oklch(var(--b3) / 0.25);
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+.md-step-output :deep(.artifact-mermaid-block svg),
+.artifact-mermaid-block :deep(svg) { max-width: 100%; height: auto; }
 </style>

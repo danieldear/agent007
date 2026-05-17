@@ -29,7 +29,7 @@ M4 is active and shipping in small, reviewable slices. The current branch covers
 
 - **Runtime visibility v1:** compact dashboard/session inventory and CLI status are available.
 - **Provider readiness v1:** dashboard-safe provider status reports runtime mode, configured providers, and actionable setup hints without exposing secrets.
-- **Artifact/mock viewer v1:** run details can preview markdown, JSON/text, Mermaid source, sandboxed HTML, and image artifacts from the dashboard; oversized or binary artifacts fall back to raw/open handling.
+- **Artifact/mock viewer v1:** run details can preview markdown, JSON/text, rendered Mermaid diagrams, sandboxed HTML, and image artifacts from the dashboard; oversized or binary artifacts fall back to raw/open handling.
 
 Still deferred to later slices: full TUI control flows, agent-to-agent messaging, memory lifecycle changes, provider onboarding wizards/OAuth flows, and `.a7bundle` v2 implementation.
 
@@ -260,7 +260,7 @@ Make generated visual/design artifacts first-class in the dashboard so users can
    - modal, drawer, or dedicated artifact pane
    - linked from run/workflow outputs
 2. Render modes:
-   - Mermaid text/source preview now; rendered Mermaid remains a follow-up
+   - Mermaid text → rendered diagram
    - static image preview (PNG/SVG/WebP)
    - HTML/CSS mock preview in a sandboxed iframe
    - markdown, JSON/text, and raw source fallback
@@ -332,7 +332,7 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 
 ### Slice G — Mock Viewer and Diagram Preview
 - artifact viewer panel/modal (v1 shipped as run-detail pane)
-- Mermaid renderer (follow-up; v1 shows Mermaid source)
+- Mermaid renderer (v1 shipped for artifact previews)
 - static image preview
 - sandboxed HTML/CSS mock preview
 - raw source fallback
