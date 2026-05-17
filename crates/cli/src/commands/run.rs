@@ -351,12 +351,11 @@ pub fn provider_readiness_response(
         .ollama
         .as_ref()
         .map(|ollama| ollama.default_model.clone());
-    let ollama_source = config
-        .models
-        .ollama
-        .as_ref()
-        .map(|ollama| ollama.base_url.clone())
-        .unwrap_or_else(|| "[models.ollama]".to_string());
+    let ollama_source = if ollama_configured {
+        "[models.ollama].base_url (redacted)".to_string()
+    } else {
+        "[models.ollama]".to_string()
+    };
     providers.push(agent007_web::api::ProviderReadinessCard {
         id: "ollama".to_string(),
         label: "Ollama".to_string(),
@@ -1743,6 +1742,30 @@ mod tests {
         let encoded = serde_json::to_string(&status).unwrap();
         assert!(!encoded.contains("sk-test-secret-value"));
         std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn provider_readiness_redacts_ollama_base_url_userinfo() {
+        let _guard = env_lock();
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::set_var("AGENT007_SKIP_OLLAMA_HEALTHCHECK", "1");
+
+        let mut config = Config::default();
+        config.models.ollama = Some(crate::config::OllamaModelConfig {
+            base_url: "https://user:secret-token@example.test:11434".to_string(),
+            default_model: "llama3".to_string(),
+        });
+
+        let status = provider_readiness_response(&config);
+        let ollama = status.providers.iter().find(|p| p.id == "ollama").unwrap();
+        assert_eq!(ollama.source, "[models.ollama].base_url (redacted)");
+        let encoded = serde_json::to_string(&status).unwrap();
+        assert!(!encoded.contains("secret-token"));
+        assert!(!encoded.contains("user:"));
+        assert!(!encoded.contains("example.test"));
+        std::env::remove_var("AGENT007_SKIP_OLLAMA_HEALTHCHECK");
     }
 
     #[tokio::test]
