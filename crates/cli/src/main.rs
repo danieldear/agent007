@@ -7,6 +7,7 @@ mod test_support;
 use clap::{Parser, Subcommand};
 use commands::checkpoint::CheckpointArgs;
 use commands::git::GitArgs;
+use commands::runtime_status::StatusArgs;
 
 pub use commands::workflow::WorkflowAction;
 
@@ -28,6 +29,8 @@ pub enum Commands {
         /// The task description to execute
         task: String,
     },
+    /// Show compact runtime/session status
+    Status(StatusArgs),
     /// Initialize agent007 — create dirs, write config, register MCP, install slash commands
     Init {
         /// Re-run even if already initialized (overwrites MCP registration, re-installs commands)
@@ -307,6 +310,7 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Commands::Run { task } => commands::run::execute(config, task).await,
+        Commands::Status(args) => commands::runtime_status::execute(config, args).await,
         Commands::Serve { port, no_dashboard } => {
             commands::serve::execute(config, port, no_dashboard).await
         }
@@ -418,6 +422,18 @@ mod tests {
     fn parse_run_subcommand() {
         let cli = Cli::try_parse_from(["agent007", "run", "say hello"]).unwrap();
         assert!(matches!(cli.command, Commands::Run { ref task } if task == "say hello"));
+    }
+
+    #[test]
+    fn parse_status_subcommand() {
+        let cli = Cli::try_parse_from(["agent007", "status", "--limit", "5", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Status(StatusArgs {
+                limit: 5,
+                json: true
+            })
+        ));
     }
 
     #[test]
