@@ -2,28 +2,48 @@
 
 This document lists known security gaps in the current codebase, their severity for enterprise/office deployment, and what work is needed to close each one. It is maintained by the project team. Gaps are closed by removing them from this list and updating `SECURITY.md` accordingly.
 
-**Last updated:** 2026-05-08  
+**Last updated:** 2026-05-18  
 **Current version:** 0.2.0
+
+---
+
+## Why this document exists
+
+This project was flagged by an enterprise security review citing weak code, missing authentication, and potential IP exfiltration risk. Every gap in this document maps directly to one or more of those concerns. Gaps are rated on two axes: **severity** (blast radius if exploited) and **effort** (engineering cost to close).
 
 ---
 
 ## Summary Table
 
-| # | Gap | Severity | Effort | Status |
-|---|---|---|---|---|
-| 1 | Web dashboard has no authentication | High | Medium | Open |
-| 2 | Web server binds `0.0.0.0` by default | High | Low | Open |
-| 3 | Skill registry fetches from unpinned `main` branch | Medium | Low | Open |
-| 4 | Extension installer has no signature verification | Medium | High | Open |
-| 5 | Zone checker is opt-in, not enforced by default | Medium | Medium | Open |
-| 6 | No corporate identity / SSO integration | Medium | High | Open |
-| 7 | No secrets vault integration | Low | High | Open |
-| 8 | No SBOM published with releases | Low | Low | Open |
-| 9 | `agent007_git_commit` has no mandatory approval gate | Low | Low | Open |
+| # | Gap | Severity | Effort | Status | Category |
+|---|---|---|---|---|---|
+| 1 | Web dashboard has no authentication | Critical | Medium | Open | Auth |
+| 2 | Web server binds `0.0.0.0` by default | Critical | Low | Open | Network |
+| 3 | Path traversal in memory key parameter | High | Low | Open | Input Validation |
+| 4 | SSRF in skill discovery source expansion | High | Medium | Open | SSRF |
+| 5 | Skill import can write outside intended directory | High | Low | Open | Path Traversal |
+| 6 | Skill execution sandbox unenforced post-approval | High | High | Open | Execution |
+| 7 | Provider credentials can appear in logs | High | Low | Open | Secrets |
+| 8 | Data sent to third-party LLM providers (IP risk) | High | High | Open | IP / Data |
+| 9 | No request body size limits (DoS) | Medium | Low | Open | DoS |
+| 10 | Skill registry fetches from unpinned `main` branch | Medium | Low | Open | Supply Chain |
+| 11 | Extension installer has no signature verification | Medium | High | Open | Supply Chain |
+| 12 | Zone checker is opt-in, not enforced by default | Medium | Medium | Open | Access Control |
+| 13 | No corporate identity / SSO integration | Medium | High | Open | Auth |
+| 14 | No secrets vault integration | Low | High | Open | Secrets |
+| 15 | No SBOM published with releases | Low | Low | Open | Supply Chain |
+| 16 | `agent007_git_commit` has no mandatory approval gate | Low | Low | Open | Access Control |
+| 17 | No dependency vulnerability scanning in CI | Medium | Low | Open | Supply Chain |
 
 ---
 
 ## Gap Details
+
+---
+
+---
+
+> **Reading order for a security reviewer:** Gaps 1–8 are the ones that caused the enterprise rejection. Read those first. Gaps 9–17 are real but lower urgency.
 
 ---
 
@@ -71,7 +91,160 @@ Use `--no-dashboard` or firewall the port.
 
 ---
 
-### Gap 3 — Skill registry fetches from unpinned `main` branch
+---
+
+### Gap 3 — Path traversal in memory key parameter
+**Severity: High**
+
+**What the problem is:**
+In `memory_delete_handler` (`crates/web/src/api.rs`), the `scope` parameter is validated for `..`, `/`, and `\`. The `key` parameter is only checked for null bytes. If `resolve_existing_key_path` does not canonicalize the full resolved path and re-anchor it to the store root, a key value of `../../../some/other/file` can reach arbitrary filesystem paths.
+
+**What an attacker could do:**
+Delete or overwrite files outside the memory store directory, including config files, credentials, or other agent data.
+
+**Where it is in the code:**
+`crates/web/src/api.rs` — `memory_delete_handler` and `memory_get_handler`. `crates/memory/src/store.rs` — `resolve_existing_key_path`.
+
+**Work needed to close this gap:**
+- In `resolve_existing_key_path`: after constructing the full path, call `std::fs::canonicalize` (or equivalent) and assert the result starts with `self.root`. Return an error if the path escapes the root.
+- Extend the key validation in `memory_delete_handler` to also reject keys containing `/`, `\`, and `..`.
+- Add a test: key `"../escape"` must return an error, not a filesystem path.
+
+---
+
+### Gap 4 — SSRF in skill discovery source expansion
+**Severity: High**
+
+**What the problem is:**
+`expand_skill_discovery_sources` (`crates/web/src/api.rs`) fetches arbitrary URLs after a prefix check for `https://github.com/` or `https://raw.githubusercontent.com/`. It then parses that Markdown and follows links found in it — a second-order fetch. The prefix check is evaluated on the string before DNS resolution and before following HTTP redirects.
+
+**Attack vectors:**
+- An open redirect on `github.com` itself (GitHub has had these historically) redirects to an internal network address.
+- A crafted Markdown catalog page at a legitimate GitHub URL contains links to internal-network addresses that pass the prefix check.
+- The response size is unbounded — a large Markdown response causes memory exhaustion.
+
+**Where it is in the code:**
+`crates/web/src/api.rs` — `expand_skill_discovery_sources`, `extract_github_urls_from_markdown`, `fetch_text_async`.
+
+**Work needed to close this gap:**
+- Set a hard response size limit on `fetch_text_async` (e.g., 512 KB max).
+- Set a connect and read timeout on the `reqwest::Client` used for discovery fetches.
+- After following redirects, validate the final URL (not the original) still matches the allowlist.
+- Limit the number of catalog-expanded URLs followed per source (currently capped at 40, which is reasonable — verify it holds after redirects).
+- Add a config option to disable catalog expansion entirely for deployments that need strict source control.
+
+---
+
+### Gap 5 — Skill import can write outside intended directory
+**Severity: High**
+
+**What the problem is:**
+`write_imported_skill` and `generate_tool_skill` construct a filesystem write path from a `sanitize_file_stem` call on the skill trigger/name. If `sanitize_file_stem` is insufficiently strict, a crafted skill manifest can name a file that resolves outside the skills directory.
+
+Package skills (subdirectory installs) are especially risky — the package directory name comes from the skill URL path and is used directly in `skills_dir.join(package_name)`.
+
+**What an attacker could do:**
+Write a file to an arbitrary path on the filesystem, overwriting existing files. Combined with a crafted YAML/TOML payload, this could overwrite `config.toml`, an existing skill, or a shell config file.
+
+**Where it is in the code:**
+`crates/web/src/api.rs` — `write_imported_skill`, `skill_import_handler`, `generate_tool_skill`.
+
+**Work needed to close this gap:**
+- After constructing the final write path, call `Path::canonicalize` on the parent directory and assert it is strictly within `skills_dir`. Return an error before any write if it is not.
+- Reject package directory names that contain `/`, `\`, `..`, or start with `.`.
+- Add a test: a skill trigger of `"../../etc/malicious"` must be rejected, not written.
+
+---
+
+### Gap 6 — Skill execution sandbox unenforced post-approval
+**Severity: High**
+
+**What the problem is:**
+The approval workflow pauses before a skill runs for the first time. Once approved, a skill's `system_prompt` can reference MCP tools, issue arbitrary shell commands (if shell tools are enabled), or access the full filesystem. There is no per-skill tool allowlist enforced at execution time — the approval is a one-time gate, not a runtime constraint.
+
+A malicious or compromised skill (e.g., imported from a catalog that later adds a backdoor) continues to execute with full privileges after the original approval.
+
+**What an attacker could do:**
+- Exfiltrate memory contents, config files, or API keys via a skill that makes outbound HTTP calls.
+- Modify other skills or workflows on disk.
+- Use the `agent007_git_commit` MCP tool to silently commit malicious code to the repo.
+
+**Work needed to close this gap:**
+- Add an `allowed_tools` list to each skill's frontmatter (already present in persona TOML — mirror for skills).
+- At execution time, restrict the MCP tool set available to a skill to its declared `allowed_tools`.
+- Treat a missing or empty `allowed_tools` as a prompt for the user to define one during the approval step.
+- Document that re-approval is required if a skill's source content changes.
+
+---
+
+### Gap 7 — Provider credentials can appear in logs
+**Severity: High**
+
+**What the problem is:**
+Provider configuration structs (containing API keys) pass through the readiness check and provider status layers. If a `tracing` call captures a provider config struct via `{:?}` or `{:#?}` debug formatting, the API key appears in the log output. The `fix(cli): redact ollama readiness source` commit in the history indicates this has already occurred at least once.
+
+**Where to check:**
+- `crates/web/src/api.rs` — all `tracing::*` call sites that reference provider config, readiness response, or request structs
+- Any `derive(Debug)` on structs that contain `api_key`, `token`, or `secret` fields
+
+**Work needed to close this gap:**
+- Audit every `derive(Debug)` struct that could hold a credential. Override the `Debug` impl to redact sensitive fields, or use a wrapper type like `Redacted<String>` that prints `[REDACTED]`.
+- Add a CI lint or unit test that constructs a provider config with a known dummy key, formats it with `{:?}`, and asserts the key string does not appear in the output.
+- Review all `tracing::debug!` and `tracing::trace!` calls in provider and config modules.
+
+---
+
+### Gap 8 — Data sent to third-party LLM providers (IP / data exfiltration risk)
+**Severity: High (enterprise blocker)**
+
+**What the problem is:**
+This is the primary reason enterprise reviewers cite IP leakage risk. Every skill run, workflow step, and agent persona call sends data to a third-party LLM provider (Anthropic, OpenAI, etc.). This data includes:
+- The skill/workflow system prompt (which may contain internal business logic)
+- The full conversation context, which accumulates memory entries, run history, and user inputs
+- Any documents or code snippets passed as context
+- Memory store contents read for retrieval-augmented steps
+
+For an enterprise, this means proprietary workflows, internal data, and business-sensitive context are leaving the organization's network boundary on every inference call.
+
+**What an attacker or competing party could do:**
+This is less about external attack and more about contractual and regulatory exposure:
+- Violation of data residency requirements (GDPR, SOC 2, HIPAA depending on domain)
+- Unintended disclosure of trade secrets embedded in skill prompts
+- Provider terms of service may allow training on API data depending on tier
+
+**Work needed to close this gap:**
+Short-term (required for any enterprise pilot):
+- Add an `[enterprise]` config block with `allowed_providers = ["ollama"]` — when set, block inference calls to any non-listed provider and surface a clear error.
+- Add a data classification field to skills (`data_classification = "internal" | "public"`) and refuse to run `internal`-classified skills against external providers.
+- Document in `SECURITY.md` which data leaves the machine and to where.
+
+Longer-term:
+- First-class Ollama and local model support so an org can run fully air-gapped.
+- Prompt content filtering before send: strip patterns matching internal naming conventions, secrets patterns, or user-defined regexes.
+- Audit log every outbound inference call: timestamp, provider, model, token count, skill/workflow that triggered it (no prompt content in the audit log itself).
+
+---
+
+### Gap 9 — No request body size limits
+**Severity: Medium**
+
+**What the problem is:**
+The Axum router has no `DefaultBodyLimit` layer. Endpoints that accept JSON bodies (`RuntimeMessageRequest`, skill save, workflow save, persona save, skill import) will read an unbounded amount of data from the connection before deserializing. An unauthenticated caller (Gap 1) can send a multi-gigabyte body and exhaust memory or disk.
+
+**Where it is in the code:**
+`crates/web/src/server.rs` — `into_router()`. No body limit layer is applied.
+
+**Work needed to close this gap:**
+```rust
+// Add to router construction in server.rs
+use axum::extract::DefaultBodyLimit;
+let router = router.layer(DefaultBodyLimit::max(4 * 1024 * 1024)); // 4 MB
+```
+Individual endpoints that legitimately need larger bodies (e.g., bundle import) can override with `axum::extract::RequestBodyLimitLayer`.
+
+---
+
+### Gap 10 — Skill registry fetches from unpinned `main` branch
 **Severity: Medium**
 
 **What the problem is:**
@@ -90,7 +263,7 @@ The registry is only fetched on user action (opening the Registry tab). It is no
 
 ---
 
-### Gap 4 — Extension installer has no signature verification
+### Gap 11 — Extension installer has no signature verification
 **Severity: Medium**
 
 **What the problem is:**
@@ -110,7 +283,7 @@ Only install extensions from repos/packages you personally control or have revie
 
 ---
 
-### Gap 5 — Zone checker is opt-in, not enforced by default
+### Gap 12 — Zone checker is opt-in, not enforced by default
 **Severity: Medium**
 
 **What the problem is:**
@@ -128,7 +301,7 @@ Only install extensions from repos/packages you personally control or have revie
 
 ---
 
-### Gap 6 — No corporate identity / SSO integration
+### Gap 13 — No corporate identity / SSO integration
 **Severity: Medium (for enterprise compliance)**
 
 **What the problem is:**
@@ -146,7 +319,7 @@ This is a significant feature addition, not a single fix. Suggested incremental 
 
 ---
 
-### Gap 7 — No secrets vault integration
+### Gap 14 — No secrets vault integration
 **Severity: Low (common for local developer tools)**
 
 **What the problem is:**
@@ -161,7 +334,7 @@ Use `direnv` + `.envrc` (gitignored) or a per-project `.env` loader that fetches
 
 ---
 
-### Gap 8 — No SBOM published with releases
+### Gap 15 — No SBOM published with releases
 **Severity: Low**
 
 **What the problem is:**
@@ -184,7 +357,7 @@ cargo cyclonedx --format json
 
 ---
 
-### Gap 9 — `agent007_git_commit` MCP tool has no mandatory approval gate
+### Gap 16 — `agent007_git_commit` MCP tool has no mandatory approval gate
 **Severity: Low**
 
 **What the problem is:**
@@ -196,6 +369,83 @@ The `agent007_git_commit` MCP tool (`crates/cli/src/commands/serve.rs`) can stag
 - Add a `require_commit_approval = true` option to `[core]` in `config.toml` (default: `false` to preserve current behavior)
 - When enabled: before executing a commit, emit a confirmation prompt to the MCP client via a tool response asking the user to approve the staged diff
 - Document this option in `docs/configuration.md`
+
+---
+
+---
+
+### Gap 17 — No dependency vulnerability scanning in CI
+**Severity: Medium**
+
+**What the problem is:**
+`cargo audit` and related tools are not run in the CI pipeline. Known CVEs in transitive dependencies can silently enter the codebase and remain undetected until a manual check is run.
+
+`cargo audit` only checks for known CVEs in `Cargo.lock` — it does not catch logic vulnerabilities in your own code. But it is the minimum automated bar.
+
+**What each tool actually checks:**
+
+| Tool | What it finds | What it misses |
+|---|---|---|
+| `cargo audit` | Known CVEs in `Cargo.lock` via RustSec DB | Your own code, logic bugs, OWASP issues |
+| `cargo geiger` | Count and location of `unsafe {}` blocks | Whether the unsafe code is actually exploitable |
+| `cargo deny` | CVEs + license violations + duplicate deps | Logic vulnerabilities |
+| `cargo outdated` | Deps with newer versions available | Whether the newer version is safe |
+| `trufflehog` / `gitleaks` | Secrets committed to git history | Secrets in env, runtime, or logs |
+| SAST / manual review | Logic bugs, path traversal, SSRF, auth issues | Nothing — this is the only thing that finds them |
+
+**Work needed to close this gap:**
+Add to CI workflow (`.github/workflows/ci.yml`):
+```yaml
+- name: Security audit
+  run: |
+    cargo install cargo-audit --locked
+    cargo audit
+
+- name: Unsafe usage report
+  run: |
+    cargo install cargo-geiger --locked
+    cargo geiger --all-features 2>&1 | tee geiger-report.txt
+
+- name: Secret scan
+  uses: trufflesecurity/trufflehog@main
+  with:
+    path: ./
+    base: main
+    head: HEAD
+```
+
+Run locally before any release:
+```bash
+cargo audit                   # CVEs in dependencies
+cargo geiger                  # unsafe block inventory
+cargo deny check              # advisories + licenses + duplicates
+cargo outdated                # stale dependencies
+trufflehog git . --since-commit HEAD~20   # secrets in recent history
+gitleaks detect --source .    # broader secrets scan
+```
+
+---
+
+## Ongoing audit process
+
+Security is not a one-time checklist. These are the recurring activities needed to keep the gap count from growing:
+
+**Every PR:**
+- Reviewer checks any new HTTP fetch call for SSRF risk
+- Reviewer checks any new filesystem write for path traversal risk
+- Reviewer checks any new struct with `derive(Debug)` for credential exposure
+- `cargo audit` runs in CI (Gap 17)
+
+**Every release:**
+- Run the full local toolchain above
+- Update `Cargo.lock` (ensures `cargo audit` has current data)
+- Review any new dependency added since last release
+- Generate and publish SBOM (Gap 15)
+
+**Before any enterprise pilot:**
+- Gaps 1, 2, 3, 4, 5, 6, 7, 8 must be closed or have documented mitigations accepted in writing by the customer
+- Gap 8 (LLM data exfiltration) requires either local-model support or a signed data processing agreement with each provider
+- Conduct a focused manual review of all code paths from HTTP request to filesystem write and from HTTP request to outbound network call
 
 ---
 
