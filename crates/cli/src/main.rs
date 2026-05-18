@@ -431,7 +431,23 @@ mod tests {
             cli.command,
             Commands::Status(StatusArgs {
                 limit: 5,
+                state: commands::runtime_status::StatusFilter::All,
+                watch: None,
                 json: true
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_status_watch_and_filter() {
+        let cli =
+            Cli::try_parse_from(["agent007", "status", "--state", "blocked", "--watch"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Status(StatusArgs {
+                state: commands::runtime_status::StatusFilter::Blocked,
+                watch: Some(5),
+                ..
             })
         ));
     }
