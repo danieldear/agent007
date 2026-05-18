@@ -319,9 +319,10 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 - approval queue
 
 ### Slice D — Agent Messaging Core
-- message envelope
-- persistence
-- message inspection UI
+- message envelope (v1 shipped as runtime message records)
+- persistence (v1 shipped via per-run `messages.json` artifact)
+- message inspection UI (v1 shipped as run-detail Session Notes)
+- operator note append from dashboard
 
 ### Slice E — Provider / Browser UX
 - provider health/status (v1 shipped)
@@ -330,6 +331,8 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 
 ### Slice F — Memory Lifecycle
 - memory classes
+- purge expired entries (v1 shipped in dashboard/API)
+- delete stale keys (v1 shipped in dashboard/API)
 - promotion rules
 - retrieval summary visibility
 
@@ -349,3 +352,11 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 5. Provider/browser failures are diagnosable from UI.
 6. Memory reuse is more transparent and less noisy.
 7. Generated visual artifacts can be reviewed directly in dashboard.
+
+## GitHub Project hygiene
+
+Project-board cleanup and idempotent sync rules are tracked in `docs/github-project-hygiene.md`. The project board mirrors milestone execution, while repo docs remain the durable source of truth.
+
+## Repository/catalog skill import
+
+Skill discovery now expands GitHub README/index/catalog links into additional source candidates, so a repo/catalog URL can surface multiple installable skills without requiring a single direct skill URL. The dashboard Browse tab preserves duplicate variants by source, supports preview-before-install, and can bulk-install selected results with explicit conflict behavior.

@@ -90,6 +90,28 @@ async function copyContent() {
   }
 }
 
+async function deleteSelectedMemory() {
+  if (!selectedKey.value) return
+  if (!confirm(`Delete memory key '${selectedKey.value}' from ${activeScope.value}?`)) return
+  try {
+    await api.deleteMemory(activeScope.value, selectedKey.value)
+    await loadKeys(activeScope.value)
+    showRagToast('Memory key deleted')
+  } catch (e) {
+    showRagToast(e.message || 'Delete failed', 'error')
+  }
+}
+
+async function purgeExpiredMemory() {
+  try {
+    const result = await api.purgeExpiredMemory(activeScope.value)
+    await loadKeys(activeScope.value)
+    showRagToast(`Purged ${result?.purged ?? 0} expired entr${result?.purged === 1 ? 'y' : 'ies'}`)
+  } catch (e) {
+    showRagToast(e.message || 'Purge failed', 'error')
+  }
+}
+
 // Render markdown via marked (GFM) + DOMPurify (XSS safe)
 function renderMarkdown(raw) {
   if (!raw) return ''
@@ -532,6 +554,12 @@ watch(contentVisible, async (visible) => {
             </div>
             <button v-if="content && !loadingContent" class="btn btn-xs btn-ghost font-mono flex-shrink-0" @click="copyContent">
               {{ copyStatus || '⎘ Copy' }}
+            </button>
+            <button class="btn btn-xs btn-ghost font-mono flex-shrink-0" @click="purgeExpiredMemory">
+              purge expired
+            </button>
+            <button v-if="content && !loadingContent" class="btn btn-xs btn-ghost text-error font-mono flex-shrink-0" @click="deleteSelectedMemory">
+              delete
             </button>
           </template>
           <span v-else class="font-mono text-[0.72rem] text-base-content/20 italic">← select a key</span>

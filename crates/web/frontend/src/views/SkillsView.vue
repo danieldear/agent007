@@ -15,7 +15,11 @@ const searchQuery = ref('')
 const discoverQuery = ref('')
 const discoverSourcesText = ref('')
 const discoverResults = ref([])
+const discoverWarnings = ref([])
+const selectedDiscoverUrls = ref([])
 const discovering = ref(false)
+const bulkInstalling = ref(false)
+const bulkConflictMode = ref('keep_existing')
 const previewLoading = ref(false)
 const previewError = ref(null)
 const previewOpen = ref(false)
@@ -205,6 +209,12 @@ const filteredRegistry = computed(() => {
 })
 
 const installedTriggers = computed(() => new Set(skills.value.map(s => s.trigger)))
+const selectedDiscoverResults = computed(() =>
+  discoverResults.value.filter(item => selectedDiscoverUrls.value.includes(item.url))
+)
+const allDiscoverSelected = computed(() =>
+  discoverResults.value.length > 0 && selectedDiscoverUrls.value.length === discoverResults.value.length
+)
 
 function assocTools(item) {
   return item?.associations?.tools || []
@@ -354,21 +364,71 @@ async function importFromUrl() {
 async function runDiscoverSearch() {
   if (!discoverQuery.value.trim()) return
   const sources = normalizedDiscoverSources()
-  if (!sources.length) {
-    browseStatus.value = { type: 'error', message: 'Add at least one GitHub source URL' }
-    return
-  }
   saveDiscoverSources()
   discovering.value = true
   browseStatus.value = null
+  discoverWarnings.value = []
   try {
     const result = await api.discoverSkills(discoverQuery.value.trim(), sources, 16)
     discoverResults.value = Array.isArray(result?.results) ? result.results : []
+    selectedDiscoverUrls.value = selectedDiscoverUrls.value.filter(url =>
+      discoverResults.value.some(item => item.url === url)
+    )
+    discoverWarnings.value = Array.isArray(result?.warnings) ? result.warnings : []
   } catch (e) {
     browseStatus.value = { type: 'error', message: e.message || 'Discover failed' }
     discoverResults.value = []
+    selectedDiscoverUrls.value = []
+    discoverWarnings.value = []
   } finally {
     discovering.value = false
+  }
+}
+
+function toggleDiscoverSelection(item) {
+  if (!item?.url) return
+  const selected = new Set(selectedDiscoverUrls.value)
+  if (selected.has(item.url)) selected.delete(item.url)
+  else selected.add(item.url)
+  selectedDiscoverUrls.value = Array.from(selected)
+}
+
+function toggleAllDiscoverResults() {
+  selectedDiscoverUrls.value = allDiscoverSelected.value
+    ? []
+    : discoverResults.value.map(item => item.url).filter(Boolean)
+}
+
+async function installSelectedDiscoverResults() {
+  const items = selectedDiscoverResults.value
+  if (!items.length || bulkInstalling.value) return
+  bulkInstalling.value = true
+  browseStatus.value = { type: 'loading', message: `Installing ${items.length} selected skill(s)...` }
+  const summary = { installed: 0, skipped: 0, failed: 0 }
+  try {
+    for (const item of items) {
+      try {
+        const opts = item.installed ? { conflict_action: bulkConflictMode.value } : {}
+        const result = await api.importSkill(item.url, opts)
+        if (result?.skipped) summary.skipped += 1
+        else summary.installed += 1
+      } catch {
+        summary.failed += 1
+      }
+    }
+    await loadSkills()
+    await runDiscoverSearch()
+    selectedDiscoverUrls.value = []
+    const parts = [`${summary.installed} installed`]
+    if (summary.skipped) parts.push(`${summary.skipped} kept`)
+    if (summary.failed) parts.push(`${summary.failed} failed`)
+    browseStatus.value = {
+      type: summary.failed ? 'error' : 'success',
+      message: `Bulk import complete: ${parts.join(', ')}`,
+    }
+    setTimeout(() => browseStatus.value = null, 4000)
+  } finally {
+    bulkInstalling.value = false
   }
 }
 
@@ -651,10 +711,10 @@ async function installFromPreview() {
               <textarea
                 v-model="discoverSourcesText"
                 class="textarea textarea-bordered textarea-sm w-full font-mono min-h-[110px]"
-                placeholder="One GitHub repo/tree URL per line"
+                placeholder="One GitHub repo, tree, README, catalog, or package URL per line"
               ></textarea>
               <div class="flex justify-between items-center">
-                <div class="text-[10px] font-mono text-base-content/35">Use repo root, tree, or package URLs to add community or internal sources on top of the defaults.</div>
+                <div class="text-[10px] font-mono text-base-content/35">Use repo root, tree, README, catalog, or package URLs to add community or internal sources on top of the defaults.</div>
                 <button class="btn btn-sm btn-primary font-mono text-xs" :class="{ 'loading': discovering }" @click="runDiscoverSearch">
                   {{ discovering ? 'searching' : 'search' }}
                 </button>
@@ -662,17 +722,67 @@ async function installFromPreview() {
             </div>
           </div>
 
+          <div v-if="discoverWarnings.length" class="rounded-lg border border-warning/30 bg-warning/5 p-3 mb-3">
+            <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-warning mb-1">source warnings</div>
+            <div
+              v-for="warning in discoverWarnings"
+              :key="warning"
+              class="text-[10px] font-mono text-base-content/50 break-words"
+            >{{ warning }}</div>
+          </div>
+
           <div v-if="!discoverResults.length && !discovering" class="text-[11px] font-mono text-base-content/35 py-2">
-            No discovery results yet. Add one or more source URLs, search, then preview before install.
+            No discovery results yet. Search defaults or add one or more source URLs, then preview before install.
+          </div>
+
+          <div
+            v-if="discoverResults.length"
+            class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-lg border border-base-300 bg-base-200/50 px-3 py-2 mb-3"
+          >
+            <div class="flex items-center gap-3">
+              <label class="label cursor-pointer gap-2 p-0">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-sm"
+                  :checked="allDiscoverSelected"
+                  @change="toggleAllDiscoverResults"
+                />
+                <span class="font-mono text-[11px] text-base-content/55">
+                  {{ selectedDiscoverResults.length }} / {{ discoverResults.length }} selected
+                </span>
+              </label>
+              <span class="text-[10px] font-mono text-base-content/35">Duplicates are preserved by source so you can choose the better variant.</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <select v-model="bulkConflictMode" class="select select-xs select-bordered font-mono text-[10px]">
+                <option value="keep_existing">keep conflicts</option>
+                <option value="replace">replace conflicts</option>
+              </select>
+              <button
+                class="btn btn-xs btn-primary font-mono text-[10px]"
+                :class="{ 'loading': bulkInstalling }"
+                :disabled="!selectedDiscoverResults.length || bulkInstalling"
+                @click="installSelectedDiscoverResults"
+              >
+                install selected
+              </button>
+            </div>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
             <div
               v-for="item in discoverResults"
               :key="`${item.url}:${item.trigger}`"
-              class="bg-base-200 border border-base-300 rounded-lg p-4 border-l-2 border-l-info/40 min-h-[190px]"
+              class="bg-base-200 border rounded-lg p-4 border-l-2 border-l-info/40 min-h-[190px]"
+              :class="selectedDiscoverUrls.includes(item.url) ? 'border-info/70 shadow shadow-info/10' : 'border-base-300'"
             >
               <div class="flex items-start justify-between gap-3">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-sm mt-0.5"
+                  :checked="selectedDiscoverUrls.includes(item.url)"
+                  @change="toggleDiscoverSelection(item)"
+                />
                 <div class="flex-1 min-w-0">
                   <div class="font-mono text-sm font-semibold break-words leading-snug">{{ item.name }}</div>
                   <div class="text-[11px] font-mono text-base-content/45 mt-1 break-words leading-relaxed max-h-[3.6rem] overflow-hidden">{{ item.description }}</div>
@@ -681,6 +791,7 @@ async function installFromPreview() {
                     <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-base-content/20 text-base-content/55 break-all">{{ item.repo }}</span>
                     <span v-if="item.version" class="text-[10px] font-mono text-base-content/35">v{{ item.version }}</span>
                     <span v-if="item.installed" class="text-[10px] font-mono text-warning">conflict</span>
+                    <span v-if="item.from_catalog" class="text-[10px] font-mono text-info">catalog</span>
                   </div>
                   <div class="mt-2 text-[10px] font-mono text-base-content/35 truncate" :title="item.path">{{ item.path }}</div>
                 </div>
