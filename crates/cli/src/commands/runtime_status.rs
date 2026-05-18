@@ -10,6 +10,9 @@ use agent007_core::paths::{agent007_global_home, agent007_project_home};
 use agent007_core::{RunMetadata, RunStatus, RunStore};
 use agent007_workflows::{WorkflowRunState, WorkflowStepStatus};
 
+const MIN_WATCH_INTERVAL_SECS: u64 = 5;
+const MAX_WATCH_INTERVAL_SECS: u64 = 300;
+
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Number of recent sessions to inspect.
@@ -19,7 +22,10 @@ pub struct StatusArgs {
     #[arg(long, value_enum, default_value_t = StatusFilter::All)]
     pub state: StatusFilter,
     /// Refresh the compact table every N seconds until interrupted.
-    #[arg(long, num_args = 0..=1, default_missing_value = "2")]
+    ///
+    /// Values below 5 seconds are raised to 5 seconds to avoid repeatedly
+    /// scanning large session stores on long-lived installations.
+    #[arg(long, num_args = 0..=1, default_missing_value = "5")]
     pub watch: Option<u64>,
     /// Emit machine-readable JSON instead of the compact table.
     #[arg(long, default_value_t = false)]
@@ -88,11 +94,13 @@ pub async fn execute(_config: Arc<Config>, args: StatusArgs) -> Result<()> {
         if args.json {
             bail!("--watch cannot be combined with --json");
         }
-        let interval = interval.clamp(1, 60);
+        let interval = normalize_watch_interval(interval);
         loop {
             print!("\x1B[2J\x1B[H");
-            let snapshot = load_snapshot(limit, filter)?;
-            print_snapshot(&snapshot, Some(interval));
+            match load_snapshot(limit, filter) {
+                Ok(snapshot) => print_snapshot(&snapshot, Some(interval)),
+                Err(error) => print_watch_error(&error, interval),
+            }
             tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
         }
     }
@@ -104,6 +112,10 @@ pub async fn execute(_config: Arc<Config>, args: StatusArgs) -> Result<()> {
         print_snapshot(&snapshot, None);
     }
     Ok(())
+}
+
+fn normalize_watch_interval(seconds: u64) -> u64 {
+    seconds.clamp(MIN_WATCH_INTERVAL_SECS, MAX_WATCH_INTERVAL_SECS)
 }
 
 fn load_snapshot(limit: usize, filter: StatusFilter) -> Result<RuntimeStatusSnapshot> {
@@ -356,6 +368,17 @@ fn print_snapshot(snapshot: &RuntimeStatusSnapshot, watch_interval: Option<u64>)
     }
 }
 
+fn print_watch_error(error: &anyhow::Error, watch_interval: u64) {
+    println!(
+        "agent007 runtime status · {}",
+        Utc::now().format("%Y-%m-%d %H:%M:%SZ")
+    );
+    println!("watching every {watch_interval}s — press Ctrl-C to stop");
+    println!();
+    println!("Snapshot temporarily unavailable: {error}");
+    println!("Retrying on the next refresh.");
+}
+
 fn format_runtime(session: &RuntimeSessionRow) -> String {
     match session.provider.as_deref() {
         Some(provider) if !provider.is_empty() => format!("{}/{}", session.mode, provider),
@@ -430,6 +453,13 @@ mod tests {
             compact_line("first line\nsecond\tline"),
             "first line second line"
         );
+    }
+
+    #[test]
+    fn normalize_watch_interval_debounces_low_values() {
+        assert_eq!(normalize_watch_interval(1), 5);
+        assert_eq!(normalize_watch_interval(5), 5);
+        assert_eq!(normalize_watch_interval(600), 300);
     }
 
     #[test]
@@ -564,6 +594,25 @@ mod tests {
         assert_eq!(workflow.completed_steps, 1);
         assert_eq!(workflow.total_steps, 2);
         assert_eq!(workflow.pending_steps, 1);
+    }
+
+    #[tokio::test]
+    async fn status_execute_rejects_watch_with_json() {
+        let result = execute(
+            Arc::new(Config::default()),
+            StatusArgs {
+                limit: 3,
+                state: StatusFilter::All,
+                watch: Some(5),
+                json: true,
+            },
+        )
+        .await;
+
+        let error = result.expect_err("--watch with --json must fail before entering watch mode");
+        assert!(error
+            .to_string()
+            .contains("--watch cannot be combined with --json"));
     }
 
     #[tokio::test]

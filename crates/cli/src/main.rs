@@ -446,7 +446,7 @@ mod tests {
             cli.command,
             Commands::Status(StatusArgs {
                 state: commands::runtime_status::StatusFilter::Blocked,
-                watch: Some(2),
+                watch: Some(5),
                 ..
             })
         ));
