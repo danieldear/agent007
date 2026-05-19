@@ -242,7 +242,7 @@ impl WebServer {
             .route("/api/memory/{scope}", get(api::memory_list_handler))
             .route("/api/memory/{scope}/stats", get(api::memory_stats_handler))
             .route(
-                "/api/memory/{scope}/purge-expired",
+                "/api/memory/{scope}/_actions/purge-expired",
                 post(api::memory_purge_expired_handler),
             )
             .route(

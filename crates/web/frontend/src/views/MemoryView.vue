@@ -483,6 +483,9 @@ watch(contentVisible, async (visible) => {
             />
             <button v-if="searchQuery" class="text-base-content/30 hover:text-base-content/70 cursor-pointer" @click="searchQuery = ''">&times;</button>
           </label>
+          <button class="btn btn-xs btn-ghost font-mono w-full mt-2 justify-start" @click="purgeExpiredMemory">
+            purge expired
+          </button>
         </div>
 
         <!-- Key list -->
@@ -555,10 +558,7 @@ watch(contentVisible, async (visible) => {
             <button v-if="content && !loadingContent" class="btn btn-xs btn-ghost font-mono flex-shrink-0" @click="copyContent">
               {{ copyStatus || '⎘ Copy' }}
             </button>
-            <button class="btn btn-xs btn-ghost font-mono flex-shrink-0" @click="purgeExpiredMemory">
-              purge expired
-            </button>
-            <button v-if="content && !loadingContent" class="btn btn-xs btn-ghost text-error font-mono flex-shrink-0" @click="deleteSelectedMemory">
+            <button v-if="selectedKey && !loadingContent" class="btn btn-xs btn-ghost text-error font-mono flex-shrink-0" @click="deleteSelectedMemory">
               delete
             </button>
           </template>

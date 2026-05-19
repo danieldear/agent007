@@ -95,7 +95,7 @@ export function useApi() {
     deleteMemory: (scope, key) =>
       fetchJson(`/api/memory/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),
     purgeExpiredMemory: (scope) =>
-      fetchJson(`/api/memory/${encodeURIComponent(scope)}/purge-expired`, { method: 'POST' }),
+      fetchJson(`/api/memory/${encodeURIComponent(scope)}/_actions/purge-expired`, { method: 'POST' }),
 
     // Status
     getStatus: () => fetchJson('/api/status'),

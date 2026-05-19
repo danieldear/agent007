@@ -408,7 +408,7 @@ async function installSelectedDiscoverResults() {
   try {
     for (const item of items) {
       try {
-        const opts = item.installed ? { conflict_action: bulkConflictMode.value } : {}
+        const opts = { conflict_action: bulkConflictMode.value }
         const result = await api.importSkill(item.url, opts)
         if (result?.skipped) summary.skipped += 1
         else summary.installed += 1

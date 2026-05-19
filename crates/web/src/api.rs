@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::{
     extract::{Path, Query, State},
@@ -40,6 +40,31 @@ fn dashboard_controls_workflow(kind: &str) -> bool {
 
 fn run_store_for_web() -> agent007_core::RunStore {
     agent007_core::RunStore::new(agent007_write_home().join("sessions"))
+}
+
+fn runtime_messages_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn validate_existing_run_id(run_id: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if uuid::Uuid::parse_str(run_id).is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid run id" })),
+        ));
+    }
+    let meta_path = agent007_write_home()
+        .join("sessions")
+        .join(run_id)
+        .join("meta.json");
+    if !meta_path.is_file() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "run not found" })),
+        ));
+    }
+    Ok(())
 }
 
 // ── request/response shapes ───────────────────────────────────────────────────
@@ -147,22 +172,30 @@ pub struct ProviderReadinessCard {
     pub hint: String,
 }
 
-fn increment_patch_version(raw: Option<&str>) -> String {
+fn increment_patch_version(raw: Option<&str>) -> Option<String> {
     let raw = raw.unwrap_or("0.0.0").trim();
-    let mut parts = raw
-        .split('.')
-        .map(|part| part.parse::<u64>().unwrap_or(0))
-        .collect::<Vec<_>>();
+    let mut parts = Vec::new();
+    for part in raw.split('.') {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        parts.push(part.parse::<u64>().ok()?);
+    }
+    if parts.len() > 3 {
+        return None;
+    }
     while parts.len() < 3 {
         parts.push(0);
     }
     parts[2] = parts[2].saturating_add(1);
-    format!("{}.{}.{}", parts[0], parts[1], parts[2])
+    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
 }
 
 fn initial_or_incremented_version(existing: Option<&str>, requested: Option<&str>) -> String {
     match existing {
-        Some(value) if !value.trim().is_empty() => increment_patch_version(Some(value)),
+        Some(value) if !value.trim().is_empty() => {
+            increment_patch_version(Some(value)).unwrap_or_else(|| value.to_string())
+        }
         _ => requested
             .filter(|value| !value.trim().is_empty())
             .unwrap_or("1.0.0")
@@ -177,8 +210,9 @@ fn markdown_frontmatter_version(path: &FsPath) -> Option<String> {
         return None;
     }
     let frontmatter = serde_yaml::from_str::<serde_yaml::Mapping>(parts[1]).ok()?;
+    let version_key = serde_yaml::Value::String("version".to_string());
     frontmatter
-        .get(serde_yaml::Value::String("version".to_string()))
+        .get(&version_key)
         .and_then(|value| value.as_str())
         .map(ToString::to_string)
 }
@@ -1148,6 +1182,9 @@ pub async fn runtime_sessions_handler(
 }
 
 pub async fn runtime_messages_list_handler(Path(run_id): Path<String>) -> impl IntoResponse {
+    if let Err(response) = validate_existing_run_id(&run_id) {
+        return response.into_response();
+    }
     let store = run_store_for_web();
     match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
         Ok(messages) => Json(RuntimeMessagesResponse {
@@ -1167,6 +1204,9 @@ pub async fn runtime_messages_post_handler(
     Path(run_id): Path<String>,
     Json(payload): Json<RuntimeMessageRequest>,
 ) -> impl IntoResponse {
+    if let Err(response) = validate_existing_run_id(&run_id) {
+        return response.into_response();
+    }
     let body = payload.body.trim();
     if body.is_empty() {
         return (
@@ -1195,6 +1235,9 @@ pub async fn runtime_messages_post_handler(
     };
 
     let store = run_store_for_web();
+    let _guard = runtime_messages_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut messages =
         match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
             Ok(messages) => messages.unwrap_or_default(),
@@ -2220,18 +2263,33 @@ pub async fn persona_save_handler(
 }
 
 fn persona_version_for_name(dir: &FsPath, name: &str) -> String {
-    let safe = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .to_lowercase();
-    toml_top_level_version(&dir.join(format!("{safe}.toml"))).unwrap_or_else(|| "1.0.0".to_string())
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return "1.0.0".to_string(),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&raw) else {
+            continue;
+        };
+        let Some(file_name) = value.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if file_name == name {
+            return value
+                .get("version")
+                .and_then(|value| value.as_str())
+                .unwrap_or("1.0.0")
+                .to_string();
+        }
+    }
+    "1.0.0".to_string()
 }
 
 pub async fn persona_delete_handler(
@@ -3765,7 +3823,10 @@ pub async fn skill_discover_handler(
     };
 
     let sources = match expand_skill_discovery_sources(&client, &source_urls).await {
-        Ok(expanded) => expanded,
+        Ok((expanded, expansion_warnings)) => {
+            warnings.extend(expansion_warnings);
+            expanded
+        }
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -3911,6 +3972,7 @@ pub async fn skill_discover_handler(
                     category: summary.category,
                     model: summary.model,
                     installed: conflict.is_some(),
+                    from_catalog: source.from_catalog,
                     conflict,
                 },
             ));
@@ -4048,6 +4110,7 @@ struct SkillDiscoverResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     installed: bool,
+    from_catalog: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     conflict: Option<SkillConflictInfo>,
 }
@@ -4156,12 +4219,14 @@ fn parse_skill_discovery_source(url: &str) -> anyhow::Result<SkillDiscoverSource
 async fn expand_skill_discovery_sources(
     client: &reqwest::Client,
     source_urls: &[String],
-) -> anyhow::Result<Vec<SkillDiscoverSource>> {
+) -> anyhow::Result<(Vec<SkillDiscoverSource>, Vec<String>)> {
     let mut expanded = Vec::new();
+    let mut warnings = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
     for source_url in source_urls {
-        let source = parse_skill_discovery_source(source_url)?;
+        let source = parse_skill_discovery_source(source_url)
+            .map_err(|e| anyhow::anyhow!("{source_url}: {e}"))?;
         let source_key = format!(
             "{}/{}/{}/{}",
             source.owner,
@@ -4176,7 +4241,8 @@ async fn expand_skill_discovery_sources(
             expanded.push(source.clone());
         }
 
-        let import_source = parse_skill_import_source(source_url)?;
+        let import_source = parse_skill_import_source(source_url)
+            .map_err(|e| anyhow::anyhow!("{source_url}: {e}"))?;
         let SkillImportSourceKind::GitHubFile {
             owner,
             repo,
@@ -4197,15 +4263,23 @@ async fn expand_skill_discovery_sources(
         }
 
         let raw_url = github_raw_file_url(&owner, &repo, reference.as_deref(), &path);
-        let Ok(markdown) = fetch_text_async(client, &raw_url).await else {
-            continue;
+        let markdown = match fetch_text_async(client, &raw_url).await {
+            Ok(markdown) => markdown,
+            Err(e) => {
+                warnings.push(format!("failed to expand catalog {source_url}: {e}"));
+                continue;
+            }
         };
         for linked_url in extract_github_urls_from_markdown(&markdown)
             .into_iter()
             .take(40)
         {
-            let Ok(mut linked) = parse_skill_discovery_source(&linked_url) else {
-                continue;
+            let mut linked = match parse_skill_discovery_source(&linked_url) {
+                Ok(linked) => linked,
+                Err(e) => {
+                    warnings.push(format!("ignored catalog link {linked_url}: {e}"));
+                    continue;
+                }
             };
             linked.from_catalog = true;
             let key = format!(
@@ -4224,7 +4298,7 @@ async fn expand_skill_discovery_sources(
         }
     }
 
-    Ok(expanded)
+    Ok((expanded, warnings))
 }
 
 fn extract_github_urls_from_markdown(markdown: &str) -> Vec<String> {
@@ -4760,12 +4834,9 @@ fn normalize_skill_manifest_content(
     let url_description = format!("Imported from {original_url}");
 
     let parts: Vec<&str> = content.splitn(3, "---").collect();
-    let (fm, body, has_original_trigger) = if parts.len() >= 3 {
+    let (fm, body) = if parts.len() >= 3 {
         match serde_yaml::from_str::<SkillImportFrontmatter>(parts[1]) {
-            Ok(f) => {
-                let has_trigger = f.trigger.is_some();
-                (f, parts[2].to_string(), has_trigger)
-            }
+            Ok(f) => (f, parts[2].to_string()),
             Err(_) => (
                 SkillImportFrontmatter {
                     trigger: None,
@@ -4776,7 +4847,6 @@ fn normalize_skill_manifest_content(
                     version: None,
                 },
                 content.to_string(),
-                false,
             ),
         }
     } else {
@@ -4790,7 +4860,6 @@ fn normalize_skill_manifest_content(
                 version: None,
             },
             content.to_string(),
-            false,
         )
     };
 
@@ -4798,30 +4867,26 @@ fn normalize_skill_manifest_content(
     let name = fm.name.unwrap_or(url_name);
     let description = fm.description.unwrap_or(url_description);
 
-    let output = if has_original_trigger {
-        content.to_string()
-    } else {
-        let mut frontmatter = parts
-            .get(1)
-            .and_then(|raw| serde_yaml::from_str::<serde_yaml::Mapping>(raw).ok())
-            .unwrap_or_default();
-        frontmatter.insert(
-            serde_yaml::Value::String("name".to_string()),
-            serde_yaml::Value::String(name),
-        );
-        frontmatter.insert(
-            serde_yaml::Value::String("trigger".to_string()),
-            serde_yaml::Value::String(trigger.clone()),
-        );
-        frontmatter.insert(
-            serde_yaml::Value::String("description".to_string()),
-            serde_yaml::Value::String(description),
-        );
-        let yaml = serde_yaml::to_string(&frontmatter)
-            .map_err(|e| anyhow::anyhow!("failed to serialize skill frontmatter: {e}"))?;
-        let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml.as_str());
-        format!("---\n{}---\n{}", yaml, body.trim_start_matches('\n'))
-    };
+    let mut frontmatter = parts
+        .get(1)
+        .and_then(|raw| serde_yaml::from_str::<serde_yaml::Mapping>(raw).ok())
+        .unwrap_or_default();
+    frontmatter.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String(name),
+    );
+    frontmatter.insert(
+        serde_yaml::Value::String("trigger".to_string()),
+        serde_yaml::Value::String(trigger.clone()),
+    );
+    frontmatter.insert(
+        serde_yaml::Value::String("description".to_string()),
+        serde_yaml::Value::String(description),
+    );
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|e| anyhow::anyhow!("failed to serialize skill frontmatter: {e}"))?;
+    let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml.as_str());
+    let output = format!("---\n{}---\n{}", yaml, body.trim_start_matches('\n'));
 
     Ok((trigger, output))
 }
@@ -8731,12 +8796,19 @@ requires_approval = true
 
     #[test]
     fn version_helpers_increment_existing_patch_version() {
-        assert_eq!(super::increment_patch_version(Some("1.2.3")), "1.2.4");
+        assert_eq!(
+            super::increment_patch_version(Some("1.2.3")).as_deref(),
+            Some("1.2.4")
+        );
         assert_eq!(
             super::initial_or_incremented_version(Some("2.0.9"), Some("9.9.9")),
             "2.0.10"
         );
         assert_eq!(super::initial_or_incremented_version(None, None), "1.0.0");
+        assert_eq!(
+            super::initial_or_incremented_version(Some("1.2.3-beta.1"), None),
+            "1.2.3-beta.1"
+        );
     }
 
     #[test]

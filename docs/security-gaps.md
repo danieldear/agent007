@@ -79,7 +79,7 @@ Anyone on the same network segment (office LAN, shared Wi-Fi, corporate network)
 `TcpListener::bind("0.0.0.0:{port}")` binds all network interfaces. On a developer laptop on a corporate network, this means the dashboard is reachable from any other machine on the same subnet.
 
 **Where it is in the code:**
-`crates/web/src/server.rs`, lines 270, 315 — `format!("0.0.0.0:{port}")`.
+`crates/web/src/server.rs`, lines 332, 377 — `format!("0.0.0.0:{port}")`.
 
 **Workaround until fixed:**
 Use `--no-dashboard` or firewall the port.
