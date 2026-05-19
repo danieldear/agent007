@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::{
     extract::{Path, Query, State},
@@ -40,6 +40,31 @@ fn dashboard_controls_workflow(kind: &str) -> bool {
 
 fn run_store_for_web() -> agent007_core::RunStore {
     agent007_core::RunStore::new(agent007_write_home().join("sessions"))
+}
+
+fn runtime_messages_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn validate_existing_run_id(run_id: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if uuid::Uuid::parse_str(run_id).is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid run id" })),
+        ));
+    }
+    let meta_path = agent007_write_home()
+        .join("sessions")
+        .join(run_id)
+        .join("meta.json");
+    if !meta_path.is_file() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "run not found" })),
+        ));
+    }
+    Ok(())
 }
 
 // ── request/response shapes ───────────────────────────────────────────────────
@@ -145,6 +170,69 @@ pub struct ProviderReadinessCard {
     pub model: Option<String>,
     pub source: String,
     pub hint: String,
+}
+
+fn increment_patch_version(raw: Option<&str>) -> Option<String> {
+    let raw = raw.unwrap_or("0.0.0").trim();
+    let mut parts = Vec::new();
+    for part in raw.split('.') {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        parts.push(part.parse::<u64>().ok()?);
+    }
+    if parts.len() > 3 {
+        return None;
+    }
+    while parts.len() < 3 {
+        parts.push(0);
+    }
+    parts[2] = parts[2].saturating_add(1);
+    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
+}
+
+fn initial_or_incremented_version(existing: Option<&str>, requested: Option<&str>) -> String {
+    match existing {
+        Some(value) if !value.trim().is_empty() => {
+            increment_patch_version(Some(value)).unwrap_or_else(|| value.to_string())
+        }
+        _ => requested
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("1.0.0")
+            .to_string(),
+    }
+}
+
+fn markdown_frontmatter_version(path: &FsPath) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parts: Vec<&str> = raw.splitn(3, "---").collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let frontmatter = serde_yaml::from_str::<serde_yaml::Mapping>(parts[1]).ok()?;
+    let version_key = serde_yaml::Value::String("version".to_string());
+    frontmatter
+        .get(&version_key)
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+}
+
+fn yaml_top_level_version(path: &FsPath) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value = serde_yaml::from_str::<serde_yaml::Value>(&raw).ok()?;
+    value
+        .get("version")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+}
+
+fn toml_top_level_version(path: &FsPath) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value = toml::from_str::<toml::Value>(&raw).ok()?;
+    value
+        .get("version")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
 }
 
 impl ProviderReadinessResponse {
@@ -438,6 +526,37 @@ pub struct RuntimeSessionsResponse {
     pub generated_at: String,
     pub counts: RuntimeSessionCounts,
     pub sessions: Vec<RuntimeSessionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeMessage {
+    pub id: String,
+    pub run_id: String,
+    pub created_at: String,
+    pub author: String,
+    pub kind: String,
+    pub body: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeMessageRequest {
+    pub author: String,
+    #[serde(default = "default_runtime_message_kind")]
+    pub kind: String,
+    pub body: String,
+}
+
+fn default_runtime_message_kind() -> String {
+    "note".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/types/")]
+pub struct RuntimeMessagesResponse {
+    pub run_id: String,
+    pub messages: Vec<RuntimeMessage>,
 }
 
 #[derive(Debug, Deserialize, Serialize, TS)]
@@ -1060,6 +1179,95 @@ pub async fn runtime_sessions_handler(
         )
             .into_response(),
     }
+}
+
+pub async fn runtime_messages_list_handler(Path(run_id): Path<String>) -> impl IntoResponse {
+    if let Err(response) = validate_existing_run_id(&run_id) {
+        return response.into_response();
+    }
+    let store = run_store_for_web();
+    match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
+        Ok(messages) => Json(RuntimeMessagesResponse {
+            run_id,
+            messages: messages.unwrap_or_default(),
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn runtime_messages_post_handler(
+    Path(run_id): Path<String>,
+    Json(payload): Json<RuntimeMessageRequest>,
+) -> impl IntoResponse {
+    if let Err(response) = validate_existing_run_id(&run_id) {
+        return response.into_response();
+    }
+    let body = payload.body.trim();
+    if body.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "message body is required" })),
+        )
+            .into_response();
+    }
+    let author = payload.author.trim();
+    let kind = payload.kind.trim();
+    let message = RuntimeMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        run_id: run_id.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        author: if author.is_empty() {
+            "operator".to_string()
+        } else {
+            author.to_string()
+        },
+        kind: if kind.is_empty() {
+            "note".to_string()
+        } else {
+            kind.to_string()
+        },
+        body: body.to_string(),
+    };
+
+    let store = run_store_for_web();
+    let _guard = runtime_messages_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut messages =
+        match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
+            Ok(messages) => messages.unwrap_or_default(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+        };
+    messages.push(message.clone());
+    if let Err(e) = store.write_json_artifact(&run_id, "messages.json", &messages) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let _ = store.append_note(
+        &run_id,
+        "runtime-message",
+        serde_json::json!({
+            "id": message.id,
+            "author": message.author,
+            "kind": message.kind,
+            "body": message.body,
+        }),
+    );
+    Json(message).into_response()
 }
 
 /// `GET /api/providers/status` — provider readiness without exposing secrets.
@@ -1956,6 +2164,7 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
             for p in registry.list() {
                 let key = p.name.to_ascii_lowercase();
                 if seen.insert(key) {
+                    let version = persona_version_for_name(dir, &p.name);
                     personas.push(serde_json::json!({
                         "name": p.name,
                         "description": p.description,
@@ -1963,6 +2172,7 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
                         "allowed_tools": p.allowed_tools,
                         "system_prompt": p.system_prompt,
                         "source": source_label,
+                        "version": version,
                     }));
                 }
             }
@@ -1981,6 +2191,7 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
                 "allowed_tools": p.allowed_tools,
                 "system_prompt": p.system_prompt,
                 "source": "global",
+                "version": "1.0.0",
             }));
         }
     }
@@ -2023,14 +2234,17 @@ pub async fn persona_save_handler(
         .join(", ");
     let model = payload.preferred_model.as_deref().unwrap_or("codex");
     let prompt = payload.system_prompt.as_deref().unwrap_or("");
+    let version = initial_or_incremented_version(toml_top_level_version(&path).as_deref(), None);
 
     let content = format!(
         "name            = \"{}\"\n\
+         version         = \"{}\"\n\
          description     = \"{}\"\n\
          preferred_model = \"{}\"\n\
          allowed_tools   = [{}]\n\n\
          system_prompt   = \"\"\"\n{}\n\"\"\"\n",
         payload.name,
+        version,
         payload.description.replace('"', "\\\""),
         model,
         tools_str,
@@ -2046,6 +2260,36 @@ pub async fn persona_save_handler(
         )
             .into_response(),
     }
+}
+
+fn persona_version_for_name(dir: &FsPath, name: &str) -> String {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return "1.0.0".to_string(),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&raw) else {
+            continue;
+        };
+        let Some(file_name) = value.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if file_name == name {
+            return value
+                .get("version")
+                .and_then(|value| value.as_str())
+                .unwrap_or("1.0.0")
+                .to_string();
+        }
+    }
+    "1.0.0".to_string()
 }
 
 pub async fn persona_delete_handler(
@@ -2688,7 +2932,7 @@ async fn validate_with_llm(state: &AppState, workflow: &Value) -> ValidateLlm {
 
 pub async fn workflow_save_handler(
     State(_state): State<AppState>,
-    Json(payload): Json<Value>,
+    Json(mut payload): Json<Value>,
 ) -> impl IntoResponse {
     let name = sanitize_file_stem(
         payload
@@ -2707,6 +2951,12 @@ pub async fn workflow_save_handler(
     }
 
     let path = wf_dir.join(format!("{name}.yaml"));
+    let requested_version = payload.get("version").and_then(|value| value.as_str());
+    let version =
+        initial_or_incremented_version(yaml_top_level_version(&path).as_deref(), requested_version);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("version".to_string(), Value::String(version));
+    }
     match serde_yaml::to_string(&payload) {
         Ok(yaml) => match std::fs::write(&path, &yaml) {
             Ok(()) => {
@@ -2760,6 +3010,7 @@ struct SkillFrontmatter<'a> {
     trigger: &'a str,
     description: &'a str,
     model: &'a str,
+    version: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     category: Option<&'a str>,
 }
@@ -2869,12 +3120,15 @@ pub async fn skill_save_handler(
     let path = skills_dir.join(format!("{filename}.md"));
     let model = payload.model.as_deref().unwrap_or("codex");
     let category = payload.category.as_deref().filter(|s| !s.is_empty());
+    let version =
+        initial_or_incremented_version(markdown_frontmatter_version(&path).as_deref(), None);
 
     let mut frontmatter_yaml = match serde_yaml::to_string(&SkillFrontmatter {
         name: &payload.name,
         trigger: &normalized_trigger,
         description: &payload.description,
         model,
+        version: &version,
         category,
     }) {
         Ok(yaml) => yaml,
@@ -2950,6 +3204,21 @@ pub struct MemoryScopeStats {
     pub learning_skill_count: Option<usize>,
 }
 
+#[derive(Serialize)]
+pub struct MemoryDeleteResponse {
+    pub ok: bool,
+    pub deleted: bool,
+    pub scope: String,
+    pub key: String,
+}
+
+#[derive(Serialize)]
+pub struct MemoryPurgeResponse {
+    pub ok: bool,
+    pub scope: String,
+    pub purged: usize,
+}
+
 // ── Memory list ───────────────────────────────────────────────────────────────
 
 pub async fn memory_list_handler(
@@ -3001,6 +3270,71 @@ pub async fn memory_get_handler(
             tracing::warn!("memory_get scope={scope} key={key}: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read error").into_response()
         }
+    }
+}
+
+pub async fn memory_delete_handler(
+    State(_state): State<AppState>,
+    Path((scope, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid scope"})),
+        )
+            .into_response();
+    }
+    if key.contains('\0') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid key"})),
+        )
+            .into_response();
+    }
+
+    let store = memory_store_for_web_scope(&scope);
+    let namespace = web_namespace(&scope);
+    match store.scoped(namespace).delete(&key) {
+        Ok(deleted) => Json(MemoryDeleteResponse {
+            ok: true,
+            deleted,
+            scope,
+            key,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn memory_purge_expired_handler(
+    State(_state): State<AppState>,
+    Path(scope): Path<String>,
+) -> impl IntoResponse {
+    if scope.contains("..") || scope.contains('/') || scope.contains('\\') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid scope"})),
+        )
+            .into_response();
+    }
+    let store = memory_store_for_web_scope(&scope);
+    let namespace = web_namespace(&scope);
+    match store.scoped(namespace).purge_expired() {
+        Ok(purged) => Json(MemoryPurgeResponse {
+            ok: true,
+            scope,
+            purged,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -3306,12 +3640,18 @@ pub async fn skill_import_handler(
     let _ = std::fs::create_dir_all(&skills_dir);
 
     match write_imported_skill(&skills_dir, imported) {
-        Ok((trigger, path)) => Json(serde_json::json!({
-            "ok": true,
-            "trigger": trigger,
-            "path": path.display().to_string()
-        }))
-        .into_response(),
+        Ok((trigger, path)) => {
+            let write_home = agent007_write_home();
+            let sync = sync_claude_slash_commands_for_write_home(&write_home);
+            Json(serde_json::json!({
+                "ok": true,
+                "trigger": trigger,
+                "path": path.display().to_string(),
+                "slash_commands": sync.as_ref().ok(),
+                "slash_command_warning": sync.err(),
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -3474,24 +3814,32 @@ pub async fn skill_discover_handler(
     let tokens = query_tokens(&query);
     let mut results = Vec::new();
     let mut seen_urls = std::collections::BTreeSet::new();
+    let mut warnings = Vec::new();
 
-    let sources = if payload.sources.is_empty() {
+    let source_urls = if payload.sources.is_empty() {
         default_skill_discovery_sources()
     } else {
         payload.sources.clone()
     };
 
-    for source_url in &sources {
-        let source = match parse_skill_discovery_source(source_url) {
-            Ok(source) => source,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": format!("{source_url}: {e}") })),
-                )
-                    .into_response()
-            }
-        };
+    let sources = match expand_skill_discovery_sources(&client, &source_urls).await {
+        Ok((expanded, expansion_warnings)) => {
+            warnings.extend(expansion_warnings);
+            expanded
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    for source in &sources {
+        if source.from_catalog {
+            warnings.push(format!("expanded catalog source {}", source.source_url));
+        }
 
         let tree_url =
             github_tree_api_url(&source.owner, &source.repo, source.reference.as_deref());
@@ -3624,6 +3972,7 @@ pub async fn skill_discover_handler(
                     category: summary.category,
                     model: summary.model,
                     installed: conflict.is_some(),
+                    from_catalog: source.from_catalog,
                     conflict,
                 },
             ));
@@ -3642,7 +3991,9 @@ pub async fn skill_discover_handler(
         }
     }
 
-    Json(serde_json::json!({ "results": results })).into_response()
+    warnings.sort();
+    warnings.dedup();
+    Json(serde_json::json!({ "results": results, "warnings": warnings })).into_response()
 }
 
 #[derive(Debug)]
@@ -3731,6 +4082,7 @@ struct SkillDiscoverSource {
     reference: Option<String>,
     path: String,
     source_url: String,
+    from_catalog: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3758,6 +4110,7 @@ struct SkillDiscoverResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     installed: bool,
+    from_catalog: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     conflict: Option<SkillConflictInfo>,
 }
@@ -3839,6 +4192,7 @@ fn parse_skill_discovery_source(url: &str) -> anyhow::Result<SkillDiscoverSource
             reference,
             path,
             source_url: url.trim().to_string(),
+            from_catalog: false,
         }),
         SkillImportSourceKind::GitHubFile {
             owner,
@@ -3854,11 +4208,123 @@ fn parse_skill_discovery_source(url: &str) -> anyhow::Result<SkillDiscoverSource
                 .map(|parent| parent.to_string_lossy().to_string())
                 .unwrap_or_default(),
             source_url: url.trim().to_string(),
+            from_catalog: false,
         }),
         SkillImportSourceKind::DirectFile { .. } => Err(anyhow::anyhow!(
             "discovery sources must be GitHub repository, tree, or package URLs"
         )),
     }
+}
+
+async fn expand_skill_discovery_sources(
+    client: &reqwest::Client,
+    source_urls: &[String],
+) -> anyhow::Result<(Vec<SkillDiscoverSource>, Vec<String>)> {
+    let mut expanded = Vec::new();
+    let mut warnings = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for source_url in source_urls {
+        let source = parse_skill_discovery_source(source_url)
+            .map_err(|e| anyhow::anyhow!("{source_url}: {e}"))?;
+        let source_key = format!(
+            "{}/{}/{}/{}",
+            source.owner,
+            source.repo,
+            source
+                .reference
+                .clone()
+                .unwrap_or_else(|| "HEAD".to_string()),
+            source.path
+        );
+        if seen.insert(source_key) {
+            expanded.push(source.clone());
+        }
+
+        let import_source = parse_skill_import_source(source_url)
+            .map_err(|e| anyhow::anyhow!("{source_url}: {e}"))?;
+        let SkillImportSourceKind::GitHubFile {
+            owner,
+            repo,
+            reference,
+            path,
+        } = import_source
+        else {
+            continue;
+        };
+
+        let filename = FsPath::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(filename.as_str(), "readme.md" | "index.md" | "catalog.md") {
+            continue;
+        }
+
+        let raw_url = github_raw_file_url(&owner, &repo, reference.as_deref(), &path);
+        let markdown = match fetch_text_async(client, &raw_url).await {
+            Ok(markdown) => markdown,
+            Err(e) => {
+                warnings.push(format!("failed to expand catalog {source_url}: {e}"));
+                continue;
+            }
+        };
+        for linked_url in extract_github_urls_from_markdown(&markdown)
+            .into_iter()
+            .take(40)
+        {
+            let mut linked = match parse_skill_discovery_source(&linked_url) {
+                Ok(linked) => linked,
+                Err(e) => {
+                    warnings.push(format!("ignored catalog link {linked_url}: {e}"));
+                    continue;
+                }
+            };
+            linked.from_catalog = true;
+            let key = format!(
+                "{}/{}/{}/{}",
+                linked.owner,
+                linked.repo,
+                linked
+                    .reference
+                    .clone()
+                    .unwrap_or_else(|| "HEAD".to_string()),
+                linked.path
+            );
+            if seen.insert(key) {
+                expanded.push(linked);
+            }
+        }
+    }
+
+    Ok((expanded, warnings))
+}
+
+fn extract_github_urls_from_markdown(markdown: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for token in
+        markdown.split(|c: char| c.is_whitespace() || c == ')' || c == '(' || c == '<' || c == '>')
+    {
+        let cleaned = token
+            .trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '"' | '\'' | '`' | ',' | ';' | ':' | '!' | '[' | ']' | '{' | '}'
+                )
+            })
+            .trim();
+        if cleaned.starts_with("https://github.com/")
+            || cleaned.starts_with("http://github.com/")
+            || cleaned.starts_with("https://raw.githubusercontent.com/")
+            || cleaned.starts_with("http://raw.githubusercontent.com/")
+        {
+            urls.push(cleaned.to_string());
+        }
+    }
+    urls.sort();
+    urls.dedup();
+    urls
 }
 
 fn is_discoverable_skill_markdown_path(path: &str, source_prefix: &str) -> bool {
@@ -3994,7 +4460,11 @@ fn skill_summary_match_score(
 
     let token_hits = tokens
         .iter()
-        .filter(|token| combined_tokens.iter().any(|candidate| candidate == *token))
+        .filter(|token| {
+            combined_tokens
+                .iter()
+                .any(|candidate| token_matches(candidate, token))
+        })
         .count() as i32;
     let all_tokens_match = !tokens.is_empty() && token_hits as usize == tokens.len();
     let any_token_match = token_hits > 0;
@@ -4042,9 +4512,17 @@ fn skill_summary_match_score(
 
 fn field_matches_query(field: &str, query_lc: &str, exact_token_only: bool) -> bool {
     if exact_token_only {
-        return query_tokens(field).iter().any(|token| token == query_lc);
+        return query_tokens(field)
+            .iter()
+            .any(|token| token_matches(token, query_lc));
     }
     field.contains(query_lc)
+}
+
+fn token_matches(candidate: &str, query: &str) -> bool {
+    candidate == query
+        || (query.len() >= 4 && candidate.starts_with(query))
+        || (candidate.len() >= 4 && query.starts_with(candidate))
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
@@ -4356,12 +4834,9 @@ fn normalize_skill_manifest_content(
     let url_description = format!("Imported from {original_url}");
 
     let parts: Vec<&str> = content.splitn(3, "---").collect();
-    let (fm, body, has_original_trigger) = if parts.len() >= 3 {
+    let (fm, body) = if parts.len() >= 3 {
         match serde_yaml::from_str::<SkillImportFrontmatter>(parts[1]) {
-            Ok(f) => {
-                let has_trigger = f.trigger.is_some();
-                (f, parts[2].to_string(), has_trigger)
-            }
+            Ok(f) => (f, parts[2].to_string()),
             Err(_) => (
                 SkillImportFrontmatter {
                     trigger: None,
@@ -4372,7 +4847,6 @@ fn normalize_skill_manifest_content(
                     version: None,
                 },
                 content.to_string(),
-                false,
             ),
         }
     } else {
@@ -4386,19 +4860,33 @@ fn normalize_skill_manifest_content(
                 version: None,
             },
             content.to_string(),
-            false,
         )
     };
 
-    let trigger = fm.trigger.unwrap_or_else(|| url_trigger.clone());
+    let trigger = normalize_skill_trigger(&fm.trigger.unwrap_or_else(|| url_trigger.clone()));
     let name = fm.name.unwrap_or(url_name);
     let description = fm.description.unwrap_or(url_description);
 
-    let output = if has_original_trigger {
-        content.to_string()
-    } else {
-        format!("---\nname: {name}\ntrigger: {trigger}\ndescription: {description}\n---\n{body}")
-    };
+    let mut frontmatter = parts
+        .get(1)
+        .and_then(|raw| serde_yaml::from_str::<serde_yaml::Mapping>(raw).ok())
+        .unwrap_or_default();
+    frontmatter.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String(name),
+    );
+    frontmatter.insert(
+        serde_yaml::Value::String("trigger".to_string()),
+        serde_yaml::Value::String(trigger.clone()),
+    );
+    frontmatter.insert(
+        serde_yaml::Value::String("description".to_string()),
+        serde_yaml::Value::String(description),
+    );
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|e| anyhow::anyhow!("failed to serialize skill frontmatter: {e}"))?;
+    let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml.as_str());
+    let output = format!("---\n{}---\n{}", yaml, body.trim_start_matches('\n'));
 
     Ok((trigger, output))
 }
@@ -4812,11 +5300,14 @@ fn generate_tool_skill(
     };
     let skill_model = model.unwrap_or_else(|| "codex".to_string());
     let category_ref = category.as_deref().filter(|value| !value.trim().is_empty());
+    let version =
+        initial_or_incremented_version(markdown_frontmatter_version(&path).as_deref(), None);
     let mut frontmatter_yaml = serde_yaml::to_string(&SkillFrontmatter {
         name: &skill_name,
         trigger: &trigger,
         description: &skill_desc,
         model: &skill_model,
+        version: &version,
         category: category_ref,
     })
     .map_err(|e| format!("failed to serialize skill frontmatter: {e}"))?;
@@ -5953,9 +6444,15 @@ fn workflow_list_item(
     let mut skill_refs: Vec<String> = Vec::new();
     let mut agent_refs: Vec<String> = Vec::new();
     let mut associations = AssociatedAssets::default();
+    let mut version = String::from("1.0.0");
 
     if let Ok(raw) = std::fs::read_to_string(path) {
         extract_associations_from_text(&raw, &mut associations);
+        if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+            if let Some(raw_version) = value.get("version").and_then(|value| value.as_str()) {
+                version = raw_version.to_string();
+            }
+        }
 
         if let Some(def) = parse_workflow_def_from_path(path, &raw) {
             description = def.description.unwrap_or_default();
@@ -5993,6 +6490,7 @@ fn workflow_list_item(
         "name": name,
         "source": source,
         "description": description,
+        "version": version,
         "steps": steps_count,
         "skill_refs": skill_refs,
         "agent_refs": agent_refs,
@@ -6640,6 +7138,34 @@ mod tests {
             associations.scripts.is_empty(),
             "package helper files should not be exposed as unresolved script refs"
         );
+    }
+
+    #[test]
+    fn imported_package_manifest_without_trigger_keeps_yaml_valid() {
+        let source = "---\nname: ui-ux-pro-max\ndescription: \"Actions: design, build, review\"\n---\nUse {{args}}\n";
+        let (trigger, normalized) = super::normalize_skill_manifest_content(
+            source,
+            "ui-ux-pro-max",
+            "https://github.com/example/repo/tree/main/.claude/skills/ui-ux-pro-max",
+        )
+        .unwrap();
+        assert_eq!(trigger, "/ui-ux-pro-max");
+        assert!(normalized.contains("trigger: /ui-ux-pro-max"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join(".agent007").join("skills");
+        let package_dir = skills_dir.join("ui-ux-pro-max");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(package_dir.join("SKILL.md"), normalized).unwrap();
+
+        let skills = load_skills_from_dir(&skills_dir);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].trigger(), "/ui-ux-pro-max");
+        assert_eq!(
+            skills[0].frontmatter.description,
+            "Actions: design, build, review"
+        );
+        assert!(skills[0].is_package());
     }
 
     #[tokio::test]
@@ -8252,6 +8778,7 @@ requires_approval = true
             reference: Some("main".to_string()),
             path: "skills".to_string(),
             source_url: "https://github.com/anthropics/skills/tree/main/skills".to_string(),
+            from_catalog: false,
         };
         let tokens = super::query_tokens("ml engineer");
         let score = super::skill_summary_match_score(
@@ -8265,6 +8792,35 @@ requires_approval = true
             score.is_some(),
             "body/token matching should find ML engineer"
         );
+    }
+
+    #[test]
+    fn version_helpers_increment_existing_patch_version() {
+        assert_eq!(
+            super::increment_patch_version(Some("1.2.3")).as_deref(),
+            Some("1.2.4")
+        );
+        assert_eq!(
+            super::initial_or_incremented_version(Some("2.0.9"), Some("9.9.9")),
+            "2.0.10"
+        );
+        assert_eq!(super::initial_or_incremented_version(None, None), "1.0.0");
+        assert_eq!(
+            super::initial_or_incremented_version(Some("1.2.3-beta.1"), None),
+            "1.2.3-beta.1"
+        );
+    }
+
+    #[test]
+    fn extract_github_urls_from_markdown_finds_catalog_links() {
+        let urls = super::extract_github_urls_from_markdown(
+            "- [Skill](https://github.com/acme/skills/tree/main/skills/foo)\n\
+             - raw: https://raw.githubusercontent.com/acme/skills/main/skills/bar.md",
+        );
+        assert_eq!(urls.len(), 2);
+        assert!(urls
+            .iter()
+            .any(|url| url.contains("github.com/acme/skills/tree/main/skills/foo")));
     }
 
     #[test]
@@ -8284,6 +8840,7 @@ requires_approval = true
             reference: Some("main".to_string()),
             path: "skills".to_string(),
             source_url: "https://github.com/openai/skills/tree/main/skills".to_string(),
+            from_catalog: false,
         };
         let tokens = super::query_tokens("ml engineer");
         let score = super::skill_summary_match_score(
@@ -8313,6 +8870,7 @@ requires_approval = true
             reference: Some("main".to_string()),
             path: "skills".to_string(),
             source_url: "https://github.com/openai/skills/tree/main/skills".to_string(),
+            from_catalog: false,
         };
         let tokens = super::query_tokens("ml");
         let score = super::skill_summary_match_score(

@@ -190,6 +190,10 @@ impl WebServer {
                 get(api::regression_evaluate_handler),
             )
             .route("/api/runtime/sessions", get(api::runtime_sessions_handler))
+            .route(
+                "/api/runtime/sessions/{id}/messages",
+                get(api::runtime_messages_list_handler).post(api::runtime_messages_post_handler),
+            )
             .route("/api/providers/status", get(api::provider_status_handler))
             .route("/api/runs", get(api::runs_handler))
             .route(
@@ -237,7 +241,14 @@ impl WebServer {
             )
             .route("/api/memory/{scope}", get(api::memory_list_handler))
             .route("/api/memory/{scope}/stats", get(api::memory_stats_handler))
-            .route("/api/memory/{scope}/{key}", get(api::memory_get_handler))
+            .route(
+                "/api/memory/{scope}/_actions/purge-expired",
+                post(api::memory_purge_expired_handler),
+            )
+            .route(
+                "/api/memory/{scope}/{key}",
+                get(api::memory_get_handler).delete(api::memory_delete_handler),
+            )
             .route(
                 "/api/skills/{trigger}/promote",
                 post(api::skill_promote_handler),

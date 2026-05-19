@@ -405,6 +405,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "ts-rs",
+ "uuid",
 ]
 
 [[package]]

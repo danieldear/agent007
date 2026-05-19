@@ -22,6 +22,10 @@ const selectedArtifactPath = ref('')
 const selectedArtifactPreview = ref(null)
 const artifactPreviewStatus = ref('')
 const artifactPreviewRef = ref(null)
+const runtimeMessages = ref([])
+const runtimeMessageText = ref('')
+const runtimeMessageStatus = ref('')
+const runtimeMessageBusy = ref(false)
 const approvalStatus = ref('')
 const approvalEditContent = ref('')
 const resumeStatus = ref('')
@@ -528,6 +532,7 @@ async function refreshRuns() {
       expandedRunId.value = null
       selectedRunId.value = null
       selectedRun.value = null
+      clearRuntimeMessages()
     }
   }
 }
@@ -537,6 +542,7 @@ async function toggleRun(id) {
     expandedRunId.value = null
     selectedRunId.value = null
     selectedRun.value = null
+    clearRuntimeMessages()
     clearArtifactPreview()
     approvalStatus.value = ''
     resumeStatus.value = ''
@@ -549,9 +555,51 @@ async function toggleRun(id) {
 async function selectRun(id) {
   selectedRunId.value = id
   selectedRun.value = await api.getRunDetail(id)
+  await loadRuntimeMessages(id)
   approvalEditContent.value = selectedRun.value?.workflow_state?.pending_approval?.content || ''
   resumeStatus.value = ''
   clearArtifactPreview()
+}
+
+function clearRuntimeMessages() {
+  runtimeMessages.value = []
+  runtimeMessageText.value = ''
+  runtimeMessageStatus.value = ''
+  runtimeMessageBusy.value = false
+}
+
+async function loadRuntimeMessages(id = selectedRunId.value) {
+  if (!id) {
+    runtimeMessages.value = []
+    return
+  }
+  try {
+    const result = await api.getRuntimeMessages(id)
+    runtimeMessages.value = Array.isArray(result?.messages) ? result.messages : []
+  } catch {
+    runtimeMessages.value = []
+  }
+}
+
+async function postRuntimeMessage() {
+  if (!selectedRunId.value || !runtimeMessageText.value.trim() || runtimeMessageBusy.value) return
+  runtimeMessageBusy.value = true
+  runtimeMessageStatus.value = 'Saving note...'
+  try {
+    await api.postRuntimeMessage(selectedRunId.value, {
+      author: 'operator',
+      kind: 'note',
+      body: runtimeMessageText.value.trim(),
+    })
+    runtimeMessageText.value = ''
+    runtimeMessageStatus.value = ''
+    await loadRuntimeMessages(selectedRunId.value)
+    selectedRun.value = await api.getRunDetail(selectedRunId.value)
+  } catch (e) {
+    runtimeMessageStatus.value = `Error: ${e.message}`
+  } finally {
+    runtimeMessageBusy.value = false
+  }
 }
 
 function clearArtifactPreview() {
@@ -1112,6 +1160,57 @@ async function submitTask() {
                 <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
                   v-html="renderMarkdown(selectedRunOutput)"
                 /></div>
+
+              <!-- Session notes -->
+              <div class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Session Notes</div>
+                    <div class="font-mono text-xs text-base-content/45 mt-1">Operator and agent messages attached to this run for handoff, review, and continuation context.</div>
+                  </div>
+                  <span class="badge badge-sm badge-ghost font-mono">{{ runtimeMessages.length }} note(s)</span>
+                </div>
+
+                <div v-if="runtimeMessages.length" class="space-y-2 max-h-48 overflow-auto pr-1 mb-3">
+                  <div
+                    v-for="message in runtimeMessages"
+                    :key="message.id"
+                    class="rounded-lg border border-base-300/50 bg-base-100 p-3"
+                  >
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <div class="flex items-center gap-2">
+                        <span class="font-mono text-xs text-base-content/70">{{ message.author || 'operator' }}</span>
+                        <span class="badge badge-xs badge-ghost font-mono">{{ message.kind || 'note' }}</span>
+                      </div>
+                      <span class="text-[10px] text-base-content/30 font-mono">{{ fmtLocalTime(message.created_at) }}</span>
+                    </div>
+                    <div class="font-mono text-xs text-base-content/55 whitespace-pre-wrap leading-relaxed">{{ message.body }}</div>
+                  </div>
+                </div>
+                <div v-else class="rounded-lg border border-dashed border-base-300 bg-base-100/40 p-3 mb-3 font-mono text-xs text-base-content/35">
+                  No notes yet. Add a compact handoff, decision, or next-action note.
+                </div>
+
+                <div class="flex flex-col lg:flex-row gap-2">
+                  <textarea
+                    v-model="runtimeMessageText"
+                    class="textarea textarea-bordered textarea-sm flex-1 font-mono min-h-[74px]"
+                    placeholder="Add a session note for future agents..."
+                    @keydown.meta.enter.prevent="postRuntimeMessage"
+                    @keydown.ctrl.enter.prevent="postRuntimeMessage"
+                  ></textarea>
+                  <div class="flex lg:flex-col gap-2 lg:w-36">
+                    <button
+                      class="btn btn-sm btn-primary font-mono text-xs"
+                      :class="{ 'loading': runtimeMessageBusy }"
+                      :disabled="!runtimeMessageText.trim() || runtimeMessageBusy"
+                      @click="postRuntimeMessage"
+                    >add note</button>
+                    <button class="btn btn-sm btn-ghost font-mono text-xs" @click="loadRuntimeMessages()">refresh</button>
+                  </div>
+                </div>
+                <div v-if="runtimeMessageStatus" class="font-mono text-[10px] mt-2" :class="runtimeMessageStatus.startsWith('Error') ? 'text-error' : 'text-base-content/40'">{{ runtimeMessageStatus }}</div>
+              </div>
 
               <!-- Artifacts -->
               <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">

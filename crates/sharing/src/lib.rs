@@ -1525,6 +1525,34 @@ mod tests {
     }
 
     #[test]
+    fn builder_exports_selected_skill_package_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let workflows_dir = dir.path().join("workflows");
+        let package_dir = skills_dir.join("ui-ux-pro-max");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            package_dir.join("SKILL.md"),
+            "---\nname: ui-ux-pro-max\ndescription: \"Actions: design, build\"\ntrigger: /ui-ux-pro-max\n---\nUse {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(package_dir.join("references.md"), "helper docs\n").unwrap();
+
+        let bundle = BundleBuilder::new([&skills_dir], [&workflows_dir])
+            .build(&["ui-ux-pro-max"], &["__none__"], &[], &[])
+            .unwrap();
+        let filenames: HashSet<String> = bundle
+            .skills
+            .iter()
+            .map(|asset| asset.filename.clone())
+            .collect();
+
+        assert!(filenames.contains("ui-ux-pro-max/SKILL.md"));
+        assert!(filenames.contains("ui-ux-pro-max/references.md"));
+    }
+
+    #[test]
     fn importer_restores_project_tools() {
         let dir = tempfile::tempdir().unwrap();
         let bundle = Bundle::new(

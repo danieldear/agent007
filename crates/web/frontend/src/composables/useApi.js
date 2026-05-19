@@ -92,11 +92,18 @@ export function useApi() {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
       return r.text()
     }),
+    deleteMemory: (scope, key) =>
+      fetchJson(`/api/memory/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+    purgeExpiredMemory: (scope) =>
+      fetchJson(`/api/memory/${encodeURIComponent(scope)}/_actions/purge-expired`, { method: 'POST' }),
 
     // Status
     getStatus: () => fetchJson('/api/status'),
     getStats: () => fetchJson('/api/stats'),
     getRuntimeSessions: (limit = 12) => fetchJson(`/api/runtime/sessions?limit=${encodeURIComponent(limit)}`),
+    getRuntimeMessages: (id) => fetchJson(`/api/runtime/sessions/${encodeURIComponent(id)}/messages`),
+    postRuntimeMessage: (id, data) =>
+      fetchJson(`/api/runtime/sessions/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
     getProviderStatus: () => fetchJson('/api/providers/status'),
     getScorecards: (limit = 100) => fetchJson(`/api/scorecards?limit=${encodeURIComponent(limit)}`),
     evaluateRegression: (params = {}) => {

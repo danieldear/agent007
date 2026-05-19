@@ -479,6 +479,15 @@ impl MemoryStore {
         Ok(removed)
     }
 
+    fn delete_ns(&self, namespace: &str, key: &str) -> Result<bool, MemoryError> {
+        let path = self.resolve_existing_key_path(namespace, key);
+        if !path.exists() {
+            return Ok(false);
+        }
+        std::fs::remove_file(&path).map_err(|e| MemoryError::Io { path, source: e })?;
+        Ok(true)
+    }
+
     pub fn scoped(self: &Arc<Self>, namespace: &str) -> ScopedMemoryStore {
         ScopedMemoryStore {
             inner: Arc::clone(self),
@@ -567,6 +576,11 @@ impl ScopedMemoryStore {
     /// Remove expired files in this scope from disk.
     pub fn purge_expired(&self) -> Result<usize, MemoryError> {
         self.inner.purge_expired_ns(&self.namespace)
+    }
+
+    /// Delete a memory key from this scope. Returns true when a file was removed.
+    pub fn delete(&self, key: &str) -> Result<bool, MemoryError> {
+        self.inner.delete_ns(&self.namespace, key)
     }
 
     /// Read a key plus all entries linked via `related_to` (1-hop graph expansion).
@@ -1082,5 +1096,18 @@ mod tests {
         let removed = scoped.purge_expired().unwrap();
         assert_eq!(removed, 1);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_removes_existing_key_only_once() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = store.scoped("project");
+        scoped.write("topic:item", "value").unwrap();
+
+        assert_eq!(scoped.read("topic:item").unwrap().as_deref(), Some("value"));
+        assert!(scoped.delete("topic:item").unwrap());
+        assert_eq!(scoped.read("topic:item").unwrap(), None);
+        assert!(!scoped.delete("topic:item").unwrap());
     }
 }
