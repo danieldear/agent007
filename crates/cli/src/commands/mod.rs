@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod checkpoint;
 pub mod git;
 pub mod init;
+pub mod operator_tui;
 pub mod persona;
 pub mod replay;
 pub mod run;
