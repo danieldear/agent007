@@ -403,28 +403,37 @@ fn run_terminal(mut app: TuiApp) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = loop {
-        if let Err(error) = app.refresh_if_due() {
-            app.status = format!("refresh failed: {error}");
-        }
-        terminal.draw(|frame| render(frame, &app))?;
-        if app.should_quit {
-            break Ok(());
-        }
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if let Err(error) = handle_key(&mut app, key.code) {
-                        app.status = format!("error: {error}");
+    // Run the event loop in a closure so that terminal cleanup always executes
+    // regardless of whether the loop exits cleanly or via an error. Without
+    // this, an early `?` return would leave the terminal stuck in raw/alt-screen
+    // mode.
+    let result = (|| -> Result<()> {
+        loop {
+            if let Err(error) = app.refresh_if_due() {
+                app.status = format!("refresh failed: {error}");
+            }
+            terminal.draw(|frame| render(frame, &app))?;
+            if app.should_quit {
+                break;
+            }
+            if event::poll(Duration::from_millis(200))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        if let Err(error) = handle_key(&mut app, key.code) {
+                            app.status = format!("error: {error}");
+                        }
                     }
                 }
             }
         }
-    };
+        Ok(())
+    })();
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Always restore the terminal, even if the loop returned an error.
+    // Ignore cleanup errors so the original error (if any) is returned.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
     result
 }
 
@@ -714,7 +723,7 @@ fn render_messages(frame: &mut Frame, area: Rect, session: &TuiSession) {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &TuiApp) {
-    let hint = " q quit · tab switch · ↑↓ select · enter detail · a approve · d deny · R retry note · c copy summary · r refresh · ? help ";
+    let hint = " q quit · tab switch · ↑↓ select · enter detail · a approve · d deny · R retry note · c write summary · r refresh · ? help ";
     let status = if app.status.is_empty() {
         hint.to_string()
     } else {

@@ -535,7 +535,7 @@ pub struct RuntimeMessage {
     pub author: String,
     pub kind: String,
     pub body: String,
-    #[serde(default)]
+    #[serde(default = "default_payload")]
     #[ts(type = "Record<string, unknown>")]
     pub payload: Value,
 }
@@ -552,13 +552,17 @@ pub struct RuntimeMessageRequest {
     #[serde(default = "default_runtime_message_kind")]
     pub kind: String,
     pub body: String,
-    #[serde(default)]
+    #[serde(default = "default_payload")]
     #[ts(type = "Record<string, unknown>")]
     pub payload: Value,
 }
 
 fn default_runtime_message_kind() -> String {
     "note".to_string()
+}
+
+fn default_payload() -> Value {
+    serde_json::json!({})
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

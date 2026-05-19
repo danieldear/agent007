@@ -240,6 +240,12 @@ impl RunStore {
     }
 
     pub fn append_message(&self, run_id: &str, message: AgentMessage) -> Result<(), CoreError> {
+        if message.run_id != run_id {
+            return Err(CoreError::DispatchFailed(format!(
+                "message.run_id '{}' does not match run_id '{}'",
+                message.run_id, run_id
+            )));
+        }
         let _guard = self
             .messages_lock
             .lock()
