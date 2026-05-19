@@ -835,7 +835,10 @@ async fn build_skill_executor(
     let rag_enabled = rag_config.map(|rag| rag.enabled).unwrap_or(true);
     let mut indexed_docs = 0usize;
     if !is_dry_run && rag_enabled && !skip_rag_warmup {
-        let indexer = Indexer::new(Arc::clone(&embedder), Arc::clone(&db), 900);
+        // Wrap in Arc so the same indexer can be handed to the background task
+        // that keeps the vector index up-to-date as new memory entries are written
+        // during the run (not just at warmup time).
+        let indexer = Arc::new(Indexer::new(Arc::clone(&embedder), Arc::clone(&db), 900));
         match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
             Ok(count) => {
                 indexed_docs = count;
@@ -847,6 +850,11 @@ async fn build_skill_executor(
                 );
             }
         }
+        // Keep the indexer alive and wire it to the memory store so every write
+        // during the run is automatically embedded and inserted into the vector index.
+        // The JoinHandle is intentionally dropped — the task exits when the store drops.
+        let _index_handle =
+            agent007_memory::start_background_indexer(memory_store, Arc::clone(&indexer));
     }
 
     let retriever =

@@ -817,15 +817,35 @@ pub async fn skills_run_handler(
             .into_response();
     }
 
-    // Build a minimal SkillExecutor (dry-run, no real VectorDB).
+    // Build a SkillExecutor backed by the real on-disk vector index when available.
+    // The embedder is a mock (zero-vector) for now; the Retriever detects this and
+    // falls through to keyword search automatically.  When a real embedding provider
+    // is wired to AppState in a later milestone, swap embedder here.
     let embedder = Arc::new(agent007_models::MockProvider::with_embedding_dim(
         "",
         "mock-embed",
         384,
     )) as Arc<dyn agent007_models::EmbeddingProvider>;
 
-    let db = Arc::new(NoOpVectorDB) as Arc<dyn agent007_memory::VectorDB>;
-    let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
+    let vectordb_path = agent007_write_home().join("vectordb").join("memory");
+    let _ = std::fs::create_dir_all(&vectordb_path);
+    let db: Arc<dyn agent007_memory::VectorDB> =
+        match agent007_memory::vectordb::LanceDBStore::new(
+            vectordb_path.to_str().unwrap_or(".lance"),
+            "memory",
+            384,
+        )
+        .await
+        {
+            Ok(store) => Arc::new(store),
+            Err(e) => {
+                tracing::warn!(error = %e, "LanceDB unavailable in web skill run; using no-op VectorDB");
+                Arc::new(NoOpVectorDB)
+            }
+        };
+    let retriever = Arc::new(
+        agent007_memory::Retriever::new(embedder, db, 5)
+    );
 
     let memory_store = memory_store_for_web();
     let memory = memory_store.global();
