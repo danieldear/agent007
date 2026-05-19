@@ -7,6 +7,7 @@ mod test_support;
 use clap::{Parser, Subcommand};
 use commands::checkpoint::CheckpointArgs;
 use commands::git::GitArgs;
+use commands::operator_tui::TuiArgs;
 use commands::runtime_status::StatusArgs;
 
 pub use commands::workflow::WorkflowAction;
@@ -31,6 +32,8 @@ pub enum Commands {
     },
     /// Show compact runtime/session status
     Status(StatusArgs),
+    /// Open the operator terminal UI
+    Tui(TuiArgs),
     /// Initialize agent007 — create dirs, write config, register MCP, install slash commands
     Init {
         /// Re-run even if already initialized (overwrites MCP registration, re-installs commands)
@@ -311,6 +314,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Run { task } => commands::run::execute(config, task).await,
         Commands::Status(args) => commands::runtime_status::execute(config, args).await,
+        Commands::Tui(args) => commands::operator_tui::execute(config, args).await,
         Commands::Serve { port, no_dashboard } => {
             commands::serve::execute(config, port, no_dashboard).await
         }
@@ -434,6 +438,19 @@ mod tests {
                 state: commands::runtime_status::StatusFilter::All,
                 watch: None,
                 json: true
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_tui_subcommand() {
+        let cli =
+            Cli::try_parse_from(["agent007", "tui", "--limit", "20", "--refresh", "10"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Tui(TuiArgs {
+                limit: 20,
+                refresh: 10
             })
         ));
     }

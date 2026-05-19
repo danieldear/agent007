@@ -44,6 +44,90 @@ pub struct RunLogEntry {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentMessageKind {
+    Note,
+    Request,
+    Handoff,
+    Progress,
+    Warning,
+    Result,
+}
+
+impl AgentMessageKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Request => "request",
+            Self::Handoff => "handoff",
+            Self::Progress => "progress",
+            Self::Warning => "warning",
+            Self::Result => "result",
+        }
+    }
+}
+
+impl std::str::FromStr for AgentMessageKind {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "note" => Ok(Self::Note),
+            "request" => Ok(Self::Request),
+            "handoff" => Ok(Self::Handoff),
+            "progress" | "progress-note" => Ok(Self::Progress),
+            "warning" | "blocker" => Ok(Self::Warning),
+            "result" | "summary" | "result-summary" => Ok(Self::Result),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for AgentMessageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessage {
+    pub id: String,
+    pub run_id: String,
+    pub session_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub from: String,
+    pub to: Option<String>,
+    pub kind: AgentMessageKind,
+    pub body: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+impl AgentMessage {
+    pub fn new(
+        run_id: impl Into<String>,
+        from: impl Into<String>,
+        to: Option<String>,
+        kind: AgentMessageKind,
+        body: impl Into<String>,
+        payload: Value,
+    ) -> Self {
+        let run_id = run_id.into();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            session_id: Some(run_id.clone()),
+            run_id,
+            created_at: Utc::now(),
+            from: from.into(),
+            to,
+            kind,
+            body: body.into(),
+            payload,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunDetail {
     pub metadata: RunMetadata,
@@ -96,6 +180,7 @@ struct StoredWorkflowRequest {
 pub struct RunStore {
     base_dir: Arc<PathBuf>,
     token_summary_lock: Arc<Mutex<()>>,
+    messages_lock: Arc<Mutex<()>>,
 }
 
 impl RunStore {
@@ -105,6 +190,7 @@ impl RunStore {
         Self {
             base_dir: Arc::new(base_dir),
             token_summary_lock: shared_token_summary_lock(&lock_key),
+            messages_lock: shared_messages_lock(&lock_key),
         }
     }
 
@@ -151,6 +237,36 @@ impl RunStore {
         self.append_entry(run_id, kind, payload)?;
         let _ = self.update_scorecard_from_note(run_id, kind, &scorecard_payload);
         Ok(())
+    }
+
+    pub fn append_message(&self, run_id: &str, message: AgentMessage) -> Result<(), CoreError> {
+        let _guard = self
+            .messages_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut messages = self
+            .read_json_artifact_optional::<Vec<AgentMessage>>(run_id, "messages.json")?
+            .unwrap_or_default();
+        messages.push(message.clone());
+        self.write_json_artifact(run_id, "messages.json", &messages)?;
+        self.append_note(
+            run_id,
+            "agent-message",
+            serde_json::json!({
+                "id": message.id,
+                "from": message.from,
+                "to": message.to,
+                "kind": message.kind,
+                "body": message.body,
+                "payload": message.payload,
+            }),
+        )
+    }
+
+    pub fn read_messages(&self, run_id: &str) -> Result<Vec<AgentMessage>, CoreError> {
+        Ok(self
+            .read_json_artifact_optional::<Vec<AgentMessage>>(run_id, "messages.json")?
+            .unwrap_or_default())
     }
 
     pub fn finish_run(
@@ -864,6 +980,19 @@ fn shared_token_summary_lock(base_dir: &PathBuf) -> Arc<Mutex<()>> {
         .clone()
 }
 
+fn shared_messages_lock(base_dir: &PathBuf) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .entry(base_dir.clone())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,6 +1059,37 @@ mod tests {
                 "workflow-request.json".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn agent_messages_round_trip_and_append_to_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("workflow", "coordinate agents", "hosted-mcp", None)
+            .unwrap();
+
+        let message = AgentMessage::new(
+            &run.id,
+            "Planner",
+            Some("Coder".to_string()),
+            AgentMessageKind::Handoff,
+            "Implement the selected plan.",
+            serde_json::json!({ "step": "implement" }),
+        );
+        store.append_message(&run.id, message.clone()).unwrap();
+
+        let messages = store.read_messages(&run.id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].from, "Planner");
+        assert_eq!(messages[0].to.as_deref(), Some("Coder"));
+        assert_eq!(messages[0].kind, AgentMessageKind::Handoff);
+
+        let detail = store.load_run(&run.id).unwrap();
+        assert!(detail
+            .entries
+            .iter()
+            .any(|entry| entry.kind == "agent-message"));
     }
 
     #[test]

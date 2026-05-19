@@ -12,7 +12,7 @@
 | M1 | ✅ Complete | Consistent retrieval + execution behavior | Warmup indexing bounds, shared skill executor path, telemetry artifact generation, persona policy enforcement | none | core paths green + artifacts persisted |
 | M2 | ✅ Complete | User-facing observability | run-detail API extension, dashboard telemetry/policy/token cards, docs updates | M1 | artifacts visible in UI and validated |
 | M3 | 📋 Planned | Safe rollout | strict-mode rollout matrix, KPI baseline tracking, rollback playbook | M2 | measured rollout decision gates |
-| M4 | 🚧 In Progress | Stronger long-lived runtime and operator UX | runtime session inventory, CLI status watch/filter, provider readiness, artifact/mock viewer v1, repository skill catalog import with bulk install, artifact versioning, usable TUI, session notes, memory lifecycle improvements | M2 | sessions resumable, runtime visible in dashboard/TUI, first operator-grade terminal flow usable, visual artifacts reviewable in dashboard |
+| M4 | 🚧 In Progress | Stronger long-lived runtime and operator UX | runtime session inventory, CLI status watch/filter, operator TUI v1, structured agent messages, provider readiness, artifact/mock viewer v1, repository skill catalog import with bulk install, artifact versioning, session notes, memory lifecycle improvements | M2 | sessions resumable, runtime visible in dashboard/TUI, first operator-grade terminal flow usable, visual artifacts reviewable in dashboard |
 
 ## Parallel Workstreams
 1. Backend: retriever/executor/policy and artifact persistence.

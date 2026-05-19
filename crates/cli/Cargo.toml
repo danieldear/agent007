@@ -39,6 +39,8 @@ chrono = { workspace = true }
 globset = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

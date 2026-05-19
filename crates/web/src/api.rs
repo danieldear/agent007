@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
@@ -40,11 +40,6 @@ fn dashboard_controls_workflow(kind: &str) -> bool {
 
 fn run_store_for_web() -> agent007_core::RunStore {
     agent007_core::RunStore::new(agent007_write_home().join("sessions"))
-}
-
-fn runtime_messages_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn validate_existing_run_id(run_id: &str) -> Result<(), (StatusCode, Json<Value>)> {
@@ -534,18 +529,32 @@ pub struct RuntimeMessage {
     pub id: String,
     pub run_id: String,
     pub created_at: String,
+    pub session_id: Option<String>,
+    pub from: String,
+    pub to: Option<String>,
     pub author: String,
     pub kind: String,
     pub body: String,
+    #[serde(default)]
+    #[ts(type = "Record<string, unknown>")]
+    pub payload: Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "frontend/src/types/")]
 pub struct RuntimeMessageRequest {
+    #[serde(default)]
     pub author: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
     #[serde(default = "default_runtime_message_kind")]
     pub kind: String,
     pub body: String,
+    #[serde(default)]
+    #[ts(type = "Record<string, unknown>")]
+    pub payload: Value,
 }
 
 fn default_runtime_message_kind() -> String {
@@ -557,6 +566,24 @@ fn default_runtime_message_kind() -> String {
 pub struct RuntimeMessagesResponse {
     pub run_id: String,
     pub messages: Vec<RuntimeMessage>,
+}
+
+impl From<agent007_core::AgentMessage> for RuntimeMessage {
+    fn from(message: agent007_core::AgentMessage) -> Self {
+        let from = message.from;
+        Self {
+            id: message.id,
+            run_id: message.run_id,
+            created_at: message.created_at.to_rfc3339(),
+            session_id: message.session_id,
+            author: from.clone(),
+            from,
+            to: message.to,
+            kind: message.kind.to_string(),
+            body: message.body,
+            payload: message.payload,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, TS)]
@@ -1186,10 +1213,10 @@ pub async fn runtime_messages_list_handler(Path(run_id): Path<String>) -> impl I
         return response.into_response();
     }
     let store = run_store_for_web();
-    match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
+    match store.read_messages(&run_id) {
         Ok(messages) => Json(RuntimeMessagesResponse {
             run_id,
-            messages: messages.unwrap_or_default(),
+            messages: messages.into_iter().map(RuntimeMessage::from).collect(),
         })
         .into_response(),
         Err(e) => (
@@ -1215,59 +1242,35 @@ pub async fn runtime_messages_post_handler(
         )
             .into_response();
     }
-    let author = payload.author.trim();
+    let author = payload
+        .from
+        .as_deref()
+        .unwrap_or(payload.author.as_str())
+        .trim();
     let kind = payload.kind.trim();
-    let message = RuntimeMessage {
-        id: uuid::Uuid::new_v4().to_string(),
-        run_id: run_id.clone(),
-        created_at: Utc::now().to_rfc3339(),
-        author: if author.is_empty() {
+    let message = agent007_core::AgentMessage::new(
+        &run_id,
+        if author.is_empty() {
             "operator".to_string()
         } else {
             author.to_string()
         },
-        kind: if kind.is_empty() {
-            "note".to_string()
-        } else {
-            kind.to_string()
-        },
-        body: body.to_string(),
-    };
+        payload.to.filter(|value| !value.trim().is_empty()),
+        kind.parse()
+            .unwrap_or(agent007_core::AgentMessageKind::Note),
+        body.to_string(),
+        payload.payload,
+    );
 
     let store = run_store_for_web();
-    let _guard = runtime_messages_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut messages =
-        match store.read_json_artifact_optional::<Vec<RuntimeMessage>>(&run_id, "messages.json") {
-            Ok(messages) => messages.unwrap_or_default(),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response()
-            }
-        };
-    messages.push(message.clone());
-    if let Err(e) = store.write_json_artifact(&run_id, "messages.json", &messages) {
+    if let Err(e) = store.append_message(&run_id, message.clone()) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response();
     }
-    let _ = store.append_note(
-        &run_id,
-        "runtime-message",
-        serde_json::json!({
-            "id": message.id,
-            "author": message.author,
-            "kind": message.kind,
-            "body": message.body,
-        }),
-    );
-    Json(message).into_response()
+    Json(RuntimeMessage::from(message)).into_response()
 }
 
 /// `GET /api/providers/status` — provider readiness without exposing secrets.
