@@ -105,11 +105,19 @@ impl VectorDB for LanceDBStore {
 
     async fn delete_doc(&self, doc_id: &str) -> Result<(), MemoryError> {
         let table = self.table.write().await;
-        // Escape single quotes to prevent injection through doc_id values.
-        let safe = doc_id.replace('\'', "\\'");
+        // SQL standard single-quote escaping: double the quote character.
+        let safe = doc_id.replace('\'', "''");
+        // Escape LIKE wildcards so literal % and _ in doc_id are not
+        // misinterpreted, using backslash as the ESCAPE character.
+        let like_safe = safe
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         // Delete the exact id and all chunk ids of the form "doc_id#N".
         table
-            .delete(&format!("id = '{safe}' OR id LIKE '{safe}#%'"))
+            .delete(&format!(
+                "id = '{safe}' OR id LIKE '{like_safe}#%' ESCAPE '\\'"
+            ))
             .await
             .map(|_| ())
             .map_err(|e| MemoryError::VectorDb(e.to_string()))

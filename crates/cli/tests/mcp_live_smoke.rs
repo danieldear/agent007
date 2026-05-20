@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use agent007_core::RunStore;
 use agent007_mcp::{McpClient, McpServerConfig};
@@ -227,13 +228,13 @@ async fn live_mcp_server_exposes_and_records_new_compact_context_tools() {
         repo_brain["repo_brain"]["project_name"].as_str().unwrap(),
         "fixture-project"
     );
-    let repo_brain_note = fs::read_to_string(
-        agent_home
-            .join("memory")
-            .join("project")
-            .join("repo_brain.md"),
-    )
-    .unwrap();
+    // Read back via the store API (SQLite-backed; no .md file on disk).
+    let mem_store = Arc::new(agent007_memory::MemoryStore::new(agent_home.join("memory")));
+    let repo_brain_note = mem_store
+        .scoped("project")
+        .read("repo_brain")
+        .unwrap()
+        .unwrap();
     assert!(repo_brain_note.contains("# Repo Brain: fixture-project"));
     let repo_brain_markdown = store
         .read_text_artifact(repo_brain_run_id, "repo-brain.md")

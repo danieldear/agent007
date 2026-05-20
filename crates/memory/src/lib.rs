@@ -19,13 +19,24 @@ pub use vectordb::{SearchResult, VectorDB};
 ///
 /// Returns the [`tokio::task::JoinHandle`] for the background task.  Callers may
 /// drop the handle — the task will keep running as long as the store is alive.
+/// Capacity of the background-indexer task queue.
+/// Writes that would exceed this limit are dropped (with a debug log) rather
+/// than growing the queue without bound and risking OOM during fast write bursts.
+const INDEXER_CHANNEL_CAPACITY: usize = 1_024;
+
 pub fn start_background_indexer(
     store: &std::sync::Arc<MemoryStore>,
     indexer: std::sync::Arc<Indexer>,
 ) -> tokio::task::JoinHandle<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<IndexTask>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<IndexTask>(INDEXER_CHANNEL_CAPACITY);
     if !store.set_index_channel(tx) {
-        tracing::warn!("start_background_indexer: index channel already set on this MemoryStore");
+        // Channel already set on this store — don't spawn a second consumer or
+        // the existing receiver would starve and never see half the messages.
+        tracing::warn!(
+            "start_background_indexer: index channel already set on this MemoryStore; \
+             skipping duplicate indexer spawn"
+        );
+        return tokio::spawn(async {});
     }
     tokio::spawn(async move {
         while let Some(task) = rx.recv().await {

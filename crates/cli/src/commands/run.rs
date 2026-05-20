@@ -1661,13 +1661,6 @@ mod tests {
             .await
             .unwrap();
 
-        let task_last = tmp
-            .path()
-            .join("memory")
-            .join("project")
-            .join("task_last.md");
-        assert!(task_last.exists(), "task_last memory record should exist");
-
         let store = Arc::new(agent007_memory::store::MemoryStore::new(
             tmp.path().join("memory"),
         ));

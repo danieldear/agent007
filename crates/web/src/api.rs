@@ -863,7 +863,7 @@ pub async fn skills_run_handler(
     let vectordb_path = agent007_write_home().join("vectordb");
     let _ = std::fs::create_dir_all(&vectordb_path);
     let db: Arc<dyn agent007_memory::VectorDB> = match agent007_memory::vectordb::LanceDBStore::new(
-        vectordb_path.to_str().unwrap_or(".lance"),
+        &vectordb_path.to_string_lossy(),
         "skills",
         384,
     )
