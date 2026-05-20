@@ -572,4 +572,98 @@ persona = "worker-a"
         let def: WorkflowDef = toml::from_str(MINIMAL_TOML).unwrap();
         assert!(def.steps[0].workers.is_none());
     }
+
+    #[test]
+    fn worker_with_empty_persona_fails_validation() {
+        let toml_str = r#"
+name = "Bad Worker"
+
+[[steps]]
+id = "analyse"
+type = "multi-agent"
+agent = "lead"
+prompt = "go"
+
+[[steps.workers]]
+persona = ""
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let result = def.validate_schema();
+        assert!(result.is_err(), "empty persona should fail validation");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-empty"),
+            "error should mention non-empty requirement: {msg}"
+        );
+        assert!(msg.contains("analyse"), "error should name the step: {msg}");
+    }
+
+    #[test]
+    fn worker_with_whitespace_only_persona_fails_validation() {
+        let toml_str = r#"
+name = "Whitespace Persona"
+
+[[steps]]
+id = "compute"
+type = "multi-agent"
+agent = "lead"
+prompt = "go"
+
+[[steps.workers]]
+persona = "   "
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let result = def.validate_schema();
+        assert!(result.is_err(), "whitespace-only persona should fail validation");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-empty"),
+            "error should mention non-empty requirement: {msg}"
+        );
+    }
+
+    #[test]
+    fn worker_skills_default_to_empty_when_absent() {
+        let toml_str = r#"
+name = "No Skills"
+
+[[steps]]
+id = "step1"
+type = "multi-agent"
+agent = "orch"
+prompt = "go"
+
+[[steps.workers]]
+persona = "analyst"
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let worker = &def.steps[0].workers.as_ref().unwrap()[0];
+        assert!(
+            worker.skills.is_empty(),
+            "skills should default to empty vec when not specified"
+        );
+    }
+
+    #[test]
+    fn worker_skills_round_trip_multiple_values() {
+        let toml_str = r#"
+name = "With Skills"
+
+[[steps]]
+id = "step1"
+type = "multi-agent"
+agent = "orch"
+prompt = "go"
+
+[[steps.workers]]
+persona = "coder"
+skills = ["dev-debug", "code-review", "style-guide"]
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let worker = &def.steps[0].workers.as_ref().unwrap()[0];
+        assert_eq!(
+            worker.skills,
+            vec!["dev-debug", "code-review", "style-guide"]
+        );
+    }
 }

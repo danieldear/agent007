@@ -134,8 +134,6 @@ These are merged with the persona's own `skills` list before injection.
 
 ---
 
----
-
 ## CLI usage
 
 ```
@@ -286,20 +284,34 @@ Or via MCP:
 
 ### Limiting recursion depth
 
-`SubOrchestrator::new` accepts `depth` (current) and `max_depth`.
+`SubOrchestrator::from_persona` accepts `depth` (current) and `max_depth`.
 The CLI and MCP handler hard-code `depth=0, max_depth=3`.
 Reduce `max_depth` if you want shallower delegation trees.
 
 ### Model selection
 
-Add `model = "claude-opus-4"` (or any router alias) to the agent TOML to
-pin a particular model for that agent's planning and worker calls.
+Add `preferred_model = "claude-opus-4"` (or any router alias) to the persona TOML
+to pin a particular model for that agent's planning and worker calls.
 
 ### Zone enforcement
 
 Agents honour the same zone rules as the main `run` command.
-Declare `[zones]` in the agent TOML to restrict which paths workers
+Declare `[zones]` in the persona TOML to restrict which paths workers
 may touch. The orchestrator checks zones before dispatching.
+
+### Wiring up the skill provider
+
+To avoid per-step disk reads, pass a pre-built `SkillIndex` at runner construction:
+
+```rust
+let skills_dir = agent007_home().join("skills");
+let index = SkillIndex::from_skills(SkillLoader::new(&skills_dir).load_all()?);
+let runner = WorkflowRunner::new(persona_provider, model_router, dispatcher)
+    .with_skill_provider(Arc::new(index));
+```
+
+If `with_skill_provider` is not called, the runner falls back to a lazy per-step disk
+load and logs a warning. Skill injection still works; it is just slightly slower.
 
 ---
 
@@ -307,7 +319,8 @@ may touch. The orchestrator checks zones before dispatching.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Agent 'x' not found` | No TOML file for that name | Run `agent007 agent list` |
-| `allowed_workers is empty` | Sub-orchestrator TOML missing `allowed_workers` | Edit the TOML |
-| Workers produce generic output | Personas for `allowed_workers` names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona files for each worker name, or use built-in names (`coder`, `reviewer`, `planner`) |
-| `MaxDepthExceeded` | Agent called itself recursively | Reduce max_depth or check TOML |
+| `persona 'x' not found for multi-agent step` | No persona TOML (or built-in) with that name | Run `agent007 persona list` |
+| `allowed_workers is empty` | Persona missing `allowed_workers` or step has no `[[steps.workers]]` entries | Add workers to the workflow step or set `allowed_workers` in the persona TOML |
+| Workers produce generic output | Personas for worker names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona files for each worker name, or use built-in names (`coder`, `reviewer`, `planner`) |
+| `MaxDepthExceeded` | Agent called itself recursively | Reduce `max_depth` at runner construction |
+| Skills not injected | `with_skill_provider` not called on `WorkflowRunner` | Pass a `SkillIndex` via `runner.with_skill_provider(Arc::new(index))` |

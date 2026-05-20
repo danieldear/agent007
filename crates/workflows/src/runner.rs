@@ -3018,6 +3018,88 @@ mod tests {
 
     // ── minify_context unit tests ────────────────────────────────────────────
 
+    // ── skill_content_provider builder ─────────────────────────────────────────
+
+    #[test]
+    fn with_skill_provider_sets_field() {
+        let runner = mock_runner("ok");
+        assert!(
+            runner.skill_content_provider.is_none(),
+            "skill_content_provider should start as None"
+        );
+        let runner = runner
+            .with_skill_provider(Arc::new(agent007_skills::NoOpSkillContentProvider));
+        assert!(
+            runner.skill_content_provider.is_some(),
+            "with_skill_provider should set the field"
+        );
+    }
+
+    #[test]
+    fn with_skill_provider_replaces_existing_provider() {
+        use agent007_skills::{Skill, SkillFrontmatter, SkillIndex};
+        let first_provider = Arc::new(agent007_skills::NoOpSkillContentProvider);
+        let skill = Skill {
+            frontmatter: SkillFrontmatter {
+                name: "dev-debug".to_string(),
+                description: "debug".to_string(),
+                trigger: "dev-debug".to_string(),
+                model: "claude".to_string(),
+                category: "dev".to_string(),
+                version: "1.0.0".to_string(),
+                tags: vec![],
+            },
+            template: "debug knowledge".to_string(),
+            manifest_path: std::path::PathBuf::from("test.md"),
+            entry_path: std::path::PathBuf::from("test.md"),
+            skill_dir: std::path::PathBuf::from("."),
+        };
+        let second_provider = Arc::new(SkillIndex::from_skills(vec![skill]));
+        let runner = mock_runner("ok")
+            .with_skill_provider(first_provider)
+            .with_skill_provider(second_provider);
+        let sp = runner.skill_content_provider.as_ref().unwrap();
+        // Second provider has content; if it was replaced correctly, lookup succeeds.
+        assert!(
+            sp.load_content("dev-debug").is_some(),
+            "last-set provider should be active"
+        );
+    }
+
+    // ── WorkerConfig → WorkerSpec mapping ──────────────────────────────────────
+
+    #[test]
+    fn worker_config_to_worker_spec_preserves_name_and_skills() {
+        use crate::types::{WorkerConfig, WorkerRunMode};
+        use agent007_custom_agents::WorkerSpec;
+
+        let wcs = vec![
+            WorkerConfig {
+                persona: "analyst".to_string(),
+                skills: vec!["data-analysis".to_string()],
+                run: WorkerRunMode::Parallel,
+            },
+            WorkerConfig {
+                persona: "writer".to_string(),
+                skills: vec!["technical-writing".to_string(), "style-guide".to_string()],
+                run: WorkerRunMode::Sequential,
+            },
+        ];
+
+        let specs: Vec<WorkerSpec> = wcs
+            .iter()
+            .map(|wc| WorkerSpec {
+                name: wc.persona.clone(),
+                skills: wc.skills.clone(),
+            })
+            .collect();
+
+        assert_eq!(specs[0].name, "analyst");
+        assert_eq!(specs[0].skills, vec!["data-analysis"]);
+        assert_eq!(specs[1].name, "writer");
+        assert_eq!(specs[1].skills, vec!["technical-writing", "style-guide"]);
+    }
+
     #[test]
     fn minify_collapses_excess_blank_lines() {
         let input = "line1\n\n\n\n\nline2\n";

@@ -1097,4 +1097,174 @@ mod tests {
         let outputs = orch.dispatch_parallel(subtasks, AgentId::new()).await;
         assert_eq!(outputs.len(), 1, "worker should complete");
     }
+
+    /// FR-4.2: merged skills deduplicate when persona.skills and WorkerSpec.skills overlap.
+    ///
+    /// Uses a capturing `ModelProvider` to record the `system` field of the
+    /// CompletionRequest, then asserts the shared skill body appears exactly
+    /// once and the unique skill body appears exactly once.
+    #[tokio::test]
+    async fn dispatch_parallel_deduplicates_overlapping_skills() {
+        use agent007_core::persona::PersonaSpec;
+        use agent007_models::types::{CompletionRequest, CompletionResponse};
+        use agent007_models::{ModelError, ModelProvider};
+        use async_trait::async_trait;
+        use std::sync::Mutex as StdMutex;
+
+        // A provider that records the `system` prompt for each call.
+        struct CapturingProvider {
+            systems: Arc<StdMutex<Vec<Option<String>>>>,
+        }
+        #[async_trait]
+        impl ModelProvider for CapturingProvider {
+            fn name(&self) -> &str {
+                "capturing"
+            }
+            async fn complete(
+                &self,
+                req: CompletionRequest,
+            ) -> Result<CompletionResponse, ModelError> {
+                self.systems.lock().unwrap().push(req.system.clone());
+                Ok(CompletionResponse {
+                    content: "done".to_string(),
+                    model: "capturing".to_string(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    cached_tokens: None,
+                })
+            }
+        }
+
+        let captured: Arc<StdMutex<Vec<Option<String>>>> = Arc::new(StdMutex::new(vec![]));
+        let provider = Arc::new(CapturingProvider {
+            systems: Arc::clone(&captured),
+        });
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let mut router = ModelRouter::new("capturing");
+        router.register("capturing", provider as Arc<dyn ModelProvider>);
+        let router = Arc::new(router);
+        let dispatcher = LocalDispatcher::new(64);
+
+        // Worker persona has "shared-skill" as default.
+        let worker_persona = PersonaSpec {
+            name: "DedupeWorker".to_string(),
+            description: "worker for dedup test".to_string(),
+            system_prompt: "You are a worker.".to_string(),
+            preferred_model: "capturing".to_string(),
+            allowed_tools: vec![],
+            memory_namespace: None,
+            zones: None,
+            skills: vec!["shared-skill".to_string()],
+            agent_type: None,
+            allowed_workers: None,
+        };
+
+        // PersonaProvider that returns our worker persona.
+        struct SinglePersonaProvider(PersonaSpec);
+        impl agent007_core::persona::PersonaProvider for SinglePersonaProvider {
+            fn get(&self, name: &str) -> Option<PersonaSpec> {
+                if name == self.0.name { Some(self.0.clone()) } else { None }
+            }
+            fn list(&self) -> Vec<PersonaSpec> {
+                vec![self.0.clone()]
+            }
+        }
+
+        // WorkerSpec also lists "shared-skill" (overlap) plus "unique-skill".
+        let worker_specs = vec![WorkerSpec {
+            name: "DedupeWorker".to_string(),
+            skills: vec!["shared-skill".to_string(), "unique-skill".to_string()],
+        }];
+
+        // Skill provider returns distinct bodies for each trigger.
+        // Build a two-skill index directly (shared-skill + unique-skill).
+        let unique_skill = {
+            use agent007_skills::{Skill, SkillFrontmatter};
+            Skill {
+                frontmatter: SkillFrontmatter {
+                    name: "unique-skill".to_string(),
+                    description: "unique".to_string(),
+                    trigger: "unique-skill".to_string(),
+                    model: "claude".to_string(),
+                    category: "test".to_string(),
+                    version: "1.0.0".to_string(),
+                    tags: vec![],
+                },
+                template: "UNIQUE_BODY".to_string(),
+                manifest_path: std::path::PathBuf::from("u.md"),
+                entry_path: std::path::PathBuf::from("u.md"),
+                skill_dir: std::path::PathBuf::from("."),
+            }
+        };
+        let shared_skill = {
+            use agent007_skills::{Skill, SkillFrontmatter};
+            Skill {
+                frontmatter: SkillFrontmatter {
+                    name: "shared-skill".to_string(),
+                    description: "shared".to_string(),
+                    trigger: "shared-skill".to_string(),
+                    model: "claude".to_string(),
+                    category: "test".to_string(),
+                    version: "1.0.0".to_string(),
+                    tags: vec![],
+                },
+                template: "SHARED_BODY".to_string(),
+                manifest_path: std::path::PathBuf::from("s.md"),
+                entry_path: std::path::PathBuf::from("s.md"),
+                skill_dir: std::path::PathBuf::from("."),
+            }
+        };
+        let index = agent007_skills::SkillIndex::from_skills(vec![shared_skill, unique_skill]);
+
+        let mut orch_persona = make_persona("DedupeOrch", "Orchestrate.");
+        orch_persona.allowed_workers = Some(vec!["DedupeWorker".to_string()]);
+
+        let scoped = Arc::new(store.scoped("dedupe-ns"));
+        let orch = SubOrchestrator::from_persona(
+            &orch_persona,
+            worker_specs,
+            Arc::new(index),
+            scoped,
+            router,
+            Arc::new(SinglePersonaProvider(worker_persona)),
+            dispatcher,
+            0,
+            3,
+        );
+
+        let subtasks = vec![SubTask {
+            worker_name: "DedupeWorker".into(),
+            description: "run dedup test".into(),
+        }];
+
+        orch.dispatch_parallel(subtasks, AgentId::new()).await;
+
+        // Inspect the captured system prompt.
+        let systems = captured.lock().unwrap();
+        // The worker dispatch sends one completion request.
+        assert!(!systems.is_empty(), "at least one model call should have been made");
+        let system_prompt = systems[0].as_deref().unwrap_or("");
+
+        // "SHARED_BODY" must appear exactly once (dedup prevents double injection).
+        let shared_count = system_prompt.matches("SHARED_BODY").count();
+        assert_eq!(
+            shared_count, 1,
+            "shared skill body should appear exactly once (was {shared_count} times): {system_prompt}"
+        );
+
+        // "UNIQUE_BODY" must appear exactly once.
+        let unique_count = system_prompt.matches("UNIQUE_BODY").count();
+        assert_eq!(
+            unique_count, 1,
+            "unique skill body should appear exactly once (was {unique_count} times): {system_prompt}"
+        );
+
+        // Original system prompt still present.
+        assert!(
+            system_prompt.contains("You are a worker."),
+            "original worker system prompt should be present: {system_prompt}"
+        );
+    }
 }

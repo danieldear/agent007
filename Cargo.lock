@@ -85,6 +85,7 @@ dependencies = [
  "agent007-models",
  "agent007-skills",
  "agent007-zones",
+ "async-trait",
  "chrono",
  "futures",
  "serde",

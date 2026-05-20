@@ -19,5 +19,6 @@ futures   = { workspace = true }
 
 [dev-dependencies]
 agent007-zones = { path = "../zones" }
+async-trait    = { workspace = true }
 tempfile       = { workspace = true }
 tokio          = { workspace = true, features = ["full", "test-util"] }
