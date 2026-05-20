@@ -25,8 +25,8 @@ pub use events::AgentEvent;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
 pub use run_store::{
-    RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus, RunStore,
-    TOKEN_PRICE_PER_TOKEN_USD,
+    AgentMessage, AgentMessageKind, RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus,
+    RunStore, TOKEN_PRICE_PER_TOKEN_USD,
 };
 pub use task::{Task, TaskQueue, TaskResult};
 pub use types::{AgentId, MemoryRef, PromptRef, PromptStore};

@@ -24,6 +24,8 @@ const artifactPreviewStatus = ref('')
 const artifactPreviewRef = ref(null)
 const runtimeMessages = ref([])
 const runtimeMessageText = ref('')
+const runtimeMessageKind = ref('note')
+const runtimeMessageTo = ref('')
 const runtimeMessageStatus = ref('')
 const runtimeMessageBusy = ref(false)
 const approvalStatus = ref('')
@@ -564,6 +566,8 @@ async function selectRun(id) {
 function clearRuntimeMessages() {
   runtimeMessages.value = []
   runtimeMessageText.value = ''
+  runtimeMessageKind.value = 'note'
+  runtimeMessageTo.value = ''
   runtimeMessageStatus.value = ''
   runtimeMessageBusy.value = false
 }
@@ -587,11 +591,13 @@ async function postRuntimeMessage() {
   runtimeMessageStatus.value = 'Saving note...'
   try {
     await api.postRuntimeMessage(selectedRunId.value, {
-      author: 'operator',
-      kind: 'note',
+      from: 'operator',
+      to: runtimeMessageTo.value.trim() || null,
+      kind: runtimeMessageKind.value,
       body: runtimeMessageText.value.trim(),
     })
     runtimeMessageText.value = ''
+    runtimeMessageTo.value = ''
     runtimeMessageStatus.value = ''
     await loadRuntimeMessages(selectedRunId.value)
     selectedRun.value = await api.getRunDetail(selectedRunId.value)
@@ -1179,7 +1185,8 @@ async function submitTask() {
                   >
                     <div class="flex items-center justify-between gap-2 mb-1">
                       <div class="flex items-center gap-2">
-                        <span class="font-mono text-xs text-base-content/70">{{ message.author || 'operator' }}</span>
+                        <span class="font-mono text-xs text-base-content/70">{{ message.from || message.author || 'operator' }}</span>
+                        <span v-if="message.to" class="font-mono text-[10px] text-base-content/35">→ {{ message.to }}</span>
                         <span class="badge badge-xs badge-ghost font-mono">{{ message.kind || 'note' }}</span>
                       </div>
                       <span class="text-[10px] text-base-content/30 font-mono">{{ fmtLocalTime(message.created_at) }}</span>
@@ -1189,6 +1196,22 @@ async function submitTask() {
                 </div>
                 <div v-else class="rounded-lg border border-dashed border-base-300 bg-base-100/40 p-3 mb-3 font-mono text-xs text-base-content/35">
                   No notes yet. Add a compact handoff, decision, or next-action note.
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2">
+                  <select v-model="runtimeMessageKind" class="select select-bordered select-sm md:col-span-3 font-mono text-xs">
+                    <option value="note">note</option>
+                    <option value="request">request</option>
+                    <option value="handoff">handoff</option>
+                    <option value="progress">progress</option>
+                    <option value="warning">warning</option>
+                    <option value="result">result</option>
+                  </select>
+                  <input
+                    v-model="runtimeMessageTo"
+                    class="input input-bordered input-sm md:col-span-9 font-mono text-xs"
+                    placeholder="optional target agent/session e.g. Coder"
+                  />
                 </div>
 
                 <div class="flex flex-col lg:flex-row gap-2">
