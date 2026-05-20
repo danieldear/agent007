@@ -111,8 +111,7 @@ impl SubOrchestrator {
         let mut system_prompt = persona.system_prompt.clone();
         for trigger in &persona.skills {
             if let Some(body) = skill_provider.load_content(trigger) {
-                system_prompt =
-                    format!("## Domain Knowledge\n\n{body}\n\n---\n\n{system_prompt}");
+                system_prompt = format!("## Domain Knowledge\n\n{body}\n\n---\n\n{system_prompt}");
             }
         }
 
@@ -382,8 +381,7 @@ impl SubOrchestrator {
                 let mut injected = String::new();
                 for trigger in &merged_skills {
                     if let Some(body) = skill_provider.load_content(trigger) {
-                        injected
-                            .push_str(&format!("## Domain Knowledge\n\n{body}\n\n---\n\n"));
+                        injected.push_str(&format!("## Domain Knowledge\n\n{body}\n\n---\n\n"));
                     }
                 }
                 if injected.is_empty() {
@@ -1014,10 +1012,7 @@ mod tests {
             zones.readonly.as_deref(),
             Some(&["config/".to_string()][..])
         );
-        assert!(
-            zones.sensitive.is_none(),
-            "empty vec should map to None"
-        );
+        assert!(zones.sensitive.is_none(), "empty vec should map to None");
     }
 
     #[test]
@@ -1048,9 +1043,17 @@ mod tests {
             3,
         );
         assert_eq!(orch.worker_specs.len(), 2);
-        let analyst = orch.worker_specs.iter().find(|ws| ws.name == "AnalystWorker").unwrap();
+        let analyst = orch
+            .worker_specs
+            .iter()
+            .find(|ws| ws.name == "AnalystWorker")
+            .unwrap();
         assert_eq!(analyst.skills, vec!["data-analysis"]);
-        let writer = orch.worker_specs.iter().find(|ws| ws.name == "WriterWorker").unwrap();
+        let writer = orch
+            .worker_specs
+            .iter()
+            .find(|ws| ws.name == "WriterWorker")
+            .unwrap();
         assert_eq!(writer.skills, vec!["technical-writing", "style-guide"]);
     }
 
@@ -1165,7 +1168,11 @@ mod tests {
         struct SinglePersonaProvider(PersonaSpec);
         impl agent007_core::persona::PersonaProvider for SinglePersonaProvider {
             fn get(&self, name: &str) -> Option<PersonaSpec> {
-                if name == self.0.name { Some(self.0.clone()) } else { None }
+                if name == self.0.name {
+                    Some(self.0.clone())
+                } else {
+                    None
+                }
             }
             fn list(&self) -> Vec<PersonaSpec> {
                 vec![self.0.clone()]
@@ -1244,7 +1251,10 @@ mod tests {
         // Inspect the captured system prompt.
         let systems = captured.lock().unwrap();
         // The worker dispatch sends one completion request.
-        assert!(!systems.is_empty(), "at least one model call should have been made");
+        assert!(
+            !systems.is_empty(),
+            "at least one model call should have been made"
+        );
         let system_prompt = systems[0].as_deref().unwrap_or("");
 
         // "SHARED_BODY" must appear exactly once (dedup prevents double injection).

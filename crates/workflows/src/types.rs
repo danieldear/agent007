@@ -542,7 +542,10 @@ prompt = "{{task}}"
         let result = def.validate_schema();
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("multi-agent"), "error should mention multi-agent: {msg}");
+        assert!(
+            msg.contains("multi-agent"),
+            "error should mention multi-agent: {msg}"
+        );
         assert!(msg.contains("bad"), "error should mention step id: {msg}");
     }
 
@@ -614,7 +617,10 @@ persona = "   "
 "#;
         let def: WorkflowDef = toml::from_str(toml_str).unwrap();
         let result = def.validate_schema();
-        assert!(result.is_err(), "whitespace-only persona should fail validation");
+        assert!(
+            result.is_err(),
+            "whitespace-only persona should fail validation"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("non-empty"),

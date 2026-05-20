@@ -365,7 +365,9 @@ impl WorkflowRunner {
                     if step.r#type == StepType::MultiAgent {
                         // Capture the skill provider from the runner field, or fall back to a
                         // lazy disk load (and warn so the caller knows to wire it up properly).
-                        let skill_provider_for_step: Arc<dyn agent007_skills::SkillContentProvider> = {
+                        let skill_provider_for_step: Arc<
+                            dyn agent007_skills::SkillContentProvider,
+                        > = {
                             if let Some(ref sp) = self.skill_content_provider {
                                 Arc::clone(sp)
                             } else {
@@ -378,9 +380,9 @@ impl WorkflowRunner {
                                 let skills_dir =
                                     agent007_core::paths::agent007_home().join("skills");
                                 match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
-                                    Ok(skills) => Arc::new(
-                                        agent007_skills::SkillIndex::from_skills(skills),
-                                    ),
+                                    Ok(skills) => {
+                                        Arc::new(agent007_skills::SkillIndex::from_skills(skills))
+                                    }
                                     Err(e) => {
                                         tracing::warn!(
                                             error = %e,
@@ -404,8 +406,8 @@ impl WorkflowRunner {
                                     WorkflowError::StepFailed {
                                         id: step.id.clone(),
                                         reason: format!(
-                                            "persona '{persona_name}' not found for multi-agent step"
-                                        ),
+                                        "persona '{persona_name}' not found for multi-agent step"
+                                    ),
                                     }
                                 })?;
 
@@ -425,8 +427,7 @@ impl WorkflowRunner {
                                 .unwrap_or_default();
 
                             // Construct a memory store keyed by persona namespace.
-                            let memory_dir =
-                                agent007_core::paths::agent007_home().join("memory");
+                            let memory_dir = agent007_core::paths::agent007_home().join("memory");
                             if let Err(e) = std::fs::create_dir_all(&memory_dir) {
                                 tracing::warn!(
                                     error = %e,
@@ -434,9 +435,8 @@ impl WorkflowRunner {
                                     "failed to create memory directory for multi-agent step"
                                 );
                             }
-                            let mem_store = Arc::new(
-                                agent007_memory::store::MemoryStore::new(&memory_dir),
-                            );
+                            let mem_store =
+                                Arc::new(agent007_memory::store::MemoryStore::new(&memory_dir));
                             let ns = persona_spec
                                 .memory_namespace
                                 .clone()
@@ -457,13 +457,12 @@ impl WorkflowRunner {
                                     3,
                                 );
 
-                            let result =
-                                orchestrator.run(&task_str).await.map_err(|e| {
-                                    WorkflowError::StepFailed {
-                                        id: step.id.clone(),
-                                        reason: format!("multi-agent step failed: {e}"),
-                                    }
-                                })?;
+                            let result = orchestrator.run(&task_str).await.map_err(|e| {
+                                WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!("multi-agent step failed: {e}"),
+                                }
+                            })?;
 
                             // Tokens are not tracked by SubOrchestrator today.
                             Ok((
@@ -3027,8 +3026,8 @@ mod tests {
             runner.skill_content_provider.is_none(),
             "skill_content_provider should start as None"
         );
-        let runner = runner
-            .with_skill_provider(Arc::new(agent007_skills::NoOpSkillContentProvider));
+        let runner =
+            runner.with_skill_provider(Arc::new(agent007_skills::NoOpSkillContentProvider));
         assert!(
             runner.skill_content_provider.is_some(),
             "with_skill_provider should set the field"

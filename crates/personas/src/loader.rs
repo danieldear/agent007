@@ -24,11 +24,10 @@ pub fn load_user_overrides(user_dir: &Path) -> Result<Vec<PersonaSpec>, PersonaE
         }
 
         let content = std::fs::read_to_string(&path)?;
-        let spec: PersonaSpec =
-            toml::from_str(&content).map_err(|e| PersonaError::ParseError {
-                path: path.clone(),
-                reason: e.to_string(),
-            })?;
+        let spec: PersonaSpec = toml::from_str(&content).map_err(|e| PersonaError::ParseError {
+            path: path.clone(),
+            reason: e.to_string(),
+        })?;
 
         specs.push(spec);
     }

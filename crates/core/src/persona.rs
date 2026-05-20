@@ -17,7 +17,6 @@ pub struct PersonaSpec {
     pub allowed_tools: Vec<String>,
 
     // ── Agent lifecycle fields (new — all optional) ───────────────────────────
-
     /// Scoped memory key prefix. Defaults to `self.name` at runtime when `None`.
     #[serde(default)]
     pub memory_namespace: Option<String>,

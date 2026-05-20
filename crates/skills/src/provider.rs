@@ -152,10 +152,7 @@ mod tests {
 
     #[test]
     fn index_len_reflects_skill_count() {
-        let skills = vec![
-            make_skill("/a", "body a"),
-            make_skill("/b", "body b"),
-        ];
+        let skills = vec![make_skill("/a", "body a"), make_skill("/b", "body b")];
         let index = SkillIndex::from_skills(skills);
         assert_eq!(index.len(), 2);
         assert!(!index.is_empty());
