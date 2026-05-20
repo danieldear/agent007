@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 /// Payload sent to the background vector indexer whenever a memory key is written.
 #[derive(Debug)]
@@ -366,7 +366,7 @@ pub struct MemoryStore {
     base_dir: PathBuf,
     conn: Arc<Mutex<Connection>>,
     /// Optional background indexing channel. Set once via [`MemoryStore::set_index_channel`].
-    index_tx: OnceLock<UnboundedSender<IndexTask>>,
+    index_tx: OnceLock<Sender<IndexTask>>,
 }
 
 impl MemoryStore {
@@ -377,10 +377,19 @@ impl MemoryStore {
         let db_path = base_dir.join("memory.db");
         let is_new = !db_path.exists();
 
-        let conn =
-            Connection::open(&db_path).expect("Failed to open SQLite memory database");
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .expect("Failed to configure SQLite pragmas");
+        // Fall back to an in-memory database on permission/disk errors so the
+        // process never crashes — data just won't survive restarts in that case.
+        let conn = Connection::open(&db_path).unwrap_or_else(|e| {
+            tracing::warn!(
+                path = %db_path.display(),
+                error = %e,
+                "Failed to open SQLite memory DB on disk; falling back to in-memory store"
+            );
+            Connection::open_in_memory().expect("Failed to open even an in-memory SQLite database")
+        });
+        if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;") {
+            tracing::warn!(error = %e, "Failed to configure SQLite pragmas (non-fatal)");
+        }
         conn.execute_batch(SCHEMA_SQL)
             .expect("Failed to create SQLite schema");
 
@@ -404,7 +413,7 @@ impl MemoryStore {
     /// [`IndexTask`] through `tx` so a background task can embed and index
     /// the content into a vector store.  Can only be set once; returns `true`
     /// if the channel was accepted, `false` if one was already set.
-    pub fn set_index_channel(&self, tx: UnboundedSender<IndexTask>) -> bool {
+    pub fn set_index_channel(&self, tx: Sender<IndexTask>) -> bool {
         self.index_tx.set(tx).is_ok()
     }
 
@@ -684,8 +693,7 @@ impl MemoryStore {
                     }
                 }
             }
-            let new_json =
-                serde_json::to_string(&related).unwrap_or_else(|_| "[]".to_string());
+            let new_json = serde_json::to_string(&related).unwrap_or_else(|_| "[]".to_string());
             conn.execute(
                 "UPDATE memory SET related_to = ?1 \
                  WHERE namespace = ?2 AND key = ?3",
@@ -774,15 +782,23 @@ impl MemoryStore {
     /// Fire-and-forget — a closed or lagging receiver is silently ignored.
     fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
         if let Some(tx) = self.index_tx.get() {
+            // Use "_root" for the empty (global) namespace to avoid colliding
+            // with a real namespace literally named "default".
             let ns_label = if namespace.is_empty() {
-                "default"
+                "_root"
             } else {
                 namespace
             };
-            let _ = tx.send(IndexTask {
+            let task = IndexTask {
                 doc_id: format!("memory:{ns_label}:{key}"),
                 content: value.to_string(),
-            });
+            };
+            if let Err(e) = tx.try_send(task) {
+                tracing::debug!(
+                    error = %e,
+                    "background indexer channel full or closed — dropping write-path index task"
+                );
+            }
         }
     }
 
@@ -799,7 +815,9 @@ impl MemoryStore {
             .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
 
         let rows: Vec<(String, String, String)> = stmt
-            .query_map(params![ns], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .query_map(params![ns], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .map_err(|e| MemoryError::VectorDb(e.to_string()))?
             .filter_map(|r| r.ok())
             .collect();
@@ -873,17 +891,17 @@ impl MemoryStore {
 
         let mut scored: Vec<(f64, String, String)> = rows
             .into_iter()
-            .filter(|(_, _, _, _, _, created_at, expires)| {
-                !is_entry_expired(created_at, expires)
-            })
-            .map(|(key, value, updated_at_str, access_count, confidence, _, _)| {
-                let updated_at = updated_at_str.parse::<DateTime<Utc>>().unwrap_or(now);
-                let age_secs = (now - updated_at).num_seconds().max(0) as f64;
-                let recency = 1.0 / (age_secs / 3600.0 + 1.0);
-                let score =
-                    0.5 * recency + 0.3 * (access_count as f64).ln_1p() + 0.2 * confidence;
-                (score, key, value)
-            })
+            .filter(|(_, _, _, _, _, created_at, expires)| !is_entry_expired(created_at, expires))
+            .map(
+                |(key, value, updated_at_str, access_count, confidence, _, _)| {
+                    let updated_at = updated_at_str.parse::<DateTime<Utc>>().unwrap_or(now);
+                    let age_secs = (now - updated_at).num_seconds().max(0) as f64;
+                    let recency = 1.0 / (age_secs / 3600.0 + 1.0);
+                    let score =
+                        0.5 * recency + 0.3 * (access_count as f64).ln_1p() + 0.2 * confidence;
+                    (score, key, value)
+                },
+            )
             .collect();
 
         let brain_pos = scored.iter().position(|(_, k, _)| k == "repo_brain");
@@ -1349,9 +1367,15 @@ mod tests {
             meta.words.contains(&"tokens".to_string()),
             "words should contain 'tokens'"
         );
+        // "with" is 4 chars (≥ 3-char threshold) and must be indexed.
         assert!(
-            !meta.words.contains(&"with".to_string()) || meta.words.contains(&"with".to_string()),
-            "words index built"
+            meta.words.contains(&"with".to_string()),
+            "'with' has 4 chars and should be in the word index"
+        );
+        // No token shorter than 3 chars should appear in the index.
+        assert!(
+            !meta.words.iter().any(|w| w.len() < 3),
+            "word index must not contain tokens shorter than 3 chars"
         );
     }
 
