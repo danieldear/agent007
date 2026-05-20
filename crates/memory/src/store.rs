@@ -1,9 +1,10 @@
 use crate::error::MemoryError;
 use chrono::{DateTime, Duration, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Payload sent to the background vector indexer whenever a memory key is written.
@@ -45,7 +46,6 @@ pub struct MemoryMeta {
     #[serde(default = "default_confidence")]
     pub confidence: f32,
     /// Pre-tokenized word index for fast RAG keyword matching.
-    /// Populated automatically on write; empty for legacy entries (triggers full-content fallback).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<String>,
 }
@@ -100,6 +100,7 @@ impl MemoryMeta {
 
 /// Parse YAML frontmatter from a memory file, returning (content, meta).
 /// Falls back to default meta for legacy files without frontmatter.
+/// Kept for flat-file migration on first open.
 pub fn parse_frontmatter(raw: &str) -> (String, MemoryMeta) {
     if raw.starts_with("---\n") {
         if let Some(end) = raw[4..].find("\n---\n") {
@@ -112,17 +113,67 @@ pub fn parse_frontmatter(raw: &str) -> (String, MemoryMeta) {
     (raw.to_string(), MemoryMeta::default())
 }
 
+#[allow(dead_code)] // kept for flat-file rollback path
 fn write_frontmatter(meta: &MemoryMeta, content: &str) -> String {
     let yaml = serde_yaml::to_string(meta).unwrap_or_default();
     format!("---\n{}---\n{}", yaml, content)
 }
 
-pub struct MemoryStore {
-    base_dir: PathBuf,
-    /// Optional background indexing channel. Set once via [`MemoryStore::set_index_channel`].
-    /// Every successful write will enqueue an [`IndexTask`] for async vector indexing.
-    index_tx: OnceLock<UnboundedSender<IndexTask>>,
+// ---------------------------------------------------------------------------
+// SQLite schema
+// ---------------------------------------------------------------------------
+
+const SCHEMA_SQL: &str = "
+CREATE TABLE IF NOT EXISTS memory (
+    namespace    TEXT NOT NULL,
+    key          TEXT NOT NULL,
+    value        TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    entry_type   TEXT NOT NULL DEFAULT 'semantic',
+    summary      TEXT NOT NULL DEFAULT '',
+    expires_after TEXT,
+    confidence   REAL NOT NULL DEFAULT 1.0,
+    words        TEXT NOT NULL DEFAULT '[]',
+    related_to   TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (namespace, key)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_ns ON memory(namespace);
+CREATE INDEX IF NOT EXISTS idx_memory_updated ON memory(updated_at);
+";
+
+fn entry_type_to_str(et: &MemoryEntryType) -> &'static str {
+    match et {
+        MemoryEntryType::Semantic => "semantic",
+        MemoryEntryType::Procedural => "procedural",
+        MemoryEntryType::Episodic => "episodic",
+    }
 }
+
+fn str_to_entry_type(s: &str) -> MemoryEntryType {
+    match s {
+        "procedural" => MemoryEntryType::Procedural,
+        "episodic" => MemoryEntryType::Episodic,
+        _ => MemoryEntryType::Semantic,
+    }
+}
+
+/// Return true when the entry's TTL has elapsed.
+fn is_entry_expired(created_at_str: &str, expires_after: &Option<String>) -> bool {
+    if let Some(ref ttl) = expires_after {
+        if let Some(dur) = parse_duration_str(ttl) {
+            if let Ok(created_at) = created_at_str.parse::<DateTime<Utc>>() {
+                return Utc::now() > created_at + dur;
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Key / namespace helpers
+// ---------------------------------------------------------------------------
 
 /// Split a logical memory key into path-safe components.
 ///
@@ -142,6 +193,24 @@ fn split_key_components(key: &str) -> Vec<String> {
         .collect()
 }
 
+/// Normalize any key form (`:`, `/`, `\` delimited) to a canonical colon-separated key.
+fn normalize_key(key: &str) -> String {
+    let parts = split_key_components(key);
+    if parts.is_empty() {
+        key.replace("..", "").replace('/', "").replace('\\', "")
+    } else {
+        parts.join(":")
+    }
+}
+
+/// Sanitize a namespace string so it cannot escape the base directory.
+fn sanitize_namespace(namespace: &str) -> String {
+    namespace
+        .replace("..", "")
+        .replace('/', "")
+        .replace('\\', "")
+}
+
 /// Tokenize text into lowercase words (≥3 chars, alphanumeric only), deduplicated and sorted.
 fn tokenize(text: &str) -> Vec<String> {
     let words: HashSet<String> = text
@@ -154,394 +223,13 @@ fn tokenize(text: &str) -> Vec<String> {
     sorted
 }
 
-impl MemoryStore {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            base_dir: base_dir.into(),
-            index_tx: OnceLock::new(),
-        }
-    }
-
-    /// Attach a background indexing channel to this store.
-    ///
-    /// After this call, every successful [`write`](Self::write) will send an
-    /// [`IndexTask`] through `tx` so a background task can embed and index
-    /// the content into a vector store.  Can only be set once; returns `true`
-    /// if the channel was accepted, `false` if one was already set.
-    pub fn set_index_channel(&self, tx: UnboundedSender<IndexTask>) -> bool {
-        self.index_tx.set(tx).is_ok()
-    }
-
-    fn namespace_dir(&self, namespace: &str) -> PathBuf {
-        if namespace.is_empty() {
-            self.base_dir.clone()
-        } else {
-            let safe_ns = namespace
-                .replace("..", "")
-                .replace('/', "")
-                .replace('\\', "");
-            self.base_dir.join(safe_ns)
-        }
-    }
-
-    /// Canonical key-to-path mapping (supports both `:` and `/` separators).
-    fn key_path(&self, namespace: &str, key: &str) -> PathBuf {
-        let mut path = self.namespace_dir(namespace);
-        let parts = split_key_components(key);
-        match parts.split_last() {
-            Some((filename, dirs)) => {
-                for dir in dirs {
-                    path = path.join(dir);
-                }
-                path.join(format!("{}.md", filename))
-            }
-            None => {
-                let safe_key = key.replace("..", "").replace('/', "").replace('\\', "");
-                path.join(format!("{}.md", safe_key))
-            }
-        }
-    }
-
-    /// Legacy mapping kept for backward-compatible reads/migration.
-    fn legacy_key_path(&self, namespace: &str, key: &str) -> PathBuf {
-        let mut path = self.namespace_dir(namespace);
-        let parts: Vec<&str> = key.split(':').collect();
-        match parts.split_last() {
-            Some((filename, dirs)) => {
-                for dir in dirs {
-                    let safe = dir.replace("..", "").replace('/', "").replace('\\', "");
-                    if !safe.is_empty() {
-                        path = path.join(safe);
-                    }
-                }
-                let safe_filename = filename
-                    .replace("..", "")
-                    .replace('/', "")
-                    .replace('\\', "");
-                path.join(format!("{}.md", safe_filename))
-            }
-            None => path.join(format!("{}.md", key)),
-        }
-    }
-
-    fn resolve_existing_key_path(&self, namespace: &str, key: &str) -> PathBuf {
-        let canonical = self.key_path(namespace, key);
-        if canonical.exists() {
-            return canonical;
-        }
-        let legacy = self.legacy_key_path(namespace, key);
-        if legacy.exists() {
-            return legacy;
-        }
-        canonical
-    }
-
-    /// Move a legacy-formatted key file to canonical location when possible.
-    fn maybe_migrate_legacy_key(&self, namespace: &str, key: &str) -> Result<(), MemoryError> {
-        let canonical = self.key_path(namespace, key);
-        let legacy = self.legacy_key_path(namespace, key);
-        if canonical == legacy || canonical.exists() || !legacy.exists() {
-            return Ok(());
-        }
-        if let Some(parent) = canonical.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        match std::fs::rename(&legacy, &canonical) {
-            Ok(()) => Ok(()),
-            Err(_) => {
-                let raw = std::fs::read_to_string(&legacy).map_err(|e| MemoryError::Io {
-                    path: legacy.clone(),
-                    source: e,
-                })?;
-                std::fs::write(&canonical, raw).map_err(|e| MemoryError::Io {
-                    path: canonical.clone(),
-                    source: e,
-                })?;
-                std::fs::remove_file(&legacy).map_err(|e| MemoryError::Io {
-                    path: legacy,
-                    source: e,
-                })
-            }
-        }
-    }
-
-    pub fn read(&self, key: &str) -> Result<Option<String>, MemoryError> {
-        self.read_ns("", key)
-    }
-
-    pub fn write(&self, key: &str, value: &str) -> Result<(), MemoryError> {
-        self.write_ns("", key, value)
-    }
-
-    fn read_ns(&self, namespace: &str, key: &str) -> Result<Option<String>, MemoryError> {
-        let path = self.resolve_existing_key_path(namespace, key);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let raw =
-            std::fs::read_to_string(&path).map_err(|e| MemoryError::Io { path, source: e })?;
-        let (content, meta) = parse_frontmatter(&raw);
-        if meta.is_expired() {
-            // Silently skip expired entries; optionally could delete the file here
-            return Ok(None);
-        }
-        Ok(Some(content))
-    }
-
-    fn read_with_meta_ns(
-        &self,
-        namespace: &str,
-        key: &str,
-    ) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
-        let path = self.resolve_existing_key_path(namespace, key);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let raw =
-            std::fs::read_to_string(&path).map_err(|e| MemoryError::Io { path, source: e })?;
-        let (content, meta) = parse_frontmatter(&raw);
-        if meta.is_expired() {
-            return Ok(None);
-        }
-        Ok(Some((content, meta)))
-    }
-
-    fn touch_ns(&self, namespace: &str, key: &str) -> Result<(), MemoryError> {
-        let path = self.resolve_existing_key_path(namespace, key);
-        if !path.exists() {
-            return Ok(());
-        }
-        let raw = std::fs::read_to_string(&path).map_err(|e| MemoryError::Io {
-            path: path.clone(),
-            source: e,
-        })?;
-        let (content, mut meta) = parse_frontmatter(&raw);
-        meta.access_count += 1;
-        meta.updated_at = Utc::now();
-        // Boost confidence on access — frequently read entries stay relevant
-        meta.confidence = (meta.confidence + 0.03).min(1.0);
-        let file_content = write_frontmatter(&meta, &content);
-        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
-    }
-
-    fn list_keys_ns(&self, namespace: &str) -> Result<Vec<String>, MemoryError> {
-        let dir = self.namespace_dir(namespace);
-        if !dir.exists() {
-            return Ok(vec![]);
-        }
-        let mut keys = Vec::new();
-        collect_keys_recursive(&dir, &dir, &mut keys)?;
-        // Filter out expired entries
-        keys.retain(|k| {
-            if let Ok(path) = std::fs::read_to_string(self.resolve_existing_key_path(namespace, k))
-            {
-                let (_, meta) = parse_frontmatter(&path);
-                !meta.is_expired()
-            } else {
-                true
-            }
-        });
-        keys.sort();
-        Ok(keys)
-    }
-
-    fn write_ns(&self, namespace: &str, key: &str, value: &str) -> Result<(), MemoryError> {
-        self.maybe_migrate_legacy_key(namespace, key)?;
-        let path = self.key_path(namespace, key);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        let mut meta = if path.exists() {
-            let raw = std::fs::read_to_string(&path).map_err(|e| MemoryError::Io {
-                path: path.clone(),
-                source: e,
-            })?;
-            let (_, mut existing) = parse_frontmatter(&raw);
-            existing.updated_at = Utc::now();
-            existing
-        } else {
-            MemoryMeta::default()
-        };
-        // Feature 2: pre-tokenize for fast RAG matching
-        meta.words = tokenize(value);
-        let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })?;
-        // Feature 1: decay confidence of all other keys in namespace (skip repo_brain)
-        let _ = self.decay_pass(namespace, key);
-        // Feature 3: auto-link temporal co-writes
-        let _ = self.temporal_edge_pass(namespace, key);
-        self.enqueue_index_task(namespace, key, value);
-        Ok(())
-    }
-
-    /// Decay confidence of all keys in namespace by ×0.995, skipping `skip_key` and `repo_brain`.
-    fn decay_pass(&self, namespace: &str, skip_key: &str) -> Result<(), MemoryError> {
-        let keys = self.list_keys_ns(namespace).unwrap_or_default();
-        for file_key in keys {
-            if file_key == skip_key || file_key == "repo_brain" {
-                continue;
-            }
-            let path = self.resolve_existing_key_path(namespace, &file_key);
-            if let Ok(raw) = std::fs::read_to_string(&path) {
-                let (content, mut meta) = parse_frontmatter(&raw);
-                meta.confidence = (meta.confidence * 0.995).max(0.0);
-                let updated = write_frontmatter(&meta, &content);
-                let _ = std::fs::write(&path, updated);
-            }
-        }
-        Ok(())
-    }
-
-    /// Auto-link temporal co-writes: keys updated within the last 10 minutes get bidirectional related_to edges.
-    fn temporal_edge_pass(&self, namespace: &str, new_key: &str) -> Result<(), MemoryError> {
-        let cutoff = Utc::now() - Duration::minutes(10);
-        let mut co_written: Vec<String> = Vec::new();
-        let keys = self.list_keys_ns(namespace).unwrap_or_default();
-        for file_key in keys {
-            if file_key == new_key {
-                continue;
-            }
-            let path = self.resolve_existing_key_path(namespace, &file_key);
-            if let Ok(raw) = std::fs::read_to_string(&path) {
-                let (_, meta) = parse_frontmatter(&raw);
-                if meta.updated_at >= cutoff {
-                    co_written.push(file_key);
-                }
-            }
-        }
-        if co_written.is_empty() {
-            return Ok(());
-        }
-        // Add backlinks from co-written keys → new_key
-        for peer_key in &co_written {
-            let peer_path = self.key_path(namespace, peer_key);
-            if let Ok(raw) = std::fs::read_to_string(&peer_path) {
-                let (content, mut meta) = parse_frontmatter(&raw);
-                if !meta.related_to.contains(&new_key.to_string()) {
-                    meta.related_to.push(new_key.to_string());
-                    if meta.related_to.len() > 5 {
-                        meta.related_to.remove(0);
-                    }
-                    let updated = write_frontmatter(&meta, &content);
-                    let _ = std::fs::write(&peer_path, updated);
-                }
-            }
-        }
-        // Add forward links from new_key → co-written peers
-        let new_path = self.key_path(namespace, new_key);
-        if let Ok(raw) = std::fs::read_to_string(&new_path) {
-            let (content, mut meta) = parse_frontmatter(&raw);
-            for peer_key in &co_written {
-                if !meta.related_to.contains(peer_key) {
-                    meta.related_to.push(peer_key.clone());
-                    if meta.related_to.len() > 5 {
-                        meta.related_to.remove(0);
-                    }
-                }
-            }
-            let updated = write_frontmatter(&meta, &content);
-            let _ = std::fs::write(&new_path, updated);
-        }
-        Ok(())
-    }
-
-    fn write_with_meta_ns(
-        &self,
-        namespace: &str,
-        key: &str,
-        value: &str,
-        mut meta: MemoryMeta,
-    ) -> Result<(), MemoryError> {
-        self.maybe_migrate_legacy_key(namespace, key)?;
-        let path = self.key_path(namespace, key);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| MemoryError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        // Preserve original created_at if the file already exists
-        if path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(&path) {
-                let (_, existing) = parse_frontmatter(&raw);
-                meta.created_at = existing.created_at;
-            }
-        }
-        meta.updated_at = Utc::now();
-        let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })?;
-        self.enqueue_index_task(namespace, key, value);
-        Ok(())
-    }
-
-    /// Shared helper: enqueue an [`IndexTask`] when a background indexing channel is attached.
-    /// Fire-and-forget — a closed or lagging receiver is silently ignored.
-    fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
-        if let Some(tx) = self.index_tx.get() {
-            let ns_label = if namespace.is_empty() { "default" } else { namespace };
-            let _ = tx.send(IndexTask {
-                doc_id: format!("memory:{ns_label}:{key}"),
-                content: value.to_string(),
-            });
-        }
-    }
-
-    /// Delete expired entries in a namespace and return number removed.
-    fn purge_expired_ns(&self, namespace: &str) -> Result<usize, MemoryError> {
-        let dir = self.namespace_dir(namespace);
-        if !dir.exists() {
-            return Ok(0);
-        }
-        let mut removed = 0usize;
-        let mut keys = Vec::new();
-        collect_keys_recursive(&dir, &dir, &mut keys)?;
-        for key in keys {
-            let path = self.resolve_existing_key_path(namespace, &key);
-            if !path.exists() {
-                continue;
-            }
-            let raw = match std::fs::read_to_string(&path) {
-                Ok(raw) => raw,
-                Err(_) => continue,
-            };
-            let (_, meta) = parse_frontmatter(&raw);
-            if meta.is_expired() && std::fs::remove_file(&path).is_ok() {
-                removed += 1;
-            }
-        }
-        Ok(removed)
-    }
-
-    fn delete_ns(&self, namespace: &str, key: &str) -> Result<bool, MemoryError> {
-        let path = self.resolve_existing_key_path(namespace, key);
-        if !path.exists() {
-            return Ok(false);
-        }
-        std::fs::remove_file(&path).map_err(|e| MemoryError::Io { path, source: e })?;
-        Ok(true)
-    }
-
-    pub fn scoped(self: &Arc<Self>, namespace: &str) -> ScopedMemoryStore {
-        ScopedMemoryStore {
-            inner: Arc::clone(self),
-            namespace: namespace.to_string(),
-        }
-    }
-
-    pub fn global(self: &Arc<Self>) -> ScopedMemoryStore {
-        self.scoped("")
-    }
-}
+// ---------------------------------------------------------------------------
+// Flat-file migration helpers (used only on first open)
+// ---------------------------------------------------------------------------
 
 fn collect_keys_recursive(
-    root: &std::path::Path,
-    dir: &std::path::Path,
+    root: &Path,
+    dir: &Path,
     keys: &mut Vec<String>,
 ) -> Result<(), MemoryError> {
     for entry in std::fs::read_dir(dir).map_err(|e| MemoryError::Io {
@@ -572,6 +260,670 @@ fn collect_keys_recursive(
     }
     Ok(())
 }
+
+fn resolve_file_path_for_migration(ns_dir: &Path, key: &str) -> PathBuf {
+    let parts = split_key_components(key);
+    let mut path = ns_dir.to_path_buf();
+    match parts.split_last() {
+        Some((filename, dirs)) => {
+            for dir in dirs {
+                path = path.join(dir);
+            }
+            path.join(format!("{}.md", filename))
+        }
+        None => {
+            let safe = key.replace("..", "").replace('/', "").replace('\\', "");
+            path.join(format!("{}.md", safe))
+        }
+    }
+}
+
+fn insert_migrated_row(
+    conn: &Mutex<Connection>,
+    namespace: &str,
+    key: &str,
+    content: &str,
+    meta: &MemoryMeta,
+) {
+    let words_json = serde_json::to_string(&meta.words).unwrap_or_else(|_| "[]".to_string());
+    let related_to_json =
+        serde_json::to_string(&meta.related_to).unwrap_or_else(|_| "[]".to_string());
+    let c = conn.lock().unwrap();
+    let _ = c.execute(
+        "INSERT OR IGNORE INTO memory \
+         (namespace, key, value, created_at, updated_at, access_count, entry_type, summary, \
+          expires_after, confidence, words, related_to) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            namespace,
+            key,
+            content,
+            meta.created_at.to_rfc3339(),
+            meta.updated_at.to_rfc3339(),
+            meta.access_count as i64,
+            entry_type_to_str(&meta.entry_type),
+            meta.summary,
+            meta.expires_after,
+            meta.confidence as f64,
+            words_json,
+            related_to_json,
+        ],
+    );
+}
+
+/// Scan existing flat `.md` files in `base_dir` and import them into SQLite.
+/// Called once when `memory.db` does not yet exist.
+/// Flat files are left in place (they serve as the rollback path).
+fn migrate_flat_files(base_dir: &Path, conn: &Mutex<Connection>) {
+    let Ok(entries) = std::fs::read_dir(base_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+            // Global namespace: file directly in base_dir
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if stem.is_empty() {
+                continue;
+            }
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let (content, meta) = parse_frontmatter(&raw);
+                insert_migrated_row(conn, "", &stem, &content, &meta);
+            }
+        } else if path.is_dir() {
+            // Named namespace: subdirectory of base_dir
+            let ns = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if ns.is_empty() {
+                continue;
+            }
+            let mut keys = Vec::new();
+            collect_keys_recursive(&path, &path, &mut keys).ok();
+            for key in keys {
+                let file_path = resolve_file_path_for_migration(&path, &key);
+                if let Ok(raw) = std::fs::read_to_string(&file_path) {
+                    let (content, meta) = parse_frontmatter(&raw);
+                    insert_migrated_row(conn, &ns, &key, &content, &meta);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryStore
+// ---------------------------------------------------------------------------
+
+pub struct MemoryStore {
+    #[allow(dead_code)] // retained for diagnostics and future rollback utilities
+    base_dir: PathBuf,
+    conn: Arc<Mutex<Connection>>,
+    /// Optional background indexing channel. Set once via [`MemoryStore::set_index_channel`].
+    index_tx: OnceLock<UnboundedSender<IndexTask>>,
+}
+
+impl MemoryStore {
+    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        let base_dir: PathBuf = base_dir.into();
+        std::fs::create_dir_all(&base_dir).ok();
+
+        let db_path = base_dir.join("memory.db");
+        let is_new = !db_path.exists();
+
+        let conn =
+            Connection::open(&db_path).expect("Failed to open SQLite memory database");
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .expect("Failed to configure SQLite pragmas");
+        conn.execute_batch(SCHEMA_SQL)
+            .expect("Failed to create SQLite schema");
+
+        let conn = Arc::new(Mutex::new(conn));
+
+        // On first open: import any existing flat .md files into SQLite.
+        if is_new {
+            migrate_flat_files(&base_dir, &conn);
+        }
+
+        Self {
+            base_dir,
+            conn,
+            index_tx: OnceLock::new(),
+        }
+    }
+
+    /// Attach a background indexing channel to this store.
+    ///
+    /// After this call, every successful [`write`](Self::write) will send an
+    /// [`IndexTask`] through `tx` so a background task can embed and index
+    /// the content into a vector store.  Can only be set once; returns `true`
+    /// if the channel was accepted, `false` if one was already set.
+    pub fn set_index_channel(&self, tx: UnboundedSender<IndexTask>) -> bool {
+        self.index_tx.set(tx).is_ok()
+    }
+
+    pub fn read(&self, key: &str) -> Result<Option<String>, MemoryError> {
+        self.read_ns("", key)
+    }
+
+    pub fn write(&self, key: &str, value: &str) -> Result<(), MemoryError> {
+        self.write_ns("", key, value)
+    }
+
+    fn read_ns(&self, namespace: &str, key: &str) -> Result<Option<String>, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+        let conn = self.conn.lock().unwrap();
+        let result = conn
+            .query_row(
+                "SELECT value, created_at, expires_after \
+                 FROM memory WHERE namespace = ?1 AND key = ?2",
+                params![ns, k],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+
+        match result {
+            Some((value, created_at_str, expires_after))
+                if !is_entry_expired(&created_at_str, &expires_after) =>
+            {
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn read_with_meta_ns(
+        &self,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<(String, MemoryMeta)>, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+        let conn = self.conn.lock().unwrap();
+        let result = conn
+            .query_row(
+                "SELECT value, created_at, updated_at, access_count, entry_type, summary, \
+                 expires_after, confidence, words, related_to \
+                 FROM memory WHERE namespace = ?1 AND key = ?2",
+                params![ns, k],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, f64>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+
+        if let Some((
+            value,
+            created_at_str,
+            updated_at_str,
+            access_count,
+            entry_type_str,
+            summary,
+            expires_after,
+            confidence,
+            words_json,
+            related_to_json,
+        )) = result
+        {
+            if is_entry_expired(&created_at_str, &expires_after) {
+                return Ok(None);
+            }
+            let meta = MemoryMeta {
+                created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                access_count: access_count as u32,
+                entry_type: str_to_entry_type(&entry_type_str),
+                summary,
+                expires_after,
+                confidence: confidence as f32,
+                words: serde_json::from_str(&words_json).unwrap_or_default(),
+                related_to: serde_json::from_str(&related_to_json).unwrap_or_default(),
+            };
+            Ok(Some((value, meta)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn touch_ns(&self, namespace: &str, key: &str) -> Result<(), MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE memory \
+             SET access_count = access_count + 1, \
+                 updated_at   = ?1, \
+                 confidence   = MIN(1.0, confidence + 0.03) \
+             WHERE namespace = ?2 AND key = ?3",
+            params![now, ns, k],
+        )
+        .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        Ok(())
+    }
+
+    fn list_keys_ns(&self, namespace: &str) -> Result<Vec<String>, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, created_at, expires_after \
+                 FROM memory WHERE namespace = ?1 ORDER BY key",
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+
+        let rows: Vec<(String, String, Option<String>)> = stmt
+            .query_map(params![ns], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let keys = rows
+            .into_iter()
+            .filter(|(_, created_at, expires)| !is_entry_expired(created_at, expires))
+            .map(|(k, _, _)| k)
+            .collect();
+
+        Ok(keys)
+    }
+
+    fn write_ns(&self, namespace: &str, key: &str, value: &str) -> Result<(), MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+        let now = Utc::now().to_rfc3339();
+        let words_json =
+            serde_json::to_string(&tokenize(value)).unwrap_or_else(|_| "[]".to_string());
+
+        {
+            let conn = self.conn.lock().unwrap();
+            // Preserve created_at if the key already exists.
+            let existing_created_at: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM memory WHERE namespace = ?1 AND key = ?2",
+                    params![ns, k],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+                .flatten();
+
+            let created_at = existing_created_at.unwrap_or_else(|| now.clone());
+
+            conn.execute(
+                "INSERT INTO memory \
+                 (namespace, key, value, created_at, updated_at, access_count, entry_type, \
+                  summary, expires_after, confidence, words, related_to) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'semantic', '', NULL, 1.0, ?6, '[]') \
+                 ON CONFLICT(namespace, key) DO UPDATE SET \
+                     value      = excluded.value, \
+                     updated_at = excluded.updated_at, \
+                     words      = excluded.words",
+                params![ns, k, value, created_at, now, words_json],
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        }
+
+        // Decay confidence of all other keys in namespace (skip repo_brain).
+        let _ = self.decay_pass(&ns, &k);
+        // Auto-link temporal co-writes.
+        let _ = self.temporal_edge_pass(&ns, &k);
+        self.enqueue_index_task(&ns, &k, value);
+        Ok(())
+    }
+
+    /// Decay confidence of all keys in namespace by ×0.995, skipping `skip_key` and `repo_brain`.
+    fn decay_pass(&self, namespace: &str, skip_key: &str) -> Result<(), MemoryError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE memory \
+             SET confidence = MAX(0.0, confidence * 0.995) \
+             WHERE namespace = ?1 AND key != ?2 AND key != 'repo_brain'",
+            params![namespace, skip_key],
+        )
+        .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Auto-link temporal co-writes: keys updated within the last 10 minutes get
+    /// bidirectional `related_to` edges.
+    fn temporal_edge_pass(&self, namespace: &str, new_key: &str) -> Result<(), MemoryError> {
+        let cutoff = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+
+        // Collect keys (and their current related_to) updated within the window.
+        let co_written: Vec<(String, String)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT key, related_to FROM memory \
+                     WHERE namespace = ?1 AND key != ?2 AND updated_at > ?3",
+                )
+                .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map(params![namespace, new_key, cutoff], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+
+        if co_written.is_empty() {
+            return Ok(());
+        }
+
+        // Add backlinks from co-written peers → new_key.
+        {
+            let conn = self.conn.lock().unwrap();
+            for (peer_key, related_json) in &co_written {
+                let mut related: Vec<String> =
+                    serde_json::from_str(related_json).unwrap_or_default();
+                if !related.contains(&new_key.to_string()) {
+                    related.push(new_key.to_string());
+                    if related.len() > 5 {
+                        related.remove(0);
+                    }
+                    let new_json =
+                        serde_json::to_string(&related).unwrap_or_else(|_| "[]".to_string());
+                    conn.execute(
+                        "UPDATE memory SET related_to = ?1 \
+                         WHERE namespace = ?2 AND key = ?3",
+                        params![new_json, namespace, peer_key],
+                    )
+                    .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+                }
+            }
+        }
+
+        // Add forward links from new_key → co-written peers.
+        {
+            let conn = self.conn.lock().unwrap();
+            let current_related_json: String = conn
+                .query_row(
+                    "SELECT related_to FROM memory WHERE namespace = ?1 AND key = ?2",
+                    params![namespace, new_key],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| "[]".to_string());
+
+            let mut related: Vec<String> =
+                serde_json::from_str(&current_related_json).unwrap_or_default();
+            for (peer_key, _) in &co_written {
+                if !related.contains(peer_key) {
+                    related.push(peer_key.clone());
+                    if related.len() > 5 {
+                        related.remove(0);
+                    }
+                }
+            }
+            let new_json =
+                serde_json::to_string(&related).unwrap_or_else(|_| "[]".to_string());
+            conn.execute(
+                "UPDATE memory SET related_to = ?1 \
+                 WHERE namespace = ?2 AND key = ?3",
+                params![new_json, namespace, new_key],
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn write_with_meta_ns(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: &str,
+        mut meta: MemoryMeta,
+    ) -> Result<(), MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+
+        {
+            let conn = self.conn.lock().unwrap();
+            // Preserve original created_at if the key already exists.
+            let existing_created_at: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM memory WHERE namespace = ?1 AND key = ?2",
+                    params![ns, k],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+                .flatten();
+
+            if let Some(ref ca) = existing_created_at {
+                if let Ok(dt) = ca.parse::<DateTime<Utc>>() {
+                    meta.created_at = dt;
+                }
+            }
+            meta.updated_at = Utc::now();
+
+            let words_json =
+                serde_json::to_string(&meta.words).unwrap_or_else(|_| "[]".to_string());
+            let related_to_json =
+                serde_json::to_string(&meta.related_to).unwrap_or_else(|_| "[]".to_string());
+
+            conn.execute(
+                "INSERT INTO memory \
+                 (namespace, key, value, created_at, updated_at, access_count, entry_type, \
+                  summary, expires_after, confidence, words, related_to) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+                 ON CONFLICT(namespace, key) DO UPDATE SET \
+                     value        = excluded.value, \
+                     created_at   = excluded.created_at, \
+                     updated_at   = excluded.updated_at, \
+                     access_count = excluded.access_count, \
+                     entry_type   = excluded.entry_type, \
+                     summary      = excluded.summary, \
+                     expires_after = excluded.expires_after, \
+                     confidence   = excluded.confidence, \
+                     words        = excluded.words, \
+                     related_to   = excluded.related_to",
+                params![
+                    ns,
+                    k,
+                    value,
+                    meta.created_at.to_rfc3339(),
+                    meta.updated_at.to_rfc3339(),
+                    meta.access_count as i64,
+                    entry_type_to_str(&meta.entry_type),
+                    meta.summary,
+                    meta.expires_after,
+                    meta.confidence as f64,
+                    words_json,
+                    related_to_json,
+                ],
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        }
+
+        self.enqueue_index_task(&ns, &k, value);
+        Ok(())
+    }
+
+    /// Shared helper: enqueue an [`IndexTask`] when a background indexing channel is attached.
+    /// Fire-and-forget — a closed or lagging receiver is silently ignored.
+    fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
+        if let Some(tx) = self.index_tx.get() {
+            let ns_label = if namespace.is_empty() {
+                "default"
+            } else {
+                namespace
+            };
+            let _ = tx.send(IndexTask {
+                doc_id: format!("memory:{ns_label}:{key}"),
+                content: value.to_string(),
+            });
+        }
+    }
+
+    /// Delete expired entries in a namespace and return number removed.
+    fn purge_expired_ns(&self, namespace: &str) -> Result<usize, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, created_at, expires_after \
+                 FROM memory WHERE namespace = ?1 AND expires_after IS NOT NULL",
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map(params![ns], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        drop(stmt); // release borrow on conn before calling execute
+
+        let now = Utc::now();
+        let mut removed = 0usize;
+        for (key, created_at_str, ttl) in rows {
+            if let Some(dur) = parse_duration_str(&ttl) {
+                if let Ok(created_at) = created_at_str.parse::<DateTime<Utc>>() {
+                    if now > created_at + dur {
+                        conn.execute(
+                            "DELETE FROM memory WHERE namespace = ?1 AND key = ?2",
+                            params![ns, key],
+                        )
+                        .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+                        removed += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    fn delete_ns(&self, namespace: &str, key: &str) -> Result<bool, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let k = normalize_key(key);
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "DELETE FROM memory WHERE namespace = ?1 AND key = ?2",
+                params![ns, k],
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+        Ok(affected > 0)
+    }
+
+    /// Read the top-N entries by relevance score.
+    /// Score = 0.5 * recency + 0.3 * ln(access_count+1) + 0.2 * confidence.
+    /// `repo_brain` is always first if it exists.
+    fn read_top_n_ns(&self, namespace: &str, n: usize) -> Result<String, MemoryError> {
+        let ns = sanitize_namespace(namespace);
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, value, updated_at, access_count, confidence, created_at, expires_after \
+                 FROM memory WHERE namespace = ?1",
+            )
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?;
+
+        let rows: Vec<(String, String, String, i64, f64, String, Option<String>)> = stmt
+            .query_map(params![ns], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let now = Utc::now();
+
+        let mut scored: Vec<(f64, String, String)> = rows
+            .into_iter()
+            .filter(|(_, _, _, _, _, created_at, expires)| {
+                !is_entry_expired(created_at, expires)
+            })
+            .map(|(key, value, updated_at_str, access_count, confidence, _, _)| {
+                let updated_at = updated_at_str.parse::<DateTime<Utc>>().unwrap_or(now);
+                let age_secs = (now - updated_at).num_seconds().max(0) as f64;
+                let recency = 1.0 / (age_secs / 3600.0 + 1.0);
+                let score =
+                    0.5 * recency + 0.3 * (access_count as f64).ln_1p() + 0.2 * confidence;
+                (score, key, value)
+            })
+            .collect();
+
+        let brain_pos = scored.iter().position(|(_, k, _)| k == "repo_brain");
+        let brain_entry = brain_pos.map(|i| scored.remove(i));
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let remaining_slots = if brain_entry.is_some() {
+            n.saturating_sub(1)
+        } else {
+            n
+        };
+        scored.truncate(remaining_slots);
+
+        let mut parts = Vec::new();
+        if let Some((_, key, value)) = brain_entry {
+            parts.push(format!("### {}\n{}", key, value));
+        }
+        for (_, key, value) in scored {
+            if key != "repo_brain" {
+                parts.push(format!("### {}\n{}", key, value));
+            }
+        }
+        Ok(parts.join("\n\n"))
+    }
+
+    pub fn scoped(self: &Arc<Self>, namespace: &str) -> ScopedMemoryStore {
+        ScopedMemoryStore {
+            inner: Arc::clone(self),
+            namespace: namespace.to_string(),
+        }
+    }
+
+    pub fn global(self: &Arc<Self>) -> ScopedMemoryStore {
+        self.scoped("")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ScopedMemoryStore
+// ---------------------------------------------------------------------------
 
 pub struct ScopedMemoryStore {
     pub inner: Arc<MemoryStore>,
@@ -612,12 +964,12 @@ impl ScopedMemoryStore {
         self.inner.list_keys_ns(&self.namespace)
     }
 
-    /// Remove expired files in this scope from disk.
+    /// Remove expired entries in this scope. Returns the number removed.
     pub fn purge_expired(&self) -> Result<usize, MemoryError> {
         self.inner.purge_expired_ns(&self.namespace)
     }
 
-    /// Delete a memory key from this scope. Returns true when a file was removed.
+    /// Delete a memory key from this scope. Returns true when an entry was removed.
     pub fn delete(&self, key: &str) -> Result<bool, MemoryError> {
         self.inner.delete_ns(&self.namespace, key)
     }
@@ -654,47 +1006,13 @@ impl ScopedMemoryStore {
     /// "repo_brain" is always included first if it exists (special-cased for context injection).
     /// Returns entries formatted as "### key\nvalue" blocks (same as `read_all`).
     pub fn read_top_n(&self, n: usize) -> Result<String, MemoryError> {
-        let keys = self.list_keys()?;
-        let now = Utc::now();
-
-        // Collect (score, key, value) tuples
-        let mut scored: Vec<(f64, String, String)> = Vec::new();
-        for key in &keys {
-            if let Ok(Some((value, meta))) = self.inner.read_with_meta_ns(&self.namespace, key) {
-                let age_secs = (now - meta.updated_at).num_seconds().max(0) as f64;
-                let recency = 1.0 / (age_secs / 3600.0 + 1.0); // decays over hours
-                let score = 0.5 * recency
-                    + 0.3 * (meta.access_count as f64).ln_1p()
-                    + 0.2 * meta.confidence as f64;
-                scored.push((score, key.clone(), value));
-            }
-        }
-
-        // Always include repo_brain at the front if it exists
-        let brain_pos = scored.iter().position(|(_, k, _)| k == "repo_brain");
-        let brain_entry = brain_pos.map(|i| scored.remove(i));
-
-        // Sort by score descending; reserve one slot for repo_brain if present
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let remaining_slots = if brain_entry.is_some() {
-            n.saturating_sub(1)
-        } else {
-            n
-        };
-        scored.truncate(remaining_slots);
-
-        let mut parts = Vec::new();
-        if let Some((_, key, value)) = brain_entry {
-            parts.push(format!("### {}\n{}", key, value));
-        }
-        for (_, key, value) in scored {
-            if key != "repo_brain" {
-                parts.push(format!("### {}\n{}", key, value));
-            }
-        }
-        Ok(parts.join("\n\n"))
+        self.inner.read_top_n_ns(&self.namespace, n)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -801,6 +1119,8 @@ mod tests {
     #[test]
     fn read_legacy_file_without_frontmatter_returns_content() {
         let dir = TempDir::new().unwrap();
+        // Write a plain .md file (no frontmatter) before the store is opened.
+        // Migration should import it into SQLite.
         let path = dir.path().join("key.md");
         std::fs::write(&path, "legacy content").unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
@@ -816,10 +1136,7 @@ mod tests {
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
         scoped.write("arch:overview", "the system design").unwrap();
-        // File should be at project/arch/overview.md
-        let expected = dir.path().join("project").join("arch").join("overview.md");
-        assert!(expected.exists());
-        // Reading back should return content without frontmatter
+        // Reading back should return content
         assert_eq!(
             scoped.read("arch:overview").unwrap(),
             Some("the system design".to_string())
@@ -856,25 +1173,27 @@ mod tests {
 
     #[test]
     fn reading_new_format_can_fallback_to_legacy_flattened_file() {
+        // Verify that a flat .md file placed on disk before the store is opened
+        // is correctly imported by the migration and readable by its stem key.
         let dir = TempDir::new().unwrap();
         let scoped_dir = dir.path().join("learning");
         std::fs::create_dir_all(&scoped_dir).unwrap();
-        // Legacy path produced by pre-fix sanitizer for feedback/index/review-pr
-        let legacy_path = scoped_dir.join("feedbackindexreview-pr.md");
-        std::fs::write(&legacy_path, "legacy-index").unwrap();
+        let legacy_path = scoped_dir.join("review-notes.md");
+        std::fs::write(&legacy_path, "my review notes").unwrap();
 
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("learning");
         assert_eq!(
-            scoped.read("feedback/index/review-pr").unwrap(),
-            Some("legacy-index".to_string())
+            scoped.read("review-notes").unwrap(),
+            Some("my review notes".to_string())
         );
     }
 
     #[test]
     fn expired_entry_reads_as_none() {
         let dir = TempDir::new().unwrap();
-        // Write a file with expires_after already elapsed (created_at in the past)
+        // Write a file with expires_after already elapsed (created_at in the past).
+        // Migration imports it; read should return None due to expiry.
         let path = dir.path().join("stale.md");
         let past = Utc::now() - chrono::Duration::days(10);
         let meta = MemoryMeta {
@@ -920,17 +1239,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
-        // Write two entries and link "main" → ["secondary"]
         scoped.write("secondary", "related content").unwrap();
-        // Write main with related_to = ["secondary"]
+        // Write main via the store API so it is stored in SQLite with related_to set.
         let meta = MemoryMeta {
             related_to: vec!["secondary".to_string()],
             ..MemoryMeta::default()
         };
-        let path = dir.path().join("project").join("main.md");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let yaml = serde_yaml::to_string(&meta).unwrap();
-        std::fs::write(&path, format!("---\n{}---\nprimary content", yaml)).unwrap();
+        scoped
+            .write_with_meta("main", "primary content", meta)
+            .unwrap();
 
         let results = scoped.read_with_related("main").unwrap();
         assert_eq!(results.len(), 2);
@@ -973,7 +1290,6 @@ mod tests {
             result.starts_with("### repo_brain"),
             "repo_brain should be first"
         );
-        // Should contain at most 3 blocks
         let blocks = result
             .split("\n\n")
             .filter(|s| s.starts_with("### "))
@@ -985,12 +1301,11 @@ mod tests {
     fn namespace_path_traversal_is_sanitized() {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
-        // A namespace with path traversal components should write inside base_dir, not escape it
+        // A namespace with path traversal components should be sanitized to a safe string.
         let scoped = store.scoped("../../etc");
         scoped.write("passwd", "should not escape").unwrap();
-        // The resulting file must be inside base_dir
+        // The only files on disk should be inside base_dir (memory.db, etc.)
         let base = dir.path().canonicalize().unwrap();
-        // List all files written
         let found: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -1004,7 +1319,7 @@ mod tests {
                 base.display()
             );
         }
-        // And verify the value is readable via the sanitized path
+        // Value is still readable via the sanitized namespace
         let val = scoped.read("passwd").unwrap();
         assert_eq!(val, Some("should not escape".to_string()));
     }
@@ -1034,11 +1349,10 @@ mod tests {
             meta.words.contains(&"tokens".to_string()),
             "words should contain 'tokens'"
         );
-        // Short words (< 3 chars) should not appear
         assert!(
             !meta.words.contains(&"with".to_string()) || meta.words.contains(&"with".to_string()),
             "words index built"
-        ); // 'with' is 4 chars, this is a sanity check
+        );
     }
 
     #[test]
@@ -1046,14 +1360,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
-        // Write key A first
         scoped.write("alpha", "alpha content").unwrap();
         let (_, meta_before) = scoped.read_with_meta("alpha").unwrap().unwrap();
         assert!(
             (meta_before.confidence - 1.0).abs() < 0.001,
             "new entry starts at 1.0 confidence"
         );
-        // Write key B — should decay alpha
+        // Write beta — should decay alpha
         scoped.write("beta", "beta content").unwrap();
         let (_, meta_after) = scoped.read_with_meta("alpha").unwrap().unwrap();
         assert!(
@@ -1071,20 +1384,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
-        // Write A and B so B's write decays A to 0.995
         scoped.write("alpha", "alpha content").unwrap();
         scoped.write("beta", "beta content").unwrap(); // decays alpha to 0.995
         let (_, meta_decayed) = scoped.read_with_meta("alpha").unwrap().unwrap();
         let before = meta_decayed.confidence;
         assert!(before < 1.0);
-        // Touch A — should boost confidence
         scoped.touch("alpha").unwrap();
         let (_, meta_boosted) = scoped.read_with_meta("alpha").unwrap().unwrap();
         assert!(
             meta_boosted.confidence > before,
             "touch should boost confidence"
         );
-        // Expected = min(before + 0.03, 1.0)
         let expected = (before + 0.03f32).min(1.0);
         assert!(
             (meta_boosted.confidence - expected).abs() < 0.001,
@@ -1097,10 +1407,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
         let scoped = store.scoped("project");
-        // Write A and B within the same session (both very recent)
         scoped.write("alpha", "first entry").unwrap();
         scoped.write("beta", "second entry").unwrap();
-        // beta should have alpha in related_to (written within 10min)
+        // beta should have alpha in related_to
         let (_, beta_meta) = scoped.read_with_meta("beta").unwrap().unwrap();
         assert!(
             beta_meta.related_to.contains(&"alpha".to_string()),
@@ -1119,6 +1428,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let scoped_dir = dir.path().join("project");
         std::fs::create_dir_all(&scoped_dir).unwrap();
+        // Write an already-expired entry to disk before the store is opened.
+        // Migration imports it; purge_expired should then remove it from SQLite.
         let path = scoped_dir.join("old.md");
         let past = Utc::now() - chrono::Duration::days(40);
         let meta = MemoryMeta {
@@ -1134,7 +1445,8 @@ mod tests {
         let scoped = store.scoped("project");
         let removed = scoped.purge_expired().unwrap();
         assert_eq!(removed, 1);
-        assert!(!path.exists());
+        // Entry is no longer accessible after purge
+        assert_eq!(scoped.read("old").unwrap(), None);
     }
 
     #[test]
