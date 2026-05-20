@@ -33,6 +33,12 @@ pub struct WorkflowRunner {
     pub run_store: Option<Arc<RunStore>>,
     pub run_id: Option<String>,
     pub initial_state: Option<WorkflowRunState>,
+    /// Optional skill content provider for multi-agent steps.
+    /// When `Some`, it is shared across all MultiAgent step executions in this
+    /// run — built once at runner construction, avoiding per-step disk reads.
+    /// When `None`, a `NoOpSkillContentProvider` fallback is used with a
+    /// warning logged.
+    pub skill_content_provider: Option<Arc<dyn agent007_skills::SkillContentProvider>>,
 }
 
 impl WorkflowRunner {
@@ -48,7 +54,21 @@ impl WorkflowRunner {
             run_store: None,
             run_id: None,
             initial_state: None,
+            skill_content_provider: None,
         }
+    }
+
+    /// Attach a pre-built `SkillContentProvider` to this runner.
+    ///
+    /// Call this after `new()` when the caller has already loaded skills from
+    /// disk.  Avoids the per-step filesystem reload that happens when the field
+    /// is absent.
+    pub fn with_skill_provider(
+        mut self,
+        provider: Arc<dyn agent007_skills::SkillContentProvider>,
+    ) -> Self {
+        self.skill_content_provider = Some(provider);
+        self
     }
 
     pub fn for_run(&self, run_store: Arc<RunStore>, run_id: impl Into<String>) -> Self {
@@ -58,6 +78,7 @@ impl WorkflowRunner {
             dispatcher: self.dispatcher.clone(),
             run_store: Some(run_store),
             run_id: Some(run_id.into()),
+            skill_content_provider: self.skill_content_provider.clone(),
             initial_state: None,
         }
     }
@@ -75,6 +96,7 @@ impl WorkflowRunner {
             run_store: Some(run_store),
             run_id: Some(run_id.into()),
             initial_state: Some(state),
+            skill_content_provider: self.skill_content_provider.clone(),
         }
     }
 
@@ -341,6 +363,36 @@ impl WorkflowRunner {
                     // worker list, inject skill domain knowledge, and run inline (not spawned)
                     // to avoid requiring the orchestrator and its deps to be Send.
                     if step.r#type == StepType::MultiAgent {
+                        // Capture the skill provider from the runner field, or fall back to a
+                        // lazy disk load (and warn so the caller knows to wire it up properly).
+                        let skill_provider_for_step: Arc<dyn agent007_skills::SkillContentProvider> = {
+                            if let Some(ref sp) = self.skill_content_provider {
+                                Arc::clone(sp)
+                            } else {
+                                tracing::warn!(
+                                    step_id = %step.id,
+                                    "WorkflowRunner.skill_content_provider not set; loading skills \
+                                     from disk for this step. Use with_skill_provider() at runner \
+                                     construction to avoid per-step disk reads."
+                                );
+                                let skills_dir =
+                                    agent007_core::paths::agent007_home().join("skills");
+                                match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                                    Ok(skills) => Arc::new(
+                                        agent007_skills::SkillIndex::from_skills(skills),
+                                    ),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "failed to load skills; multi-agent step will run \
+                                             without skill injection"
+                                        );
+                                        Arc::new(agent007_skills::NoOpSkillContentProvider)
+                                    }
+                                }
+                            }
+                        };
+
                         let multi_result: Result<
                             (crate::types::StepDef, String, String, usize),
                             WorkflowError,
@@ -357,30 +409,31 @@ impl WorkflowRunner {
                                     }
                                 })?;
 
-                            // Collect explicit worker persona names from the step config.
-                            let worker_names: Vec<String> = step
+                            // Map WorkerConfig → WorkerSpec to avoid a circular dep between
+                            // workflows ← custom-agents.
+                            let worker_specs: Vec<agent007_custom_agents::WorkerSpec> = step
                                 .workers
                                 .as_ref()
-                                .map(|ws| ws.iter().map(|w| w.persona.clone()).collect())
+                                .map(|ws| {
+                                    ws.iter()
+                                        .map(|wc| agent007_custom_agents::WorkerSpec {
+                                            name: wc.persona.clone(),
+                                            skills: wc.skills.clone(),
+                                        })
+                                        .collect()
+                                })
                                 .unwrap_or_default();
 
-                            // Build a SkillIndex from the current skills directory.
-                            let skills_dir =
-                                agent007_core::paths::agent007_home().join("skills");
-                            let skill_index: Box<dyn agent007_skills::SkillContentProvider> =
-                                match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
-                                    Ok(skills) => Box::new(
-                                        agent007_skills::SkillIndex::from_skills(skills),
-                                    ),
-                                    Err(_) => {
-                                        Box::new(agent007_skills::NoOpSkillContentProvider)
-                                    }
-                                };
-
-                            // Construct a persistent-ish memory store keyed by persona name.
+                            // Construct a memory store keyed by persona namespace.
                             let memory_dir =
                                 agent007_core::paths::agent007_home().join("memory");
-                            let _ = std::fs::create_dir_all(&memory_dir);
+                            if let Err(e) = std::fs::create_dir_all(&memory_dir) {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %memory_dir.display(),
+                                    "failed to create memory directory for multi-agent step"
+                                );
+                            }
                             let mem_store = Arc::new(
                                 agent007_memory::store::MemoryStore::new(&memory_dir),
                             );
@@ -394,8 +447,8 @@ impl WorkflowRunner {
                             let orchestrator =
                                 agent007_custom_agents::SubOrchestrator::from_persona(
                                     &persona_spec,
-                                    worker_names,
-                                    skill_index.as_ref(),
+                                    worker_specs,
+                                    skill_provider_for_step,
                                     scoped,
                                     router.clone(),
                                     persona_provider.clone(),

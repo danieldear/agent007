@@ -96,6 +96,17 @@ impl WorkflowDef {
                             ),
                         });
                     }
+                    // Validate that every worker has a non-empty persona name.
+                    for wc in step.workers.as_ref().unwrap() {
+                        if wc.persona.trim().is_empty() {
+                            return Err(crate::error::WorkflowError::SchemaError {
+                                reason: format!(
+                                    "step '{}': every worker entry must have a non-empty 'persona'",
+                                    step.id
+                                ),
+                            });
+                        }
+                    }
                 }
             }
         }

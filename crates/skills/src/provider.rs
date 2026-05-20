@@ -38,6 +38,12 @@ impl SkillIndex {
         let mut by_trigger = HashMap::new();
         for skill in skills {
             let key = normalize_trigger(skill.trigger()).to_string();
+            if by_trigger.contains_key(&key) {
+                tracing::warn!(
+                    trigger = %key,
+                    "duplicate skill trigger detected in SkillIndex; last writer wins"
+                );
+            }
             by_trigger.insert(key, skill.template.clone());
         }
         Self { by_trigger }

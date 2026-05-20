@@ -1,4 +1,4 @@
-use crate::{AgentDef, AgentType, AgentZoneOverrides, CustomAgentError, SubTaskResult};
+use crate::{AgentDef, AgentType, AgentZoneOverrides, CustomAgentError, SubTaskResult, WorkerSpec};
 use agent007_core::dispatcher::Dispatcher;
 use agent007_core::events::AgentEvent;
 use agent007_core::persona::{PersonaProvider, PersonaSpec};
@@ -7,7 +7,8 @@ use agent007_memory::store::ScopedMemoryStore;
 use agent007_models::provider::ModelProvider;
 use agent007_models::router::ModelRouter;
 use agent007_models::types::{CompletionRequest, Message, Role};
-use agent007_skills::SkillContentProvider;
+use agent007_skills::{NoOpSkillContentProvider, SkillContentProvider};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -35,6 +36,14 @@ pub struct SubOrchestrator {
     pub dispatcher: Arc<dyn Dispatcher>,
     pub depth: usize,
     pub max_depth: usize,
+    /// Skill content provider used to inject domain knowledge into worker
+    /// system prompts at dispatch time.  Defaults to `NoOpSkillContentProvider`
+    /// when constructed via the legacy `new()` path.
+    pub skill_provider: Arc<dyn SkillContentProvider>,
+    /// Per-worker skill overrides supplied by the workflow step.
+    /// Each entry maps a worker persona name to the skill triggers that should
+    /// be injected in addition to the worker persona's own default skills.
+    pub worker_specs: Vec<WorkerSpec>,
 }
 
 impl SubOrchestrator {
@@ -55,13 +64,16 @@ impl SubOrchestrator {
             dispatcher,
             depth,
             max_depth,
+            skill_provider: Arc::new(NoOpSkillContentProvider),
+            worker_specs: vec![],
         }
     }
 
     /// Construct a `SubOrchestrator` from a `PersonaSpec`.
     ///
-    /// Skill domain knowledge (from `persona.skills`) is injected at the top of
-    /// the system prompt using the format:
+    /// **Orchestrator skill injection**: skills listed in `persona.skills` are
+    /// injected into the orchestrator's own planning system prompt using the
+    /// format:
     /// ```text
     /// ## Domain Knowledge
     ///
@@ -72,17 +84,21 @@ impl SubOrchestrator {
     /// <original system prompt>
     /// ```
     ///
-    /// If `worker_names` is non-empty it overrides `persona.allowed_workers`;
-    /// otherwise `persona.allowed_workers` is used as-is.  This lets workflow
-    /// steps supply an explicit worker list without having to edit the persona
-    /// TOML file.
+    /// **Worker skill injection**: for each worker dispatched by the orchestrator,
+    /// `dispatch_parallel` merges `worker_persona.skills` (the worker's own
+    /// defaults) with `WorkerSpec.skills` (per-invocation overrides from the
+    /// workflow step), then injects the combined skill bodies into that worker's
+    /// system prompt before the model call.
     ///
-    /// Zone overrides are converted from `ZoneConfig` (Vec-based) to
-    /// `AgentZoneOverrides` (Option<Vec>-based): empty vecs become `None`.
+    /// **Workers**: if `worker_specs` is non-empty, the worker names override
+    /// `persona.allowed_workers`; otherwise `persona.allowed_workers` is used.
+    ///
+    /// **Zone conversion**: `ZoneConfig` (Vec-based) is mapped to
+    /// `AgentZoneOverrides` (Option<Vec>-based); empty vecs become `None`.
     pub fn from_persona(
         persona: &PersonaSpec,
-        worker_names: Vec<String>,
-        skill_provider: &dyn SkillContentProvider,
+        worker_specs: Vec<WorkerSpec>,
+        skill_provider: Arc<dyn SkillContentProvider>,
         scoped_memory: Arc<ScopedMemoryStore>,
         model_router: Arc<ModelRouter>,
         persona_provider: Arc<dyn PersonaProvider>,
@@ -90,8 +106,8 @@ impl SubOrchestrator {
         depth: usize,
         max_depth: usize,
     ) -> Self {
-        // Inject skill domain knowledge into the system prompt (prepend each
-        // skill block so the most recently injected body appears first).
+        // Inject orchestrator's own skill domain knowledge into its planning
+        // system prompt.
         let mut system_prompt = persona.system_prompt.clone();
         for trigger in &persona.skills {
             if let Some(body) = skill_provider.load_content(trigger) {
@@ -119,13 +135,14 @@ impl SubOrchestrator {
             },
         });
 
-        // Explicit worker_names override persona.allowed_workers when provided.
-        let effective_workers = if worker_names.is_empty() {
+        // Derive allowed_workers: explicit worker_specs take priority.
+        let effective_workers = if worker_specs.is_empty() {
             persona.allowed_workers.clone()
         } else {
-            Some(worker_names)
+            Some(worker_specs.iter().map(|ws| ws.name.clone()).collect())
         };
 
+        #[allow(deprecated)]
         let def = AgentDef {
             name: persona.name.clone(),
             r#type: AgentType::SubOrchestrator,
@@ -138,7 +155,7 @@ impl SubOrchestrator {
             zones,
         };
 
-        Self::new(
+        Self {
             def,
             scoped_memory,
             model_router,
@@ -146,7 +163,9 @@ impl SubOrchestrator {
             dispatcher,
             depth,
             max_depth,
-        )
+            skill_provider,
+            worker_specs,
+        }
     }
 
     /// Decompose the task into subtasks and execute via allowed worker personas.
@@ -331,9 +350,48 @@ impl SubOrchestrator {
 
         for sub in subtasks {
             let persona_opt = self.persona_provider.get(&sub.worker_name);
-            let system = persona_opt
+
+            // Collect the worker persona's default skills.
+            let persona_skills: Vec<String> = persona_opt
+                .as_ref()
+                .map(|p| p.skills.clone())
+                .unwrap_or_default();
+
+            // Collect per-invocation skill overrides from the workflow step.
+            let spec_skills: Vec<String> = self
+                .worker_specs
+                .iter()
+                .find(|ws| ws.name == sub.worker_name)
+                .map(|ws| ws.skills.clone())
+                .unwrap_or_default();
+
+            // Merge: persona defaults first, step overrides appended, deduplicated.
+            let mut seen = HashSet::new();
+            let merged_skills: Vec<String> = persona_skills
+                .into_iter()
+                .chain(spec_skills)
+                .filter(|s| seen.insert(s.clone()))
+                .collect();
+
+            // Build effective system prompt with skill injection.
+            let base_system = persona_opt
                 .map(|p| p.system_prompt.clone())
                 .unwrap_or_default();
+            let skill_provider = Arc::clone(&self.skill_provider);
+            let system = {
+                let mut injected = String::new();
+                for trigger in &merged_skills {
+                    if let Some(body) = skill_provider.load_content(trigger) {
+                        injected
+                            .push_str(&format!("## Domain Knowledge\n\n{body}\n\n---\n\n"));
+                    }
+                }
+                if injected.is_empty() {
+                    base_system
+                } else {
+                    format!("{injected}{base_system}")
+                }
+            };
 
             let router = Arc::clone(&self.model_router);
             let dispatcher = Arc::clone(&self.dispatcher);
@@ -809,12 +867,11 @@ mod tests {
     #[test]
     fn from_persona_preserves_name_and_model() {
         let persona = make_persona("Architect", "You design systems.");
-        let noop = agent007_skills::NoOpSkillContentProvider;
         let (mem, router, disp) = make_orch_infra();
         let orch = SubOrchestrator::from_persona(
             &persona,
             vec![],
-            &noop,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -836,7 +893,7 @@ mod tests {
         let orch = SubOrchestrator::from_persona(
             &persona,
             vec![],
-            &provider,
+            Arc::new(provider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -861,12 +918,11 @@ mod tests {
     #[test]
     fn from_persona_no_skill_leaves_prompt_unchanged() {
         let persona = make_persona("Reviewer", "You review pull requests.");
-        let noop = agent007_skills::NoOpSkillContentProvider;
         let (mem, router, disp) = make_orch_infra();
         let orch = SubOrchestrator::from_persona(
             &persona,
             vec![],
-            &noop,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -882,12 +938,14 @@ mod tests {
         let mut persona = make_persona("Lead", "Orchestrate.");
         persona.allowed_workers = Some(vec!["OldWorker".to_string()]);
 
-        let noop = agent007_skills::NoOpSkillContentProvider;
         let (mem, router, disp) = make_orch_infra();
         let orch = SubOrchestrator::from_persona(
             &persona,
-            vec!["NewWorker".to_string()],
-            &noop,
+            vec![WorkerSpec {
+                name: "NewWorker".to_string(),
+                skills: vec![],
+            }],
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -906,12 +964,11 @@ mod tests {
         let mut persona = make_persona("Lead", "Orchestrate.");
         persona.allowed_workers = Some(vec!["FallbackWorker".to_string()]);
 
-        let noop = agent007_skills::NoOpSkillContentProvider;
         let (mem, router, disp) = make_orch_infra();
         let orch = SubOrchestrator::from_persona(
             &persona,
             vec![],
-            &noop,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -936,12 +993,11 @@ mod tests {
             unrestricted: vec![],
         });
 
-        let noop = agent007_skills::NoOpSkillContentProvider;
         let (mem, router, disp) = make_orch_infra();
         let orch = SubOrchestrator::from_persona(
             &persona,
             vec![],
-            &noop,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
             router,
             Arc::new(NoOpPersonaProvider),
@@ -962,5 +1018,83 @@ mod tests {
             zones.sensitive.is_none(),
             "empty vec should map to None"
         );
+    }
+
+    #[test]
+    fn from_persona_worker_specs_stored_for_dispatch() {
+        // Verify that WorkerSpec entries (with their skill lists) are preserved
+        // on the orchestrator so dispatch_parallel can inject them per-worker.
+        let persona = make_persona("Orchestrator", "Coordinate workers.");
+        let (mem, router, disp) = make_orch_infra();
+        let specs = vec![
+            WorkerSpec {
+                name: "AnalystWorker".to_string(),
+                skills: vec!["data-analysis".to_string()],
+            },
+            WorkerSpec {
+                name: "WriterWorker".to_string(),
+                skills: vec!["technical-writing".to_string(), "style-guide".to_string()],
+            },
+        ];
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            specs,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert_eq!(orch.worker_specs.len(), 2);
+        let analyst = orch.worker_specs.iter().find(|ws| ws.name == "AnalystWorker").unwrap();
+        assert_eq!(analyst.skills, vec!["data-analysis"]);
+        let writer = orch.worker_specs.iter().find(|ws| ws.name == "WriterWorker").unwrap();
+        assert_eq!(writer.skills, vec!["technical-writing", "style-guide"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_with_worker_skills_completes_without_error() {
+        // Smoke test: dispatch_parallel must not panic or error when WorkerSpecs
+        // carry skill triggers (even if NoOpSkillContentProvider returns None for them).
+        use agent007_core::persona::{NoOpPersonaProvider, PersonaSpec};
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let mock = Arc::new(MockProvider::new("worker done", "mock"));
+        let mut router = ModelRouter::new("mock");
+        router.register("mock", mock as Arc<dyn ModelProvider>);
+        let router = Arc::new(router);
+        let dispatcher = LocalDispatcher::new(64);
+
+        let mut persona = make_persona("SkillOrch", "Orchestrate with skills.");
+        persona.allowed_workers = Some(vec!["Analyst".to_string()]);
+
+        let worker_specs = vec![WorkerSpec {
+            name: "Analyst".to_string(),
+            skills: vec!["data-analysis".to_string()],
+        }];
+
+        let scoped = Arc::new(store.scoped("skill-orch-ns"));
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            worker_specs,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
+            scoped,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            dispatcher,
+            0,
+            3,
+        );
+
+        let subtasks = vec![SubTask {
+            worker_name: "Analyst".into(),
+            description: "analyse the dataset".into(),
+        }];
+
+        let outputs = orch.dispatch_parallel(subtasks, AgentId::new()).await;
+        assert_eq!(outputs.len(), 1, "worker should complete");
     }
 }

@@ -552,6 +552,7 @@ mod tests {
                     workflow: None,
                     extract: None,
                     cache: false,
+                    workers: None,
                 },
                 StepDef {
                     id: "implement".to_string(),
@@ -570,6 +571,7 @@ mod tests {
                     workflow: None,
                     extract: None,
                     cache: false,
+                    workers: None,
                 },
             ],
             budget: None,
