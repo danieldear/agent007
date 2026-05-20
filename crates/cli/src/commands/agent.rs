@@ -1,6 +1,8 @@
-use agent007_custom_agents::{AgentDef, AgentRegistry, AgentType, CustomAgentError, SubOrchestrator};
 use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::persona::PersonaProvider;
+use agent007_custom_agents::{
+    AgentDef, AgentRegistry, AgentType, CustomAgentError, SubOrchestrator,
+};
 use agent007_memory::store::MemoryStore;
 use agent007_models::router::ModelRouter;
 use std::sync::Arc;
@@ -91,9 +93,18 @@ system_prompt = "TODO: write the system prompt for {name}."
 #[derive(Debug, Clone)]
 pub enum AgentAction {
     List,
-    Inspect { name: String },
-    Run { name: String, task: String },
-    Create { name: String, agent_type: String, namespace: Option<String> },
+    Inspect {
+        name: String,
+    },
+    Run {
+        name: String,
+        task: String,
+    },
+    Create {
+        name: String,
+        agent_type: String,
+        namespace: Option<String>,
+    },
 }
 
 /// Entry point called from main.rs dispatch.
@@ -177,8 +188,7 @@ pub async fn execute(
                 });
             let agents_dir = home.join("agents");
             std::fs::create_dir_all(&agents_dir)?;
-            let path =
-                agents_dir.join(format!("{}.toml", name.to_lowercase().replace(' ', "_")));
+            let path = agents_dir.join(format!("{}.toml", name.to_lowercase().replace(' ', "_")));
             std::fs::write(&path, &toml_str)?;
             println!("Created agent definition at: {}", path.display());
             println!("\n{toml_str}");

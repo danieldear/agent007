@@ -233,7 +233,11 @@ impl SubOrchestrator {
                     }],
                     max_tokens: None,
                     temperature: None,
-                    system: if system.is_empty() { None } else { Some(system) },
+                    system: if system.is_empty() {
+                        None
+                    } else {
+                        Some(system)
+                    },
                 };
 
                 match router.complete(req).await {
@@ -314,10 +318,7 @@ impl SubOrchestrator {
             "subtask_results": subtask_results,
         });
 
-        if let Err(e) = self
-            .scoped_memory
-            .write("last_run", &record.to_string())
-        {
+        if let Err(e) = self.scoped_memory.write("last_run", &record.to_string()) {
             tracing::warn!(error = %e, "failed to persist agent synthesis to memory");
         }
     }
@@ -571,7 +572,10 @@ mod tests {
 
         // Synthesis should have been written to memory
         let content = inner_store.scoped(ns).read("last_run").unwrap();
-        assert!(content.is_some(), "last_run key should be written after run");
+        assert!(
+            content.is_some(),
+            "last_run key should be written after run"
+        );
         let json: serde_json::Value =
             serde_json::from_str(&content.unwrap()).expect("should be valid JSON");
         assert_eq!(json["task"], "persist task");

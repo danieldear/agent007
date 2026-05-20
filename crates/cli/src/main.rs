@@ -356,22 +356,27 @@ async fn main() -> anyhow::Result<()> {
             commands::serve::execute(config, port, no_dashboard).await
         }
         Commands::Agent(a) => {
-            use commands::agent::{AgentAction, execute as agent_execute};
-            use commands::run::{build_stack, agent007_home};
+            use commands::agent::{execute as agent_execute, AgentAction};
+            use commands::run::{agent007_home, build_stack};
             let stack = build_stack(&config).await?;
             let agents_dir = agent007_home().join("agents");
             let registry = std::sync::Arc::new(
-                agent007_custom_agents::AgentRegistry::load(&agents_dir).unwrap_or_else(|_| {
-                    agent007_custom_agents::AgentRegistry::empty()
-                }),
+                agent007_custom_agents::AgentRegistry::load(&agents_dir)
+                    .unwrap_or_else(|_| agent007_custom_agents::AgentRegistry::empty()),
             );
             let action = match a.action {
                 AgentCliAction::List => AgentAction::List,
                 AgentCliAction::Inspect { name } => AgentAction::Inspect { name },
                 AgentCliAction::Run { name, task } => AgentAction::Run { name, task },
-                AgentCliAction::Create { name, agent_type, namespace } => {
-                    AgentAction::Create { name, agent_type, namespace }
-                }
+                AgentCliAction::Create {
+                    name,
+                    agent_type,
+                    namespace,
+                } => AgentAction::Create {
+                    name,
+                    agent_type,
+                    namespace,
+                },
             };
             agent_execute(
                 registry,
@@ -379,8 +384,10 @@ async fn main() -> anyhow::Result<()> {
                 stack.model_router,
                 stack.dispatcher,
                 stack.memory_store,
-                stack.persona_registry as std::sync::Arc<dyn agent007_core::persona::PersonaProvider + Send + Sync>,
-            ).await
+                stack.persona_registry
+                    as std::sync::Arc<dyn agent007_core::persona::PersonaProvider + Send + Sync>,
+            )
+            .await
         }
         Commands::Skill(s) => commands::skill::execute(config, s.action).await,
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,

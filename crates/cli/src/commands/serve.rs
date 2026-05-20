@@ -1994,7 +1994,10 @@ impl ServerHandler for Agent007Server {
                     }
                 };
 
-                let ns = def.memory_namespace.clone().unwrap_or_else(|| def.name.clone());
+                let ns = def
+                    .memory_namespace
+                    .clone()
+                    .unwrap_or_else(|| def.name.clone());
                 let scoped = Arc::new(stack.memory_store.scoped(&ns));
 
                 use agent007_core::dispatcher::Dispatcher;
@@ -2002,8 +2005,7 @@ impl ServerHandler for Agent007Server {
                     def,
                     scoped,
                     stack.model_router,
-                    stack.persona_registry
-                        as Arc<dyn agent007_core::persona::PersonaProvider>,
+                    stack.persona_registry as Arc<dyn agent007_core::persona::PersonaProvider>,
                     stack.dispatcher as Arc<dyn Dispatcher>,
                     0,
                     3,
