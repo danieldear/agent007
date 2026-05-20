@@ -30,8 +30,10 @@ M4 is active and shipping in small, reviewable slices. The current branch covers
 - **Runtime visibility v1:** compact dashboard/session inventory and CLI status are available, including terminal filters and watch mode.
 - **Provider readiness v1:** dashboard-safe provider status reports runtime mode, configured providers, and actionable setup hints without exposing secrets.
 - **Artifact/mock viewer v1:** run details can preview markdown, JSON/text, rendered Mermaid diagrams, sandboxed HTML, and image artifacts from the dashboard; oversized or binary artifacts fall back to raw/open handling.
+- **Operator TUI v1:** `agent007 tui` provides a terminal operator console with sessions, run detail, approvals, recent errors, safe approval/denial recording, retry-request notes, and compact summary export.
+- **Agent messaging v1:** runs persist structured agent/operator messages with `from`, `to`, `kind`, `payload`, timestamps, and shared per-run storage for dashboard and TUI inspection.
 
-Still deferred to later slices: full TUI control flows, agent-to-agent messaging, memory lifecycle changes, provider onboarding wizards/OAuth flows, and `.a7bundle` v2 implementation.
+Still deferred to later slices: deeper session resume/orphan recovery, autonomous handoff protocols, memory lifecycle classes/promotion rules, provider onboarding wizards/OAuth flows, and `.a7bundle` v2 implementation.
 
 ## Workstreams
 
@@ -78,20 +80,20 @@ Make collaboration explicit instead of implicit via only workflow state.
   - dashboard session/run detail views
 
 **Deliverables**
-1. Internal message envelope:
+1. Internal message envelope (**v1 shipped for persisted run messages**):
    - from
    - to
    - session/run
    - message kind
    - payload
    - timestamp
-2. Message classes:
+2. Message classes (**v1 shipped**):
    - request
    - handoff
    - progress note
    - warning/blocker
    - result summary
-3. Compact UI surface showing:
+3. Compact UI surface showing (**v1 shipped in dashboard notes and TUI detail**):
    - last N messages
    - blocked handoffs
    - unacknowledged requests
@@ -209,7 +211,8 @@ Expose runtime state in a compact, operator-friendly way.
 Make the terminal experience genuinely usable for monitoring and control.
 
 **Current slice**
-- `agent007 status` now supports compact runtime filtering and watch mode for terminal monitoring without raw JSON dumps.
+- `agent007 status` supports compact runtime filtering and watch mode for terminal monitoring without raw JSON dumps.
+- `agent007 tui` provides an interactive operator console for sessions, run detail, approvals, errors, and structured run messages.
 
 **Scope**
 - candidate CLI/TUI surfaces in:
@@ -217,12 +220,12 @@ Make the terminal experience genuinely usable for monitoring and control.
   - dashboard parity for status concepts
 
 **Deliverables**
-1. TUI views:
+1. TUI views (**v1 shipped**):
    - sessions list
    - run detail
    - approvals queue
    - recent errors
-2. Keyboard actions:
+2. Keyboard actions (**v1 shipped for safe local actions**):
    - inspect
    - retry
    - approve/deny
@@ -314,15 +317,18 @@ Make generated visual/design artifacts first-class in the dashboard so users can
 - align summary shape with terminal output
 
 ### Slice C — First Usable TUI
-- sessions list (terminal filter/watch shipped for `agent007 status`)
-- run detail
-- approval queue
+- sessions list (terminal filter/watch shipped for `agent007 status`; interactive console shipped as `agent007 tui`)
+- run detail (v1 shipped)
+- approval queue (v1 shipped)
+- recent error queue (v1 shipped)
+- summary export and retry-request notes (v1 shipped)
 
 ### Slice D — Agent Messaging Core
-- message envelope (v1 shipped as runtime message records)
-- persistence (v1 shipped via per-run `messages.json` artifact)
+- message envelope (v1 shipped as structured agent/operator message records)
+- persistence (v1 shipped via per-run `messages.json` artifact and `agent-message` log entries)
 - message inspection UI (v1 shipped as run-detail Session Notes)
 - operator note append from dashboard
+- operator message inspection and action notes from TUI
 
 ### Slice E — Provider / Browser UX
 - provider health/status (v1 shipped)
