@@ -103,6 +103,18 @@ impl VectorDB for LanceDBStore {
         Ok(())
     }
 
+    async fn delete_doc(&self, doc_id: &str) -> Result<(), MemoryError> {
+        let table = self.table.write().await;
+        // Escape single quotes to prevent injection through doc_id values.
+        let safe = doc_id.replace('\'', "\\'");
+        // Delete the exact id and all chunk ids of the form "doc_id#N".
+        table
+            .delete(&format!("id = '{safe}' OR id LIKE '{safe}#%'"))
+            .await
+            .map(|_| ())
+            .map_err(|e| MemoryError::VectorDb(e.to_string()))
+    }
+
     async fn search(
         &self,
         query: Vec<f32>,

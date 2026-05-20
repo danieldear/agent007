@@ -376,15 +376,7 @@ impl MemoryStore {
         let _ = self.decay_pass(namespace, key);
         // Feature 3: auto-link temporal co-writes
         let _ = self.temporal_edge_pass(namespace, key);
-        // Queue for background vector indexing when a channel is attached.
-        // The send is fire-and-forget — a closed or lagging receiver is silently ignored.
-        if let Some(tx) = self.index_tx.get() {
-            let ns_label = if namespace.is_empty() { "default" } else { namespace };
-            let _ = tx.send(IndexTask {
-                doc_id: format!("memory:{ns_label}:{key}"),
-                content: value.to_string(),
-            });
-        }
+        self.enqueue_index_task(namespace, key, value);
         Ok(())
     }
 
@@ -483,7 +475,21 @@ impl MemoryStore {
         }
         meta.updated_at = Utc::now();
         let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
+        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })?;
+        self.enqueue_index_task(namespace, key, value);
+        Ok(())
+    }
+
+    /// Shared helper: enqueue an [`IndexTask`] when a background indexing channel is attached.
+    /// Fire-and-forget — a closed or lagging receiver is silently ignored.
+    fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
+        if let Some(tx) = self.index_tx.get() {
+            let ns_label = if namespace.is_empty() { "default" } else { namespace };
+            let _ = tx.send(IndexTask {
+                doc_id: format!("memory:{ns_label}:{key}"),
+                content: value.to_string(),
+            });
+        }
     }
 
     /// Delete expired entries in a namespace and return number removed.

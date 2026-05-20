@@ -23,6 +23,10 @@ impl Indexer {
     }
 
     pub async fn index_text(&self, doc_id: &str, text: &str) -> Result<(), MemoryError> {
+        // Remove stale chunks from a previous (possibly longer) value for this
+        // document before inserting the new ones, so old higher-index chunks
+        // (e.g. doc_id#3 after shortening to 2 chunks) are not left searchable.
+        self.db.delete_doc(doc_id).await?;
         let chunks = self.chunk_text(text);
         for (n, chunk) in chunks.into_iter().enumerate() {
             let vector = self

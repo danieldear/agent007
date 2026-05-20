@@ -827,12 +827,14 @@ pub async fn skills_run_handler(
         384,
     )) as Arc<dyn agent007_models::EmbeddingProvider>;
 
-    let vectordb_path = agent007_write_home().join("vectordb").join("memory");
+    // Use the same vectordb path and table name as the CLI write path so the
+    // web handler reads the index that CLI runs actually populate.
+    let vectordb_path = agent007_write_home().join("vectordb");
     let _ = std::fs::create_dir_all(&vectordb_path);
     let db: Arc<dyn agent007_memory::VectorDB> =
         match agent007_memory::vectordb::LanceDBStore::new(
             vectordb_path.to_str().unwrap_or(".lance"),
-            "memory",
+            "skills",
             384,
         )
         .await
@@ -843,9 +845,7 @@ pub async fn skills_run_handler(
                 Arc::new(NoOpVectorDB)
             }
         };
-    let retriever = Arc::new(
-        agent007_memory::Retriever::new(embedder, db, 5)
-    );
+    let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
 
     let memory_store = memory_store_for_web();
     let memory = memory_store.global();

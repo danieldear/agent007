@@ -834,24 +834,29 @@ async fn build_skill_executor(
 
     let rag_enabled = rag_config.map(|rag| rag.enabled).unwrap_or(true);
     let mut indexed_docs = 0usize;
-    if !is_dry_run && rag_enabled && !skip_rag_warmup {
-        // Wrap in Arc so the same indexer can be handed to the background task
-        // that keeps the vector index up-to-date as new memory entries are written
-        // during the run (not just at warmup time).
+    if !is_dry_run && rag_enabled {
+        // Wrap in Arc so the indexer can be shared between the warmup pass and
+        // the background task that keeps the index live during the run.
         let indexer = Arc::new(Indexer::new(Arc::clone(&embedder), Arc::clone(&db), 900));
-        match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
-            Ok(count) => {
-                indexed_docs = count;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "RAG warmup index failed; continuing with keyword fallback"
-                );
+
+        // Warmup is optional (e.g. skipped by build_stack_for_web), but
+        // write-path indexing should always run when RAG is enabled.
+        if !skip_rag_warmup {
+            match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
+                Ok(count) => {
+                    indexed_docs = count;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "RAG warmup index failed; continuing with keyword fallback"
+                    );
+                }
             }
         }
-        // Keep the indexer alive and wire it to the memory store so every write
-        // during the run is automatically embedded and inserted into the vector index.
+
+        // Wire the indexer into the memory store so every write during the run
+        // is automatically embedded and inserted into the vector index.
         // The JoinHandle is intentionally dropped — the task exits when the store drops.
         let _index_handle =
             agent007_memory::start_background_indexer(memory_store, Arc::clone(&indexer));
