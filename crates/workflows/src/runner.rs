@@ -33,6 +33,12 @@ pub struct WorkflowRunner {
     pub run_store: Option<Arc<RunStore>>,
     pub run_id: Option<String>,
     pub initial_state: Option<WorkflowRunState>,
+    /// Optional skill content provider for multi-agent steps.
+    /// When `Some`, it is shared across all MultiAgent step executions in this
+    /// run — built once at runner construction, avoiding per-step disk reads.
+    /// When `None`, a `NoOpSkillContentProvider` fallback is used with a
+    /// warning logged.
+    pub skill_content_provider: Option<Arc<dyn agent007_skills::SkillContentProvider>>,
 }
 
 impl WorkflowRunner {
@@ -48,7 +54,21 @@ impl WorkflowRunner {
             run_store: None,
             run_id: None,
             initial_state: None,
+            skill_content_provider: None,
         }
+    }
+
+    /// Attach a pre-built `SkillContentProvider` to this runner.
+    ///
+    /// Call this after `new()` when the caller has already loaded skills from
+    /// disk.  Avoids the per-step filesystem reload that happens when the field
+    /// is absent.
+    pub fn with_skill_provider(
+        mut self,
+        provider: Arc<dyn agent007_skills::SkillContentProvider>,
+    ) -> Self {
+        self.skill_content_provider = Some(provider);
+        self
     }
 
     pub fn for_run(&self, run_store: Arc<RunStore>, run_id: impl Into<String>) -> Self {
@@ -58,6 +78,7 @@ impl WorkflowRunner {
             dispatcher: self.dispatcher.clone(),
             run_store: Some(run_store),
             run_id: Some(run_id.into()),
+            skill_content_provider: self.skill_content_provider.clone(),
             initial_state: None,
         }
     }
@@ -75,6 +96,7 @@ impl WorkflowRunner {
             run_store: Some(run_store),
             run_id: Some(run_id.into()),
             initial_state: Some(state),
+            skill_content_provider: self.skill_content_provider.clone(),
         }
     }
 
@@ -334,6 +356,126 @@ impl WorkflowRunner {
                         }
                         .await;
                         step_futures.push(tokio::spawn(async move { sub_result }));
+                        continue;
+                    }
+
+                    // MultiAgent steps build a SubOrchestrator from the step's persona and
+                    // worker list, inject skill domain knowledge, and run inline (not spawned)
+                    // to avoid requiring the orchestrator and its deps to be Send.
+                    if step.r#type == StepType::MultiAgent {
+                        // Capture the skill provider from the runner field, or fall back to a
+                        // lazy disk load (and warn so the caller knows to wire it up properly).
+                        let skill_provider_for_step: Arc<
+                            dyn agent007_skills::SkillContentProvider,
+                        > = {
+                            if let Some(ref sp) = self.skill_content_provider {
+                                Arc::clone(sp)
+                            } else {
+                                tracing::warn!(
+                                    step_id = %step.id,
+                                    "WorkflowRunner.skill_content_provider not set; loading skills \
+                                     from disk for this step. Use with_skill_provider() at runner \
+                                     construction to avoid per-step disk reads."
+                                );
+                                let skills_dir =
+                                    agent007_core::paths::agent007_home().join("skills");
+                                match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                                    Ok(skills) => {
+                                        Arc::new(agent007_skills::SkillIndex::from_skills(skills))
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "failed to load skills; multi-agent step will run \
+                                             without skill injection"
+                                        );
+                                        Arc::new(agent007_skills::NoOpSkillContentProvider)
+                                    }
+                                }
+                            }
+                        };
+
+                        let multi_result: Result<
+                            (crate::types::StepDef, String, String, usize),
+                            WorkflowError,
+                        > = async {
+                            // Resolve the orchestrator persona.
+                            let persona_name = step.agent.clone();
+                            let persona_spec =
+                                persona_provider.get(&persona_name).ok_or_else(|| {
+                                    WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: format!(
+                                        "persona '{persona_name}' not found for multi-agent step"
+                                    ),
+                                    }
+                                })?;
+
+                            // Map WorkerConfig → WorkerSpec to avoid a circular dep between
+                            // workflows ← custom-agents.
+                            let worker_specs: Vec<agent007_custom_agents::WorkerSpec> = step
+                                .workers
+                                .as_ref()
+                                .map(|ws| {
+                                    ws.iter()
+                                        .map(|wc| agent007_custom_agents::WorkerSpec {
+                                            name: wc.persona.clone(),
+                                            skills: wc.skills.clone(),
+                                            sequential: wc.run
+                                                == crate::types::WorkerRunMode::Sequential,
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            // Construct a memory store keyed by persona namespace.
+                            let memory_dir = agent007_core::paths::agent007_home().join("memory");
+                            if let Err(e) = std::fs::create_dir_all(&memory_dir) {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %memory_dir.display(),
+                                    "failed to create memory directory for multi-agent step"
+                                );
+                            }
+                            let mem_store =
+                                Arc::new(agent007_memory::store::MemoryStore::new(&memory_dir));
+                            let ns = persona_spec
+                                .memory_namespace
+                                .clone()
+                                .unwrap_or_else(|| persona_spec.name.clone());
+                            let scoped = Arc::new(mem_store.scoped(&ns));
+
+                            // Build and run the sub-orchestrator.
+                            let orchestrator =
+                                agent007_custom_agents::SubOrchestrator::from_persona(
+                                    &persona_spec,
+                                    worker_specs,
+                                    skill_provider_for_step,
+                                    scoped,
+                                    router.clone(),
+                                    persona_provider.clone(),
+                                    sub_dispatcher.clone(),
+                                    0,
+                                    3,
+                                );
+
+                            let result = orchestrator.run(&task_str).await.map_err(|e| {
+                                WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!("multi-agent step failed: {e}"),
+                                }
+                            })?;
+
+                            // Tokens are not tracked by SubOrchestrator today.
+                            Ok((
+                                step,
+                                result.output,
+                                format!("multi-agent/{persona_name}"),
+                                0usize,
+                            ))
+                        }
+                        .await;
+                        step_futures.push(tokio::spawn(async move { multi_result }));
                         continue;
                     }
 
@@ -942,6 +1084,9 @@ impl WorkflowRunner {
                         // Extract steps are handled inline in the hosted engine; the
                         // parallel runner does not support them and skips post-processing.
                         StepType::Extract => {}
+                        // MultiAgent steps are dispatched via SubOrchestrator; handled
+                        // in the execution branch below. Nothing extra at post-step stage.
+                        StepType::MultiAgent => {}
                     }
 
                     completed_steps.insert(step.id.clone());
@@ -2873,6 +3018,94 @@ mod tests {
     }
 
     // ── minify_context unit tests ────────────────────────────────────────────
+
+    // ── skill_content_provider builder ─────────────────────────────────────────
+
+    #[test]
+    fn with_skill_provider_sets_field() {
+        let runner = mock_runner("ok");
+        assert!(
+            runner.skill_content_provider.is_none(),
+            "skill_content_provider should start as None"
+        );
+        let runner =
+            runner.with_skill_provider(Arc::new(agent007_skills::NoOpSkillContentProvider));
+        assert!(
+            runner.skill_content_provider.is_some(),
+            "with_skill_provider should set the field"
+        );
+    }
+
+    #[test]
+    fn with_skill_provider_replaces_existing_provider() {
+        use agent007_skills::{Skill, SkillFrontmatter, SkillIndex};
+        let first_provider = Arc::new(agent007_skills::NoOpSkillContentProvider);
+        let skill = Skill {
+            frontmatter: SkillFrontmatter {
+                name: "dev-debug".to_string(),
+                description: "debug".to_string(),
+                trigger: "dev-debug".to_string(),
+                model: "claude".to_string(),
+                category: "dev".to_string(),
+                version: "1.0.0".to_string(),
+                tags: vec![],
+            },
+            template: "debug knowledge".to_string(),
+            manifest_path: std::path::PathBuf::from("test.md"),
+            entry_path: std::path::PathBuf::from("test.md"),
+            skill_dir: std::path::PathBuf::from("."),
+        };
+        let second_provider = Arc::new(SkillIndex::from_skills(vec![skill]));
+        let runner = mock_runner("ok")
+            .with_skill_provider(first_provider)
+            .with_skill_provider(second_provider);
+        let sp = runner.skill_content_provider.as_ref().unwrap();
+        // Second provider has content; if it was replaced correctly, lookup succeeds.
+        assert!(
+            sp.load_content("dev-debug").is_some(),
+            "last-set provider should be active"
+        );
+    }
+
+    // ── WorkerConfig → WorkerSpec mapping ──────────────────────────────────────
+
+    #[test]
+    fn worker_config_to_worker_spec_preserves_name_and_skills() {
+        use crate::types::{WorkerConfig, WorkerRunMode};
+        use agent007_custom_agents::WorkerSpec;
+
+        let wcs = vec![
+            WorkerConfig {
+                persona: "analyst".to_string(),
+                skills: vec!["data-analysis".to_string()],
+                run: WorkerRunMode::Parallel,
+            },
+            WorkerConfig {
+                persona: "writer".to_string(),
+                skills: vec!["technical-writing".to_string(), "style-guide".to_string()],
+                run: WorkerRunMode::Sequential,
+            },
+        ];
+
+        let specs: Vec<WorkerSpec> = wcs
+            .iter()
+            .map(|wc| WorkerSpec {
+                name: wc.persona.clone(),
+                skills: wc.skills.clone(),
+                sequential: wc.run == WorkerRunMode::Sequential,
+            })
+            .collect();
+
+        assert_eq!(specs[0].name, "analyst");
+        assert_eq!(specs[0].skills, vec!["data-analysis"]);
+        assert!(!specs[0].sequential);
+        assert_eq!(specs[1].name, "writer");
+        assert!(
+            specs[1].sequential,
+            "sequential run mode should map to sequential=true"
+        );
+        assert_eq!(specs[1].skills, vec!["technical-writing", "style-guide"]);
+    }
 
     #[test]
     fn minify_collapses_excess_blank_lines() {

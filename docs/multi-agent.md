@@ -1,10 +1,17 @@
 # Multi-Agent Execution
 
-agent007 ships a full multi-agent orchestration layer.  
-A single *sub-orchestrator* agent decomposes a high-level task into sub-tasks,
-dispatches them to worker personas **in parallel**, handles blockers with a
-second replan round, and synthesises a combined result — all while publishing
-structured events to the dispatcher so the dashboard and TUI stay live.
+agent007 ships a full multi-agent orchestration layer built around three
+complementary concepts:
+
+| Layer | Concept | Answers |
+|-------|---------|---------|
+| **Workflow** | Topology — who talks to whom, in what order | _When_ and _with whom_ |
+| **Persona** | Behaviour — system prompt, model, zones, memory | _How_ the agent acts |
+| **Skill** | Domain knowledge — injected Markdown bodies | _What_ the agent knows |
+
+A **persona IS the agent**. No separate AgentDef TOML is needed.
+Workflows orchestrate personas into teams via the `multi-agent` step type;
+skills augment a persona's system prompt on demand.
 
 ---
 
@@ -12,27 +19,41 @@ structured events to the dispatcher so the dashboard and TUI stay live.
 
 | Term | Description |
 |------|-------------|
-| **AgentDef** | TOML file in `~/.agent007/agents/` that describes an agent (type, system prompt, allowed workers, zones, memory namespace, …) |
-| **AgentType** | `worker` or `sub-orchestrator` |
-| **SubOrchestrator** | Rust struct that owns the decompose → dispatch → replan → synthesise loop |
+| **PersonaSpec** | TOML file in `~/.agent007/personas/` (or built-in). Now also carries `skills`, `agent_type`, `allowed_workers`, `memory_namespace`, and `zones`. |
+| **SkillContentProvider** | Trait that resolves a skill trigger name → Markdown body. `SkillIndex` (loaded from disk) and `NoOpSkillContentProvider` (fallback) implement it. |
+| **SubOrchestrator** | Rust struct that owns the decompose → dispatch → replan → synthesise loop. Can be constructed from a `PersonaSpec` via `SubOrchestrator::from_persona()`. |
 | **WorkerOutput** | Per-subtask result: output string + optional blocker reason |
 | **SubTaskResult** | Final result returned to the caller: combined `output`, `blockers`, `files_changed`, `tests_passed` |
 | **Dispatcher** | Broadcast channel; publishes `AgentEvent` variants consumed by the dashboard metrics engine and TUI |
 
 ---
 
-## Agent TOML schema
+## Persona TOML schema (extended)
+
+Standard persona fields plus five new optional fields that enable agent behaviour:
 
 ```toml
-# ~/.agent007/agents/my-agent.toml
-name             = "my-agent"
-type             = "sub-orchestrator"     # or "worker"
-description      = "Does X, Y, Z"
-system_prompt    = "You are …"
-memory_namespace = "my-agent"            # optional, defaults to name
+# ~/.agent007/personas/feature-lead.toml
+name             = "feature-lead"
+description      = "Owns feature delivery end-to-end"
+system_prompt    = "You are the feature lead. Break down tasks and coordinate specialists."
+preferred_model  = "claude-opus-4"
+allowed_tools    = ["bash", "file_read", "file_write"]
 
-# Sub-orchestrators only
-allowed_workers  = ["frontend", "backend", "qa"]
+# ── Agent lifecycle (all optional) ──────────────────────────────────────────
+
+# Scoped memory prefix (defaults to name at runtime)
+memory_namespace = "feature-lead"
+
+# Default skills always loaded into the system prompt
+skills = ["dev-architect", "dev-debug"]
+
+# "orchestrator" → can run as a SubOrchestrator
+# "worker"       → leaf node (default)
+agent_type = "orchestrator"
+
+# Worker persona names this orchestrator may delegate to
+allowed_workers = ["coder", "codereviewer", "testdesigner"]
 
 # Optional zone rules
 [zones]
@@ -40,12 +61,76 @@ readonly  = ["docs/"]
 forbidden = [".env", "secrets/"]
 ```
 
-Generate a stub with the CLI:
+---
 
-```bash
-agent007 agent create my-agent --type sub-orchestrator --namespace my-ns
-# writes ~/.agent007/agents/my-agent.toml
+## Workflow `multi-agent` step type
+
+A workflow step of type `multi-agent` spins up a `SubOrchestrator` from the
+named persona, injects its skill domain knowledge, and dispatches workers
+defined in the step:
+
+```toml
+# ~/.agent007/workflows/feature-delivery.toml
+name    = "feature-delivery"
+version = "1.0.0"
+
+[[steps]]
+id    = "plan-and-implement"
+type  = "multi-agent"
+agent = "feature-lead"          # orchestrator persona name
+
+[[steps.workers]]
+persona = "coder"               # worker persona name
+run     = "parallel"            # "parallel" (default) or "sequential"
+
+[[steps.workers]]
+persona = "codereviewer"
+run     = "parallel"
+
+[[steps.workers]]
+persona = "testdesigner"
+run     = "sequential"          # runs after parallel workers finish
 ```
+
+### Worker run modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `parallel` (default) | All parallel workers run concurrently via `JoinSet` |
+| `sequential` | Runs after all parallel workers; receives their combined output as context prefix |
+
+---
+
+## Skill injection
+
+When `SubOrchestrator::from_persona()` is called, each trigger listed in
+`persona.skills` is resolved through the `SkillContentProvider`. Found bodies
+are prepended to the system prompt:
+
+```
+## Domain Knowledge
+
+<skill body>
+
+---
+
+<original system prompt>
+```
+
+Multiple skills stack: each prepends to the already-injected prompt.
+Unknown triggers are silently skipped (no-op).
+
+### Explicit skill override in a workflow step
+
+Workflow steps can also specify skills directly on individual workers:
+
+```toml
+[[steps.workers]]
+persona = "coder"
+skills  = ["code-optimize", "code-security-audit"]
+```
+
+These are merged with the persona's own `skills` list before injection.
 
 ---
 
@@ -54,33 +139,37 @@ agent007 agent create my-agent --type sub-orchestrator --namespace my-ns
 ```
 agent007 agent list                     List all registered agents
 agent007 agent inspect <name>           Show agent definition details
-agent007 agent run <name> "<task>"      Run an agent on a task
-agent007 agent create <name> [OPTIONS]  Generate a new agent TOML stub
+agent007 agent run <name> "<task>"      Run an agent on a task (uses PersonaSpec)
+agent007 workflow run <name> "<task>"   Run a full workflow (can include multi-agent steps)
 ```
 
-### Example
+### Run an agent directly from its persona
 
 ```bash
-# Create a sub-orchestrator that manages frontend and backend workers
-agent007 agent create feature-dev --type sub-orchestrator --namespace feature-dev
+# Run any persona as an orchestrator (uses persona.allowed_workers)
+agent007 agent run feature-lead "Add dark-mode toggle to the settings page"
+```
 
-# Edit ~/.agent007/agents/feature-dev.toml to fill in system_prompt + allowed_workers
+### Run a workflow that includes a multi-agent step
 
-# Run it
-agent007 agent run feature-dev "Add dark-mode toggle to the settings page"
+```bash
+agent007 workflow run feature-delivery "Add dark-mode toggle to the settings page"
 ```
 
 Output:
 
 ```
-🤖 Running agent 'feature-dev' …
-   Task: Add dark-mode toggle to the settings page
+🤖 Running workflow 'feature-delivery' …
+   Step: plan-and-implement [multi-agent → feature-lead]
 
-[combined output from all workers]
+[coder]
+Implemented ToggleDarkMode component with CSS variable swap …
 
-📂 Files changed:
-  • src/settings/ToggleDarkMode.tsx
-  • src/styles/tokens.css
+[codereviewer]
+No blocking issues. Suggested extracting the theme token list …
+
+[testdesigner]
+Added 3 unit tests for ToggleDarkMode and 1 integration test …
 ```
 
 ---
@@ -195,20 +284,34 @@ Or via MCP:
 
 ### Limiting recursion depth
 
-`SubOrchestrator::new` accepts `depth` (current) and `max_depth`.
+`SubOrchestrator::from_persona` accepts `depth` (current) and `max_depth`.
 The CLI and MCP handler hard-code `depth=0, max_depth=3`.
 Reduce `max_depth` if you want shallower delegation trees.
 
 ### Model selection
 
-Add `model = "claude-opus-4"` (or any router alias) to the agent TOML to
-pin a particular model for that agent's planning and worker calls.
+Add `preferred_model = "claude-opus-4"` (or any router alias) to the persona TOML
+to pin a particular model for that agent's planning and worker calls.
 
 ### Zone enforcement
 
 Agents honour the same zone rules as the main `run` command.
-Declare `[zones]` in the agent TOML to restrict which paths workers
+Declare `[zones]` in the persona TOML to restrict which paths workers
 may touch. The orchestrator checks zones before dispatching.
+
+### Wiring up the skill provider
+
+To avoid per-step disk reads, pass a pre-built `SkillIndex` at runner construction:
+
+```rust
+let skills_dir = agent007_home().join("skills");
+let index = SkillIndex::from_skills(SkillLoader::new(&skills_dir).load_all()?);
+let runner = WorkflowRunner::new(persona_provider, model_router, dispatcher)
+    .with_skill_provider(Arc::new(index));
+```
+
+If `with_skill_provider` is not called, the runner falls back to a lazy per-step disk
+load and logs a warning. Skill injection still works; it is just slightly slower.
 
 ---
 
@@ -216,7 +319,8 @@ may touch. The orchestrator checks zones before dispatching.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Agent 'x' not found` | No TOML file for that name | Run `agent007 agent list` |
-| `allowed_workers is empty` | Sub-orchestrator TOML missing `allowed_workers` | Edit the TOML |
-| Workers produce generic output | Personas for `allowed_workers` names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona files for each worker name, or use built-in names (`coder`, `reviewer`, `planner`) |
-| `MaxDepthExceeded` | Agent called itself recursively | Reduce max_depth or check TOML |
+| `persona 'x' not found for multi-agent step` | No persona TOML (or built-in) with that name | Run `agent007 persona list` |
+| `allowed_workers is empty` | Persona missing `allowed_workers` or step has no `[[steps.workers]]` entries | Add workers to the workflow step or set `allowed_workers` in the persona TOML |
+| Workers produce generic output | Personas for worker names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona TOMLs for each worker name, or reference built-in personas by their exact TitleCase name (e.g. `Coder`, `CodeReviewer`, `Architect`, `DebugAgent` — run `agent007 persona list` for the full list) |
+| `MaxDepthExceeded` | Agent called itself recursively | Reduce `max_depth` at runner construction |
+| Skills not injected | `with_skill_provider` not called on `WorkflowRunner` | Pass a `SkillIndex` via `runner.with_skill_provider(Arc::new(index))` |

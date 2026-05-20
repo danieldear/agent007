@@ -71,6 +71,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -82,6 +83,9 @@ dependencies = [
  "agent007-core",
  "agent007-memory",
  "agent007-models",
+ "agent007-skills",
+ "agent007-zones",
+ "async-trait",
  "chrono",
  "futures",
  "serde",
@@ -419,7 +423,9 @@ name = "agent007-workflows"
 version = "0.3.1"
 dependencies = [
  "agent007-core",
+ "agent007-custom-agents",
  "agent007-etr",
+ "agent007-memory",
  "agent007-models",
  "agent007-skills",
  "agent007-testing",

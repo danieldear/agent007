@@ -8,6 +8,34 @@ pub enum AgentType {
     SubOrchestrator,
 }
 
+/// Minimal per-worker configuration used by `SubOrchestrator::from_persona`.
+///
+/// Callers that build workers from a `WorkerConfig` (workflows crate) convert
+/// to this type to avoid a circular dependency between `custom-agents` and
+/// `workflows`.
+#[derive(Debug, Clone, Default)]
+pub struct WorkerSpec {
+    /// The persona name of this worker.
+    pub name: String,
+    /// Skill trigger names injected into this worker's system prompt for the
+    /// current invocation. These are merged with the worker persona's own
+    /// default `skills` list.
+    pub skills: Vec<String>,
+    /// If `true`, this worker runs *after* all non-sequential workers complete
+    /// and receives their combined outputs as context. Corresponds to
+    /// `run = "sequential"` in the workflow TOML.
+    pub sequential: bool,
+}
+
+/// Legacy agent definition loaded from `~/.agent007/agents/*.toml`.
+///
+/// Prefer defining agents as persona TOMLs with `agent_type = "orchestrator"` or
+/// `agent_type = "worker"`. `AgentDef` files continue to work for backward
+/// compatibility but are no longer required.
+#[deprecated(
+    note = "Use PersonaSpec with agent_type = \"worker\" | \"orchestrator\" instead. \
+            AgentDef TOML files remain supported for backward compat."
+)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct AgentDef {
     pub name: String,

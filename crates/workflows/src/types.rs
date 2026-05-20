@@ -87,6 +87,27 @@ impl WorkflowDef {
                         });
                     }
                 }
+                StepType::MultiAgent => {
+                    if step.workers.as_ref().map_or(true, |w| w.is_empty()) {
+                        return Err(crate::error::WorkflowError::SchemaError {
+                            reason: format!(
+                                "step '{}': multi-agent steps must have at least one worker in 'workers'",
+                                step.id
+                            ),
+                        });
+                    }
+                    // Validate that every worker has a non-empty persona name.
+                    for wc in step.workers.as_ref().unwrap() {
+                        if wc.persona.trim().is_empty() {
+                            return Err(crate::error::WorkflowError::SchemaError {
+                                reason: format!(
+                                    "step '{}': every worker entry must have a non-empty 'persona'",
+                                    step.id
+                                ),
+                            });
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -104,6 +125,37 @@ pub enum StepType {
     SubWorkflow,
     /// Run a deterministic ETR tool call — no LLM round-trip.
     Extract,
+    /// Fan out to multiple worker agents (persona-based), then combine their outputs.
+    /// The step's `agent` field names the orchestrator persona.
+    /// Worker details are declared in the `workers` field.
+    MultiAgent,
+}
+
+/// Execution mode for a worker within a multi-agent step.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerRunMode {
+    /// Run this worker concurrently with other parallel workers (default).
+    #[default]
+    Parallel,
+    /// Run this worker after all parallel workers in this step have completed.
+    /// Receives parallel workers' combined output as context.
+    Sequential,
+}
+
+/// Configuration for a single worker within a `multi-agent` step.
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct WorkerConfig {
+    /// Persona name to use for this worker (looked up in the PersonaRegistry).
+    pub persona: String,
+    /// Skill trigger names to inject into this worker's system prompt for this
+    /// invocation. These are *per-invocation* additions; the persona's own
+    /// `skills` field provides always-on defaults.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Execution mode: `parallel` (default) or `sequential`.
+    #[serde(default)]
+    pub run: WorkerRunMode,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -163,6 +215,10 @@ pub struct StepDef {
     /// If true, cache this step's output by content hash and skip re-execution on cache hit.
     #[serde(default)]
     pub cache: bool,
+    /// Worker configurations for `type: multi-agent` steps.
+    /// Ignored for all other step types.
+    #[serde(default)]
+    pub workers: Option<Vec<WorkerConfig>>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
@@ -427,5 +483,193 @@ output = "design"
         let def: WorkflowDef = toml::from_str(yaml).unwrap();
         assert_eq!(def.steps[0].skill.as_deref(), Some("/dev-architect"));
         assert!(def.steps[0].prompt.is_none());
+    }
+
+    #[test]
+    fn deserialize_multi_agent_step() {
+        let toml_str = r#"
+name = "Multi-Agent Test"
+
+[[steps]]
+id = "investigate"
+type = "multi-agent"
+agent = "tech-lead"
+prompt = "{{task}}"
+output = "investigation_result"
+
+[[steps.workers]]
+persona = "debugger"
+skills = ["wifi-debug"]
+run = "parallel"
+
+[[steps.workers]]
+persona = "coder"
+skills = ["wifi-driver-codebase"]
+run = "parallel"
+
+[[steps.workers]]
+persona = "reporter"
+run = "sequential"
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        assert_eq!(def.steps.len(), 1);
+        let step = &def.steps[0];
+        assert_eq!(step.r#type, StepType::MultiAgent);
+        assert_eq!(step.agent, "tech-lead");
+
+        let workers = step.workers.as_ref().unwrap();
+        assert_eq!(workers.len(), 3);
+        assert_eq!(workers[0].persona, "debugger");
+        assert_eq!(workers[0].skills, vec!["wifi-debug"]);
+        assert_eq!(workers[0].run, WorkerRunMode::Parallel);
+        assert_eq!(workers[1].persona, "coder");
+        assert_eq!(workers[2].persona, "reporter");
+        assert_eq!(workers[2].run, WorkerRunMode::Sequential);
+    }
+
+    #[test]
+    fn multi_agent_step_without_workers_fails_validation() {
+        let toml_str = r#"
+name = "Invalid Multi-Agent"
+
+[[steps]]
+id = "bad"
+type = "multi-agent"
+agent = "tech-lead"
+prompt = "{{task}}"
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let result = def.validate_schema();
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("multi-agent"),
+            "error should mention multi-agent: {msg}"
+        );
+        assert!(msg.contains("bad"), "error should mention step id: {msg}");
+    }
+
+    #[test]
+    fn worker_run_mode_defaults_to_parallel() {
+        let toml_str = r#"
+name = "Default Run Test"
+
+[[steps]]
+id = "step1"
+type = "multi-agent"
+agent = "orch"
+prompt = "go"
+
+[[steps.workers]]
+persona = "worker-a"
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let worker = &def.steps[0].workers.as_ref().unwrap()[0];
+        assert_eq!(worker.run, WorkerRunMode::Parallel);
+        assert!(worker.skills.is_empty());
+    }
+
+    #[test]
+    fn existing_step_without_workers_field_still_parses() {
+        // Regression: existing workflows without 'workers' must still parse cleanly
+        let def: WorkflowDef = toml::from_str(MINIMAL_TOML).unwrap();
+        assert!(def.steps[0].workers.is_none());
+    }
+
+    #[test]
+    fn worker_with_empty_persona_fails_validation() {
+        let toml_str = r#"
+name = "Bad Worker"
+
+[[steps]]
+id = "analyse"
+type = "multi-agent"
+agent = "lead"
+prompt = "go"
+
+[[steps.workers]]
+persona = ""
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let result = def.validate_schema();
+        assert!(result.is_err(), "empty persona should fail validation");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-empty"),
+            "error should mention non-empty requirement: {msg}"
+        );
+        assert!(msg.contains("analyse"), "error should name the step: {msg}");
+    }
+
+    #[test]
+    fn worker_with_whitespace_only_persona_fails_validation() {
+        let toml_str = r#"
+name = "Whitespace Persona"
+
+[[steps]]
+id = "compute"
+type = "multi-agent"
+agent = "lead"
+prompt = "go"
+
+[[steps.workers]]
+persona = "   "
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let result = def.validate_schema();
+        assert!(
+            result.is_err(),
+            "whitespace-only persona should fail validation"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-empty"),
+            "error should mention non-empty requirement: {msg}"
+        );
+    }
+
+    #[test]
+    fn worker_skills_default_to_empty_when_absent() {
+        let toml_str = r#"
+name = "No Skills"
+
+[[steps]]
+id = "step1"
+type = "multi-agent"
+agent = "orch"
+prompt = "go"
+
+[[steps.workers]]
+persona = "analyst"
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let worker = &def.steps[0].workers.as_ref().unwrap()[0];
+        assert!(
+            worker.skills.is_empty(),
+            "skills should default to empty vec when not specified"
+        );
+    }
+
+    #[test]
+    fn worker_skills_round_trip_multiple_values() {
+        let toml_str = r#"
+name = "With Skills"
+
+[[steps]]
+id = "step1"
+type = "multi-agent"
+agent = "orch"
+prompt = "go"
+
+[[steps.workers]]
+persona = "coder"
+skills = ["dev-debug", "code-review", "style-guide"]
+"#;
+        let def: WorkflowDef = toml::from_str(toml_str).unwrap();
+        let worker = &def.steps[0].workers.as_ref().unwrap()[0];
+        assert_eq!(
+            worker.skills,
+            vec!["dev-debug", "code-review", "style-guide"]
+        );
     }
 }

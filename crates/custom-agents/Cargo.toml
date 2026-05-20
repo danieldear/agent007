@@ -7,6 +7,7 @@ edition = "2021"
 agent007-core    = { path = "../core" }
 agent007-memory  = { path = "../memory" }
 agent007-models  = { path = "../models" }
+agent007-skills  = { path = "../skills" }
 thiserror = { workspace = true }
 serde     = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -17,5 +18,7 @@ chrono    = { workspace = true }
 futures   = { workspace = true }
 
 [dev-dependencies]
-tempfile  = { workspace = true }
-tokio     = { workspace = true, features = ["full", "test-util"] }
+agent007-zones = { path = "../zones" }
+async-trait    = { workspace = true }
+tempfile       = { workspace = true }
+tokio          = { workspace = true, features = ["full", "test-util"] }

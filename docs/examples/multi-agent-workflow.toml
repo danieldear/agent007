@@ -1,0 +1,74 @@
+# docs/examples/multi-agent-workflow.toml
+#
+# Complete example of a multi-agent workflow using the M6 unified agent model.
+#
+# Three-layer architecture:
+#   Workflow  — declares topology (who, in what order)
+#   Persona   — owns behaviour (system prompt, model, zones, default skills)
+#   Skill     — provides domain knowledge injected at invocation time
+#
+# Prerequisites:
+#   ~/.agent007/personas/feature-lead.toml   (orchestrator persona)
+#   ~/.agent007/personas/coder.toml          (worker persona)
+#   ~/.agent007/personas/code-reviewer.toml  (worker persona)
+#   ~/.agent007/personas/test-designer.toml  (worker persona)
+#
+# Run with:
+#   agent007 workflow run feature-delivery "Add dark-mode toggle to the settings page"
+
+name    = "feature-delivery"
+description = "End-to-end feature delivery: plan → implement + review (parallel) → test (sequential)"
+
+# ── Step 1: gather requirements ──────────────────────────────────────────────
+
+[[steps]]
+id     = "gather-requirements"
+agent  = "feature-lead"
+prompt = "Analyse the task and write a concise implementation brief: scope, acceptance criteria, edge cases. Task: {{task}}"
+output = "brief"
+
+# ── Step 2: multi-agent implementation ───────────────────────────────────────
+
+[[steps]]
+id         = "implement"
+type       = "multi-agent"
+agent      = "feature-lead"       # orchestrator persona — plans subtasks, synthesises output
+depends_on = ["gather-requirements"]
+prompt     = "{{task}}\n\nContext:\n{{brief}}"
+output     = "implementation"
+
+# coder runs with default persona skills plus the code-optimize skill for this step
+[[steps.workers]]
+persona = "coder"
+skills  = ["code-optimize"]
+run     = "parallel"
+
+# code-reviewer runs in parallel with the coder
+[[steps.workers]]
+persona = "code-reviewer"
+run     = "parallel"
+
+# test-designer runs after the parallel workers finish (receives their outputs as context)
+[[steps.workers]]
+persona = "test-designer"
+run     = "sequential"
+
+# ── Step 3: human approval gate ──────────────────────────────────────────────
+
+[[steps]]
+id                = "approve-implementation"
+agent             = "feature-lead"
+depends_on        = ["implement"]
+prompt            = "Summarise the implementation for approval:\n\n{{implementation}}"
+output            = "approval_summary"
+requires_approval = true
+approval_prompt   = "Review the implementation summary above. Type 'approve', 'deny', or 'edit <feedback>'."
+
+# ── Step 4: release notes ─────────────────────────────────────────────────────
+
+[[steps]]
+id         = "release-notes"
+agent      = "feature-lead"
+depends_on = ["approve-implementation"]
+prompt     = "Write a concise changelog entry (keep-a-changelog format) for:\n\n{{implementation}}"
+output     = "changelog_entry"

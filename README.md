@@ -6,10 +6,10 @@
 
 agent007 runs as an MCP server that gives your AI editor a broad orchestration tool layer:
 
-- **Skills** — reusable prompt templates triggered by `/slash-commands`
-- **Workflows** — multi-step pipelines (TDD, code review, feature delivery, SPARC)
+- **Skills** — domain-knowledge injectors and reusable prompt templates triggered by `/slash-commands`
+- **Workflows** — multi-step pipelines with `multi-agent` fan-out (TDD, code review, feature delivery, SPARC)
 - **Memory** — scoped key-value store + LanceDB vector search, persisted to `~/.agent007/`
-- **Personas** — swap agent identities with different system prompts and preferred models
+- **Personas** — unified agent definitions: one TOML covers system prompt, model, zones, memory, default skills, and agent type (`worker` or `orchestrator`)
 - **ModelRouter** — route tasks to the right model (code, reasoning, fast, sensitive)
 - **Hooks** — auto-execute shell commands on lifecycle events
 - **Learning** — passive feedback recording → future PromptOptimizer
@@ -161,18 +161,23 @@ agent007 workflow resume <session>              Resume a paused workflow
 
 ### `agent007 agent`
 
-Manage and run custom multi-agent definitions stored as TOML files in `~/.agent007/agents/`.
+Run multi-agent orchestration directly from persona definitions.
+A **persona IS the agent** — no separate AgentDef TOML needed.
+Declare `agent_type = "orchestrator"` and `allowed_workers = [...]` in the
+persona TOML and it is immediately runnable as a `SubOrchestrator`.
 
 ```
-agent007 agent list                            List all registered agents
+agent007 agent list                            List all registered agents (persona + legacy AgentDef)
 agent007 agent inspect <name>                  Show agent definition details
-agent007 agent run <name> "<task>"             Run an agent on a task
-agent007 agent create <name> [--type <type>]   Generate a new agent TOML stub
+agent007 agent run <name> "<task>"             Run an orchestrator persona on a task
+agent007 agent create <name> [--type <type>]   Generate a new agent TOML stub (legacy)
                              [--namespace <ns>]
 ```
 
-See [docs/multi-agent.md](docs/multi-agent.md) for the full execution model,
-TOML schema, and event reference.
+See [docs/multi-agent.md](docs/multi-agent.md) for the three-layer model
+(Workflow → Persona → Skill), TOML schema, skill injection, and event reference.
+See [docs/examples/multi-agent-workflow.toml](docs/examples/multi-agent-workflow.toml)
+for a complete worked example.
 
 ### `agent007 persona`
 
