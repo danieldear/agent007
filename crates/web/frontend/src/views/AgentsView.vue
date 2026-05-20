@@ -1,11 +1,21 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi.js'
 
 const { api, loading } = useApi()
 const personas = ref([])
 const showForm = ref(false)
 const editTarget = ref(null)
+const personaFilter = ref('')
+
+const filteredPersonas = computed(() => {
+  const q = personaFilter.value.trim().toLowerCase()
+  if (!q) return personas.value
+  return personas.value.filter(p =>
+    p.name?.toLowerCase().includes(q) ||
+    p.description?.toLowerCase().includes(q)
+  )
+})
 
 const KNOWN_TOOLS = [
   { name: 'bash',       desc: 'shell execution' },
@@ -20,7 +30,7 @@ const KNOWN_TOOL_NAMES = KNOWN_TOOLS.map(t => t.name)
 const form = ref({
   name: '',
   description: '',
-  preferred_model: 'codex',
+  preferred_model: 'claude-sonnet-4-6',
   allowed_tools: [],
   custom_tools: '',
   system_prompt: '',
@@ -85,15 +95,25 @@ function clearAllTools() {
 <template>
   <div class="flex flex-col h-full">
     <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
-      <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Agents · Personas</span>
-      <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="openCreate">+ new</button>
+      <div class="flex items-center gap-3">
+        <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/40">Personas</span>
+        <span class="text-[10px] font-mono text-base-content/25">{{ personas.length }}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input
+          v-model="personaFilter"
+          class="bg-base-300/60 border border-base-300/80 rounded text-[11px] font-mono px-2.5 py-1 w-40 focus:outline-none focus:border-primary/40 placeholder-base-content/20"
+          placeholder="filter…"
+        />
+        <button class="btn btn-sm btn-primary font-mono text-xs px-4" @click="openCreate">+ new</button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-auto p-5">
       <!-- Agent cards grid -->
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <div
-          v-for="p in personas"
+          v-for="p in filteredPersonas"
           :key="p.name"
           class="bg-base-200 border border-base-300 rounded-lg border-l-2 border-l-primary/50 hover:border-l-primary transition-colors"
         >
@@ -120,19 +140,21 @@ function clearAllTools() {
                 class="text-[10px] font-mono text-base-content/30"
               >+{{ p.allowed_tools.length - 5 }} more</span>
             </div>
-            <details class="mt-3">
-              <summary class="text-[10px] font-mono cursor-pointer text-base-content/30 hover:text-base-content/60 uppercase tracking-wider">
-                ▸ system prompt
-              </summary>
-              <pre class="mt-2 text-[11px] font-mono bg-base-300/50 p-3 rounded border border-base-300/60 max-h-32 overflow-auto whitespace-pre-wrap text-base-content/70">{{ p.system_prompt }}</pre>
-            </details>
+            <div v-if="p.system_prompt" class="mt-3">
+              <p class="text-[10px] font-mono text-base-content/35 line-clamp-2 leading-relaxed">{{ p.system_prompt }}</p>
+              <details class="mt-1">
+                <summary class="text-[9px] font-mono cursor-pointer text-base-content/25 hover:text-base-content/50 uppercase tracking-wider">▸ full prompt</summary>
+                <pre class="mt-2 text-[11px] font-mono bg-base-300/50 p-3 rounded border border-base-300/60 max-h-32 overflow-auto whitespace-pre-wrap text-base-content/70">{{ p.system_prompt }}</pre>
+              </details>
+            </div>
           </div>
         </div>
       </div>
 
-      <div v-if="!personas.length && !loading" class="text-center font-mono text-base-content/30 py-16 text-sm">
+      <div v-if="!filteredPersonas.length && !loading" class="text-center font-mono text-base-content/30 py-16 text-sm">
         <div class="text-3xl mb-3 text-base-content/10">◉</div>
-        no agents found — click <span class="text-primary">+ new</span> to create one
+        <template v-if="personaFilter">no personas match "{{ personaFilter }}"</template>
+        <template v-else>no personas found — click <span class="text-primary">+ new</span> to create one</template>
       </div>
     </div>
 
@@ -172,7 +194,7 @@ function clearAllTools() {
             <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">preferred model</div>
             <div class="flex gap-1.5 flex-wrap">
               <button
-                v-for="m in ['codex', 'gpt-5.3-codex', 'claude', 'claude-sonnet-4-6', 'ollama']"
+                v-for="m in ['claude-opus-4', 'claude-sonnet-4-6', 'claude-haiku', 'ollama']"
                 :key="m"
                 type="button"
                 class="px-3 py-1 text-[11px] font-mono rounded border transition-colors"

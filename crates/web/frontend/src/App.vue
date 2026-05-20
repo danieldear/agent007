@@ -13,8 +13,10 @@ import ExtensionsView from './views/ExtensionsView.vue'
 import MemoryView from './views/MemoryView.vue'
 import SharingView from './views/SharingView.vue'
 import HelpView from './views/HelpView.vue'
+import RunDetailView from './views/RunDetailView.vue'
 
 const currentView = ref('dashboard')
+const selectedRunId = ref(null)
 const { connected, events, stats } = useWebSocket()
 
 const views = {
@@ -29,6 +31,22 @@ const views = {
   memory: MemoryView,
   sharing: SharingView,
   help: HelpView,
+  'run-detail': RunDetailView,
+}
+
+function openRun(id) {
+  selectedRunId.value = id
+  currentView.value = 'run-detail'
+}
+
+function goBack() {
+  currentView.value = 'dashboard'
+  selectedRunId.value = null
+}
+
+function navigate(view) {
+  currentView.value = view
+  selectedRunId.value = null
 }
 
 const ActiveView = computed(() => views[currentView.value] || DashboardView)
@@ -36,9 +54,21 @@ const ActiveView = computed(() => views[currentView.value] || DashboardView)
 
 <template>
   <div class="flex h-screen bg-base-300 text-base-content">
-    <Sidebar :current="currentView" :connected="connected" @navigate="currentView = $event" />
+    <Sidebar
+      :current="currentView"
+      :connected="connected"
+      @navigate="navigate"
+    />
     <main class="flex-1 overflow-hidden flex flex-col">
-      <component :is="ActiveView" :events="events" :connected="connected" :stats="stats" />
+      <component
+        :is="ActiveView"
+        :events="events"
+        :connected="connected"
+        :stats="stats"
+        :run-id="currentView === 'run-detail' ? selectedRunId : undefined"
+        @open-run="openRun"
+        @go-back="goBack"
+      />
     </main>
   </div>
 </template>

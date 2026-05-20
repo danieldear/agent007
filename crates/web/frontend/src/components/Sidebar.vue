@@ -9,27 +9,17 @@ const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
 
-// 'night' is our custom amber dark theme; 'day' is the warm light theme
-const DARK_THEME = 'night'
-const LIGHT_THEME = 'day'
-
-const THEMES = [
-  { id: 'night',     label: '🌙 Night',     dark: true  },
-  { id: 'forest',    label: '🌿 Forest',    dark: true  },
-  { id: 'ocean',     label: '🌊 Ocean',     dark: true  },
-  { id: 'aurora',    label: '✨ Aurora',    dark: true  },
-  { id: 'day',       label: '☀️ Day',       dark: false },
-  { id: 'corporate', label: '💼 Corporate', dark: false },
-]
+const DARK_THEMES  = ['night', 'forest', 'ocean', 'aurora']
+const DARK_THEME   = 'night'
+const LIGHT_THEME  = 'day'
 
 function normalizeSaved(t) {
-  // Migrate old 'dark' → 'night', old 'light' → 'day'
-  if (!t || t === 'dark') return DARK_THEME
-  if (t === 'light') return LIGHT_THEME
+  if (!t || t === 'dark')  return DARK_THEME
+  if (t === 'light')       return LIGHT_THEME
   return t
 }
 
-const theme = ref(normalizeSaved(localStorage.getItem('theme')) || document.documentElement.getAttribute('data-theme') || DARK_THEME)
+const theme = ref(normalizeSaved(localStorage.getItem('theme')) || DARK_THEME)
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t)
@@ -37,40 +27,41 @@ function applyTheme(t) {
   theme.value = t
 }
 
+function toggleTheme() {
+  applyTheme(DARK_THEMES.includes(theme.value) ? LIGHT_THEME : DARK_THEME)
+}
+
 onMounted(() => {
-  const saved = normalizeSaved(localStorage.getItem('theme'))
-  if (saved) {
-    applyTheme(saved)
-  } else {
-    theme.value = document.documentElement.getAttribute('data-theme') || DARK_THEME
-  }
+  applyTheme(normalizeSaved(localStorage.getItem('theme')))
+  api.getStats().then(s => {
+    if (s?.project_name) projectName.value = s.project_name
+    if (s?.project_path) projectPath.value = s.project_path
+  }).catch(() => {})
 })
 
-onMounted(async () => {
-  try {
-    const stats = await api.getStats()
-    if (stats?.project_name) projectName.value = stats.project_name
-    if (stats?.project_path) projectPath.value = stats.project_path
-  } catch {}
-})
-
-const navItems = [
-  { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
+const primaryNav = [
+  { id: 'dashboard', label: 'Tasks',     symbol: '▶' },
   { id: 'agents',    label: 'Personas',  symbol: '◉' },
   { id: 'skills',    label: 'Skills',    symbol: '⚡' },
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
-  { id: 'tools',     label: 'Tools',     symbol: '🛠' },
-  { id: 'mcp',        label: 'MCP',        symbol: '⬡' },
-  { id: 'lsp',        label: 'LSP',        symbol: '⌘' },
-  { id: 'extensions', label: 'Extensions', symbol: '⊞' },
-  { id: 'memory',     label: 'Memory',     symbol: '◈' },
-  { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },
-  { id: 'help',      label: 'Guide',     symbol: '?' },
+  { id: 'memory',    label: 'Memory',    symbol: '◈' },
 ]
+
+const configNav = [
+  { id: 'mcp',        label: 'MCP',        symbol: '⬢' },
+  { id: 'tools',      label: 'Tools',      symbol: '⊕' },
+  { id: 'extensions', label: 'Extensions', symbol: '⊞' },
+  { id: 'lsp',        label: 'LSP',        symbol: '⌘' },
+  { id: 'sharing',    label: 'Sharing',    symbol: '⇅' },
+  { id: 'help',       label: 'Guide',      symbol: '?' },
+]
+
+const isDark = () => DARK_THEMES.includes(theme.value)
 </script>
 
 <template>
-  <aside class="w-52 bg-base-200 border-r border-base-300/80 flex flex-col shrink-0">
+  <aside class="w-48 bg-base-200 border-r border-base-300/80 flex flex-col shrink-0">
+
     <!-- Branding -->
     <div class="px-4 pt-5 pb-4 border-b border-base-300/80">
       <div class="flex items-baseline gap-2">
@@ -78,66 +69,77 @@ const navItems = [
         <span class="text-[10px] font-mono text-base-content/30 tracking-wider">v0.1</span>
       </div>
       <p class="text-[11px] text-base-content/40 mt-0.5 tracking-wide">AI Orchestration</p>
-      <div v-if="projectName"
+      <div
+        v-if="projectName"
         class="mt-3 px-2 py-1 rounded border border-primary/20 bg-primary/5 flex items-center gap-1.5"
-        :title="projectPath">
+        :title="projectPath"
+      >
         <span class="text-[9px] font-mono text-primary/60 uppercase tracking-widest">proj</span>
         <span class="text-[11px] font-mono text-primary/80 truncate">{{ projectName }}</span>
       </div>
     </div>
 
-    <!-- Navigation -->
-    <nav class="flex-1 py-3 space-y-0.5">
+    <!-- Primary nav -->
+    <nav class="py-2 space-y-0.5">
       <button
-        v-for="item in navItems"
+        v-for="item in primaryNav"
         :key="item.id"
         class="relative w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors duration-100"
         :class="current === item.id
           ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
           : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
-        :title="item.label"
         @click="$emit('navigate', item.id)"
       >
-        <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
-          {{ item.symbol }}
-        </span>
-        <span class="font-mono text-[12px] tracking-wide leading-tight line-clamp-2 break-words">{{ item.label }}</span>
+        <span
+          class="text-sm w-4 text-center shrink-0"
+          :class="current === item.id ? 'text-primary' : 'text-base-content/30'"
+        >{{ item.symbol }}</span>
+        <span class="font-mono text-[12px] tracking-wide">{{ item.label }}</span>
       </button>
     </nav>
 
-    <!-- Appearance: always-visible theme swatches -->
-    <div class="px-4 pt-2 pb-1 border-t border-base-300/80">
-      <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/25 mb-1.5 flex items-center gap-1.5">
-        <span>🎨</span><span>Appearance</span>
-      </div>
-      <div class="grid grid-cols-3 gap-1">
-        <button
-          v-for="t in THEMES"
-          :key="t.id"
-          class="rounded px-1 py-1.5 text-[10px] font-mono leading-tight flex items-center gap-1 transition-all duration-150 truncate"
-          :class="theme === t.id
-            ? 'bg-primary/15 text-primary ring-1 ring-primary/50 font-bold'
-            : 'bg-base-300/30 text-base-content/45 hover:bg-base-300/70 hover:text-base-content/80'"
-          :title="t.label"
-          @click="applyTheme(t.id)"
-        >
-          <span class="shrink-0">{{ t.label.split(' ')[0] }}</span>
-          <span class="truncate">{{ t.label.split(' ').slice(1).join(' ') }}</span>
-        </button>
-      </div>
+    <!-- Config section -->
+    <div class="px-4 pt-3 pb-1">
+      <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/25 mb-1.5">Config</div>
     </div>
+    <nav class="pb-2 space-y-0.5">
+      <button
+        v-for="item in configNav"
+        :key="item.id"
+        class="relative w-full text-left px-4 py-2 flex items-center gap-3 transition-colors duration-100"
+        :class="current === item.id
+          ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
+          : 'text-base-content/45 hover:text-base-content/80 hover:bg-base-300/40'"
+        @click="$emit('navigate', item.id)"
+      >
+        <span
+          class="text-xs w-4 text-center shrink-0"
+          :class="current === item.id ? 'text-primary' : 'text-base-content/25'"
+        >{{ item.symbol }}</span>
+        <span class="font-mono text-[11px] tracking-wide">{{ item.label }}</span>
+      </button>
+    </nav>
 
-    <!-- Connection status -->
-    <div class="px-4 py-2.5 border-t border-base-300/40">
+    <!-- Spacer -->
+    <div class="flex-1" />
+
+    <!-- Bottom bar: connection + theme toggle -->
+    <div class="px-4 py-3 border-t border-base-300/60 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span
           class="w-1.5 h-1.5 rounded-full shrink-0"
           :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"
         />
-        <span class="text-[11px] font-mono" :class="connected ? 'text-success/70' : 'text-error/70'">
-          {{ connected ? 'ws:live' : 'ws:off' }}
+        <span class="text-[11px] font-mono" :class="connected ? 'text-success/60' : 'text-error/60'">
+          {{ connected ? 'live' : 'off' }}
         </span>
       </div>
+      <button
+        class="text-base-content/40 hover:text-base-content/80 transition-colors text-base leading-none"
+        :title="isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+        @click="toggleTheme"
+      >{{ isDark() ? '🌙' : '☀️' }}</button>
     </div>
+
   </aside>
 </template>
