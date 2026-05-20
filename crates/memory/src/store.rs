@@ -3,7 +3,17 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::mpsc::UnboundedSender;
+
+/// Payload sent to the background vector indexer whenever a memory key is written.
+#[derive(Debug)]
+pub struct IndexTask {
+    /// Stable document ID in the form `memory:{namespace}:{key}`.
+    pub doc_id: String,
+    /// Content to embed and index.
+    pub content: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -109,6 +119,9 @@ fn write_frontmatter(meta: &MemoryMeta, content: &str) -> String {
 
 pub struct MemoryStore {
     base_dir: PathBuf,
+    /// Optional background indexing channel. Set once via [`MemoryStore::set_index_channel`].
+    /// Every successful write will enqueue an [`IndexTask`] for async vector indexing.
+    index_tx: OnceLock<UnboundedSender<IndexTask>>,
 }
 
 /// Split a logical memory key into path-safe components.
@@ -145,7 +158,18 @@ impl MemoryStore {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
+            index_tx: OnceLock::new(),
         }
+    }
+
+    /// Attach a background indexing channel to this store.
+    ///
+    /// After this call, every successful [`write`](Self::write) will send an
+    /// [`IndexTask`] through `tx` so a background task can embed and index
+    /// the content into a vector store.  Can only be set once; returns `true`
+    /// if the channel was accepted, `false` if one was already set.
+    pub fn set_index_channel(&self, tx: UnboundedSender<IndexTask>) -> bool {
+        self.index_tx.set(tx).is_ok()
     }
 
     fn namespace_dir(&self, namespace: &str) -> PathBuf {
@@ -352,6 +376,7 @@ impl MemoryStore {
         let _ = self.decay_pass(namespace, key);
         // Feature 3: auto-link temporal co-writes
         let _ = self.temporal_edge_pass(namespace, key);
+        self.enqueue_index_task(namespace, key, value);
         Ok(())
     }
 
@@ -450,7 +475,25 @@ impl MemoryStore {
         }
         meta.updated_at = Utc::now();
         let file_content = write_frontmatter(&meta, value);
-        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })
+        std::fs::write(&path, file_content).map_err(|e| MemoryError::Io { path, source: e })?;
+        self.enqueue_index_task(namespace, key, value);
+        Ok(())
+    }
+
+    /// Shared helper: enqueue an [`IndexTask`] when a background indexing channel is attached.
+    /// Fire-and-forget — a closed or lagging receiver is silently ignored.
+    fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
+        if let Some(tx) = self.index_tx.get() {
+            let ns_label = if namespace.is_empty() {
+                "default"
+            } else {
+                namespace
+            };
+            let _ = tx.send(IndexTask {
+                doc_id: format!("memory:{ns_label}:{key}"),
+                content: value.to_string(),
+            });
+        }
     }
 
     /// Delete expired entries in a namespace and return number removed.
