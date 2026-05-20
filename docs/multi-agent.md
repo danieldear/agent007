@@ -321,6 +321,6 @@ load and logs a warning. Skill injection still works; it is just slightly slower
 |---------|--------------|-----|
 | `persona 'x' not found for multi-agent step` | No persona TOML (or built-in) with that name | Run `agent007 persona list` |
 | `allowed_workers is empty` | Persona missing `allowed_workers` or step has no `[[steps.workers]]` entries | Add workers to the workflow step or set `allowed_workers` in the persona TOML |
-| Workers produce generic output | Personas for worker names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona files for each worker name, or use built-in names (`coder`, `reviewer`, `planner`) |
+| Workers produce generic output | Personas for worker names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona TOMLs for each worker name, or reference built-in personas by their exact TitleCase name (e.g. `Coder`, `CodeReviewer`, `Architect`, `DebugAgent` — run `agent007 persona list` for the full list) |
 | `MaxDepthExceeded` | Agent called itself recursively | Reduce `max_depth` at runner construction |
 | Skills not injected | `with_skill_provider` not called on `WorkflowRunner` | Pass a `SkillIndex` via `runner.with_skill_provider(Arc::new(index))` |

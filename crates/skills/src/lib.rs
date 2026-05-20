@@ -7,5 +7,5 @@ pub mod types;
 pub use error::SkillError;
 pub use executor::{SkillExecutionMetrics, SkillExecutionReport, SkillExecutor};
 pub use loader::SkillLoader;
-pub use provider::{NoOpSkillContentProvider, SkillContentProvider, SkillIndex};
+pub use provider::{normalize_trigger, NoOpSkillContentProvider, SkillContentProvider, SkillIndex};
 pub use types::{Skill, SkillFrontmatter};

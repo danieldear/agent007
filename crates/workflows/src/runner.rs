@@ -421,6 +421,8 @@ impl WorkflowRunner {
                                         .map(|wc| agent007_custom_agents::WorkerSpec {
                                             name: wc.persona.clone(),
                                             skills: wc.skills.clone(),
+                                            sequential: wc.run
+                                                == crate::types::WorkerRunMode::Sequential,
                                         })
                                         .collect()
                                 })
@@ -3090,12 +3092,18 @@ mod tests {
             .map(|wc| WorkerSpec {
                 name: wc.persona.clone(),
                 skills: wc.skills.clone(),
+                sequential: wc.run == WorkerRunMode::Sequential,
             })
             .collect();
 
         assert_eq!(specs[0].name, "analyst");
         assert_eq!(specs[0].skills, vec!["data-analysis"]);
+        assert!(!specs[0].sequential);
         assert_eq!(specs[1].name, "writer");
+        assert!(
+            specs[1].sequential,
+            "sequential run mode should map to sequential=true"
+        );
         assert_eq!(specs[1].skills, vec!["technical-writing", "style-guide"]);
     }
 

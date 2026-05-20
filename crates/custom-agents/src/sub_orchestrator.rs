@@ -340,134 +340,185 @@ impl SubOrchestrator {
     /// `WorkerResult.output` is capped at 512 chars in the event payload to
     /// avoid bloating the dispatcher broadcast and run-trace JSONL files;
     /// the full content is still returned through `WorkerOutput.output`.
+    /// Build the effective system prompt for a worker by merging persona default
+    /// skills with per-invocation spec skills and injecting their Markdown bodies.
+    ///
+    /// Deduplication is done on **normalized** trigger keys (leading `/` stripped)
+    /// so that `"/dev-debug"` and `"dev-debug"` are treated as the same skill.
+    fn build_worker_system(&self, worker_name: &str) -> String {
+        let persona_opt = self.persona_provider.get(worker_name);
+
+        let persona_skills: Vec<String> = persona_opt
+            .as_ref()
+            .map(|p| p.skills.clone())
+            .unwrap_or_default();
+
+        let spec_skills: Vec<String> = self
+            .worker_specs
+            .iter()
+            .find(|ws| ws.name == worker_name)
+            .map(|ws| ws.skills.clone())
+            .unwrap_or_default();
+
+        // Deduplicate on normalized trigger keys so "/skill" and "skill" collapse.
+        let mut seen = HashSet::new();
+        let merged_skills: Vec<String> = persona_skills
+            .into_iter()
+            .chain(spec_skills)
+            .filter(|s| seen.insert(agent007_skills::normalize_trigger(s).to_string()))
+            .collect();
+
+        let base_system = persona_opt
+            .map(|p| p.system_prompt.clone())
+            .unwrap_or_default();
+
+        let mut injected = String::new();
+        for trigger in &merged_skills {
+            if let Some(body) = self.skill_provider.load_content(trigger) {
+                injected.push_str(&format!("## Domain Knowledge\n\n{body}\n\n---\n\n"));
+            }
+        }
+
+        if injected.is_empty() {
+            base_system
+        } else {
+            format!("{injected}{base_system}")
+        }
+    }
+
+    /// Execute one worker subtask and return its output.
+    ///
+    /// `context_prefix` is prepended to the task description for sequential
+    /// workers so they can see the outputs of the parallel phase.
+    async fn execute_worker(
+        router: Arc<ModelRouter>,
+        dispatcher: Arc<dyn Dispatcher>,
+        model: String,
+        worker_name: String,
+        description: String,
+        system: String,
+        context_prefix: Option<String>,
+        run_agent_id: AgentId,
+    ) -> WorkerOutput {
+        let effective_description = match context_prefix {
+            Some(ctx) if !ctx.is_empty() => {
+                format!("## Prior worker outputs\n\n{ctx}\n\n---\n\n{description}")
+            }
+            _ => description.clone(),
+        };
+
+        let _ = dispatcher
+            .publish(AgentEvent::ModelRequest {
+                provider: model.clone(),
+                prompt_ref: agent007_core::types::PromptRef::new(),
+                token_estimate: effective_description
+                    .split_whitespace()
+                    .count()
+                    .saturating_mul(2),
+            })
+            .await;
+
+        let req = CompletionRequest {
+            model: model.clone(),
+            messages: vec![Message {
+                role: Role::User,
+                content: effective_description.clone(),
+            }],
+            max_tokens: None,
+            temperature: None,
+            system: if system.is_empty() {
+                None
+            } else {
+                Some(system)
+            },
+        };
+
+        match router.complete(req).await {
+            Ok(resp) => {
+                let preview: String = resp.content.chars().take(512).collect();
+                let _ = dispatcher
+                    .publish(AgentEvent::WorkerResult {
+                        agent_id: run_agent_id,
+                        worker_name: worker_name.clone(),
+                        subtask: description.clone(),
+                        output: preview,
+                    })
+                    .await;
+                WorkerOutput {
+                    worker_name,
+                    subtask: description,
+                    output: resp.content,
+                    blocker: None,
+                }
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                let _ = dispatcher
+                    .publish(AgentEvent::WorkerBlocked {
+                        agent_id: run_agent_id,
+                        worker_name: worker_name.clone(),
+                        subtask: description.clone(),
+                        reason: reason.clone(),
+                    })
+                    .await;
+                WorkerOutput {
+                    worker_name,
+                    subtask: description,
+                    output: String::new(),
+                    blocker: Some(reason),
+                }
+            }
+        }
+    }
+
+    /// Dispatch subtasks to workers, respecting run-mode ordering.
+    ///
+    /// **Execution order**:
+    /// 1. All `sequential = false` workers run concurrently via `JoinSet`.
+    /// 2. After the parallel phase completes, `sequential = true` workers run
+    ///    one at a time. Each sequential worker receives the combined output of
+    ///    the parallel phase as a context prefix prepended to its task.
     async fn dispatch_parallel(
         &self,
         subtasks: Vec<SubTask>,
         parent_id: AgentId,
     ) -> Vec<WorkerOutput> {
+        // Partition into parallel vs sequential groups.
+        let (parallel_subs, sequential_subs): (Vec<SubTask>, Vec<SubTask>) =
+            subtasks.into_iter().partition(|sub| {
+                !self
+                    .worker_specs
+                    .iter()
+                    .find(|ws| ws.name == sub.worker_name)
+                    .map(|ws| ws.sequential)
+                    .unwrap_or(false)
+            });
+
+        // ── Phase 1: run parallel workers concurrently ───────────────────────
+        let model = self.def.model.clone().unwrap_or_else(|| "default".into());
         let mut set: JoinSet<WorkerOutput> = JoinSet::new();
 
-        for sub in subtasks {
-            let persona_opt = self.persona_provider.get(&sub.worker_name);
-
-            // Collect the worker persona's default skills.
-            let persona_skills: Vec<String> = persona_opt
-                .as_ref()
-                .map(|p| p.skills.clone())
-                .unwrap_or_default();
-
-            // Collect per-invocation skill overrides from the workflow step.
-            let spec_skills: Vec<String> = self
-                .worker_specs
-                .iter()
-                .find(|ws| ws.name == sub.worker_name)
-                .map(|ws| ws.skills.clone())
-                .unwrap_or_default();
-
-            // Merge: persona defaults first, step overrides appended, deduplicated.
-            let mut seen = HashSet::new();
-            let merged_skills: Vec<String> = persona_skills
-                .into_iter()
-                .chain(spec_skills)
-                .filter(|s| seen.insert(s.clone()))
-                .collect();
-
-            // Build effective system prompt with skill injection.
-            let base_system = persona_opt
-                .map(|p| p.system_prompt.clone())
-                .unwrap_or_default();
-            let skill_provider = Arc::clone(&self.skill_provider);
-            let system = {
-                let mut injected = String::new();
-                for trigger in &merged_skills {
-                    if let Some(body) = skill_provider.load_content(trigger) {
-                        injected.push_str(&format!("## Domain Knowledge\n\n{body}\n\n---\n\n"));
-                    }
-                }
-                if injected.is_empty() {
-                    base_system
-                } else {
-                    format!("{injected}{base_system}")
-                }
-            };
-
+        for sub in parallel_subs {
+            let system = self.build_worker_system(&sub.worker_name);
             let router = Arc::clone(&self.model_router);
             let dispatcher = Arc::clone(&self.dispatcher);
-            let model = self.def.model.clone().unwrap_or_else(|| "default".into());
+            let model = model.clone();
             let run_agent_id = parent_id.clone();
             let worker_name = sub.worker_name.clone();
             let description = sub.description.clone();
 
-            set.spawn(async move {
-                // Emit: work about to start
-                let _ = dispatcher
-                    .publish(AgentEvent::ModelRequest {
-                        provider: model.clone(),
-                        prompt_ref: agent007_core::types::PromptRef::new(),
-                        token_estimate: description.split_whitespace().count().saturating_mul(2),
-                    })
-                    .await;
-
-                let req = CompletionRequest {
-                    model: model.clone(),
-                    messages: vec![Message {
-                        role: Role::User,
-                        content: description.clone(),
-                    }],
-                    max_tokens: None,
-                    temperature: None,
-                    system: if system.is_empty() {
-                        None
-                    } else {
-                        Some(system)
-                    },
-                };
-
-                match router.complete(req).await {
-                    Ok(resp) => {
-                        // Emit: worker finished (output truncated to 512 chars in
-                        // the event to keep dispatcher broadcast + JSONL compact)
-                        let preview: String = resp.content.chars().take(512).collect();
-                        let _ = dispatcher
-                            .publish(AgentEvent::WorkerResult {
-                                agent_id: run_agent_id.clone(),
-                                worker_name: worker_name.clone(),
-                                subtask: description.clone(),
-                                output: preview,
-                            })
-                            .await;
-
-                        WorkerOutput {
-                            worker_name,
-                            subtask: description,
-                            output: resp.content,
-                            blocker: None,
-                        }
-                    }
-                    Err(e) => {
-                        // Emit: worker blocked/failed
-                        let reason = e.to_string();
-                        let _ = dispatcher
-                            .publish(AgentEvent::WorkerBlocked {
-                                agent_id: run_agent_id.clone(),
-                                worker_name: worker_name.clone(),
-                                subtask: description.clone(),
-                                reason: reason.clone(),
-                            })
-                            .await;
-
-                        WorkerOutput {
-                            worker_name,
-                            subtask: description,
-                            output: String::new(),
-                            blocker: Some(reason),
-                        }
-                    }
-                }
-            });
+            set.spawn(Self::execute_worker(
+                router,
+                dispatcher,
+                model,
+                worker_name,
+                description,
+                system,
+                None,
+                run_agent_id,
+            ));
         }
 
-        // Collect in completion order; re-sort would need index — keep as-is for now
         let mut results = Vec::new();
         while let Some(res) = set.join_next().await {
             match res {
@@ -477,6 +528,34 @@ impl SubOrchestrator {
                 }
             }
         }
+
+        // ── Phase 2: run sequential workers one-at-a-time ────────────────────
+        if !sequential_subs.is_empty() {
+            // Build a context string from parallel outputs for sequential workers.
+            let parallel_context: String = results
+                .iter()
+                .filter(|o| o.blocker.is_none())
+                .map(|o| format!("[{}]\n{}", o.worker_name, o.output))
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n");
+
+            for sub in sequential_subs {
+                let system = self.build_worker_system(&sub.worker_name);
+                let output = Self::execute_worker(
+                    Arc::clone(&self.model_router),
+                    Arc::clone(&self.dispatcher),
+                    model.clone(),
+                    sub.worker_name.clone(),
+                    sub.description.clone(),
+                    system,
+                    Some(parallel_context.clone()),
+                    parent_id.clone(),
+                )
+                .await;
+                results.push(output);
+            }
+        }
+
         results
     }
 
@@ -942,6 +1021,7 @@ mod tests {
             vec![WorkerSpec {
                 name: "NewWorker".to_string(),
                 skills: vec![],
+                sequential: false,
             }],
             Arc::new(agent007_skills::NoOpSkillContentProvider),
             mem,
@@ -1025,10 +1105,12 @@ mod tests {
             WorkerSpec {
                 name: "AnalystWorker".to_string(),
                 skills: vec!["data-analysis".to_string()],
+                sequential: false,
             },
             WorkerSpec {
                 name: "WriterWorker".to_string(),
                 skills: vec!["technical-writing".to_string(), "style-guide".to_string()],
+                sequential: false,
             },
         ];
         let orch = SubOrchestrator::from_persona(
@@ -1077,6 +1159,7 @@ mod tests {
         let worker_specs = vec![WorkerSpec {
             name: "Analyst".to_string(),
             skills: vec!["data-analysis".to_string()],
+            sequential: false,
         }];
 
         let scoped = Arc::new(store.scoped("skill-orch-ns"));
@@ -1183,6 +1266,7 @@ mod tests {
         let worker_specs = vec![WorkerSpec {
             name: "DedupeWorker".to_string(),
             skills: vec!["shared-skill".to_string(), "unique-skill".to_string()],
+            sequential: false,
         }];
 
         // Skill provider returns distinct bodies for each trigger.
@@ -1275,6 +1359,116 @@ mod tests {
         assert!(
             system_prompt.contains("You are a worker."),
             "original worker system prompt should be present: {system_prompt}"
+        );
+    }
+
+    /// Verify sequential workers run after parallel workers and receive their
+    /// combined output as a context prefix.
+    #[tokio::test]
+    async fn dispatch_parallel_sequential_workers_receive_parallel_context() {
+        use agent007_core::persona::{NoOpPersonaProvider, PersonaSpec};
+        use agent007_models::types::{CompletionRequest, CompletionResponse};
+        use agent007_models::{ModelError, ModelProvider};
+        use async_trait::async_trait;
+        use std::sync::Mutex as StdMutex;
+
+        // Record every request's user message content.
+        struct RecordingProvider {
+            contents: Arc<StdMutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl ModelProvider for RecordingProvider {
+            fn name(&self) -> &str {
+                "recording"
+            }
+            async fn complete(
+                &self,
+                req: CompletionRequest,
+            ) -> Result<CompletionResponse, ModelError> {
+                let content = req
+                    .messages
+                    .first()
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+                self.contents.lock().unwrap().push(content);
+                Ok(CompletionResponse {
+                    content: "output-from-parallel".to_string(),
+                    model: "recording".to_string(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    cached_tokens: None,
+                })
+            }
+        }
+
+        let recorded: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(vec![]));
+        let provider = Arc::new(RecordingProvider {
+            contents: Arc::clone(&recorded),
+        });
+
+        let dir = tempdir().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let mut router = ModelRouter::new("recording");
+        router.register("recording", provider as Arc<dyn ModelProvider>);
+        let router = Arc::new(router);
+        let dispatcher = LocalDispatcher::new(64);
+
+        let mut orch_persona = make_persona("SeqOrch", "Orchestrate.");
+        orch_persona.allowed_workers = Some(vec!["ParWorker".to_string(), "SeqWorker".to_string()]);
+
+        let worker_specs = vec![
+            WorkerSpec {
+                name: "ParWorker".to_string(),
+                skills: vec![],
+                sequential: false,
+            },
+            WorkerSpec {
+                name: "SeqWorker".to_string(),
+                skills: vec![],
+                sequential: true,
+            },
+        ];
+
+        let scoped = Arc::new(store.scoped("seq-orch-ns"));
+        let orch = SubOrchestrator::from_persona(
+            &orch_persona,
+            worker_specs,
+            Arc::new(agent007_skills::NoOpSkillContentProvider),
+            scoped,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            dispatcher,
+            0,
+            3,
+        );
+
+        let subtasks = vec![
+            SubTask {
+                worker_name: "ParWorker".into(),
+                description: "parallel task".into(),
+            },
+            SubTask {
+                worker_name: "SeqWorker".into(),
+                description: "sequential task".into(),
+            },
+        ];
+
+        orch.dispatch_parallel(subtasks, AgentId::new()).await;
+
+        let contents = recorded.lock().unwrap();
+        // Two model calls total.
+        assert_eq!(contents.len(), 2, "expected one call per worker");
+        // Parallel worker message is the raw description.
+        assert_eq!(contents[0], "parallel task");
+        // Sequential worker message includes prior parallel output as context.
+        assert!(
+            contents[1].contains("output-from-parallel"),
+            "sequential worker should see parallel output as context: {:?}",
+            contents[1]
+        );
+        assert!(
+            contents[1].contains("sequential task"),
+            "sequential worker message should still contain its own task"
         );
     }
 }

@@ -21,6 +21,10 @@ pub struct WorkerSpec {
     /// current invocation. These are merged with the worker persona's own
     /// default `skills` list.
     pub skills: Vec<String>,
+    /// If `true`, this worker runs *after* all non-sequential workers complete
+    /// and receives their combined outputs as context. Corresponds to
+    /// `run = "sequential"` in the workflow TOML.
+    pub sequential: bool,
 }
 
 /// Legacy agent definition loaded from `~/.agent007/agents/*.toml`.
