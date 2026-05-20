@@ -57,14 +57,17 @@ const m = computed(() => metrics.value || props.stats || {
   running_tasks: 0, awaiting_approvals: 0, completed_tasks: 0, failed_tasks: 0,
 })
 
+const approvalSessions = computed(() =>
+  (runtimeSessions.value?.sessions || []).filter(s => s.status === 'awaiting-approval')
+)
+
 const activeSessions = computed(() => {
   const s = runtimeSessions.value?.sessions || []
-  return s.filter(r => ['running', 'ready', 'blocked', 'attention'].includes(r.lifecycle))
+  return s.filter(r =>
+    ['running', 'ready', 'blocked', 'attention'].includes(r.lifecycle) &&
+    r.status !== 'awaiting-approval'
+  )
 })
-
-const approvalSessions = computed(() =>
-  (runtimeSessions.value?.sessions || []).filter(s => s.lifecycle === 'awaiting-approval')
-)
 
 const filteredRuns = computed(() => {
   let list = [...runs.value]

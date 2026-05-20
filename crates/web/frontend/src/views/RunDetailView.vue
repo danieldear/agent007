@@ -42,6 +42,23 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
 watch(() => props.events?.length, loadRun)
 
+// Reset all per-run state when navigating to a different run while already on this view
+watch(() => props.runId, async (newId, oldId) => {
+  if (!newId || newId === oldId) return
+  run.value = null
+  loading.value = true
+  runtimeMessages.value = []
+  approvalStatus.value = ''
+  approvalEdit.value = ''
+  resumeStatus.value = ''
+  artifactPath.value = ''
+  artifactPreview.value = null
+  artifactStatus.value = ''
+  activeTab.value = 'output'
+  await loadRun()
+  await loadMessages()
+})
+
 async function loadRun() {
   try {
     run.value = await api.getRunDetail(props.runId)
@@ -134,6 +151,7 @@ function statusDot(status) {
   return {
     running: 'bg-info animate-pulse',
     completed: 'bg-success',
+    succeeded: 'bg-success',
     failed: 'bg-error',
     'awaiting-approval': 'bg-warning animate-pulse',
     blocked: 'bg-warning',
@@ -144,6 +162,7 @@ function statusLabel(status) {
   return {
     running: 'text-info',
     completed: 'text-success',
+    succeeded: 'text-success',
     failed: 'text-error',
     'awaiting-approval': 'text-warning',
     blocked: 'text-warning',
@@ -161,7 +180,7 @@ function stepStatusDot(status) {
 }
 
 function fmtTokens(n) {
-  if (!n) return '—'
+  if (n == null) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
   return String(n)
@@ -390,6 +409,7 @@ function fmtDate(iso) {
                     v-if="artifactPreview?.raw_url"
                     :href="artifactPreview.raw_url"
                     target="_blank"
+                    rel="noopener noreferrer"
                     class="text-[10px] font-mono text-primary/60 hover:text-primary"
                   >raw ↗</a>
                 </div>
