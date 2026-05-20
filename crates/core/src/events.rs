@@ -59,6 +59,26 @@ pub enum AgentEvent {
         prompt_ref: PromptRef,
         token_estimate: usize,
     },
+    /// Emitted when a worker subtask finishes successfully.
+    WorkerResult {
+        agent_id: AgentId,
+        worker_name: String,
+        subtask: String,
+        output: String,
+    },
+    /// Emitted when a worker subtask is blocked and cannot proceed.
+    WorkerBlocked {
+        agent_id: AgentId,
+        worker_name: String,
+        subtask: String,
+        reason: String,
+    },
+    /// Emitted when an agent task fails with an error.
+    TaskFailed {
+        agent_id: AgentId,
+        error: String,
+        model: Option<String>,
+    },
 }
 
 #[cfg(test)]

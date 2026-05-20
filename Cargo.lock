@@ -13,6 +13,7 @@ name = "agent007"
 version = "0.3.1"
 dependencies = [
  "agent007-core",
+ "agent007-custom-agents",
  "agent007-etr",
  "agent007-git-agent",
  "agent007-hooks",
@@ -81,6 +82,8 @@ dependencies = [
  "agent007-core",
  "agent007-memory",
  "agent007-models",
+ "chrono",
+ "futures",
  "serde",
  "serde_json",
  "tempfile",

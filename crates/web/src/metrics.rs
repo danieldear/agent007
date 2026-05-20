@@ -224,6 +224,28 @@ impl DashboardMetrics {
             AgentEvent::ToolCallResult { .. } => {}
             AgentEvent::MemoryWrite { .. } => {}
             AgentEvent::HookFired { .. } => {}
+            // Worker sub-events: informational only.
+            // These share the parent run's agent_id so they reach the correct
+            // task entry, but we don't touch running_tasks/completed_tasks here —
+            // those counters are managed exclusively by TaskAssigned/TaskCompleted/
+            // TaskFailed to avoid double-counting parallel workers.
+            AgentEvent::WorkerResult { .. } => {}
+            AgentEvent::WorkerBlocked { .. } => {}
+            AgentEvent::TaskFailed { agent_id, .. } => {
+                self.running_tasks = self.running_tasks.saturating_sub(1);
+                self.active_agents = self.running_tasks;
+                self.failed_tasks += 1;
+                let aid = format!("{}", agent_id);
+                if let Some(entry) = self
+                    .recent_tasks
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.id == aid && e.status == "running")
+                {
+                    entry.status = "failed".to_string();
+                    entry.finished_at = Some(Utc::now().to_rfc3339());
+                }
+            }
         }
     }
 

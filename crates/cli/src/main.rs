@@ -77,6 +77,8 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         no_dashboard: bool,
     },
+    /// Manage and run custom agents
+    Agent(AgentArgs),
     /// Manage skills
     Skill(SkillArgs),
     /// Run simulation templates
@@ -210,6 +212,41 @@ pub enum PersonaAction {
 }
 
 #[derive(Parser, Debug)]
+pub struct AgentArgs {
+    #[command(subcommand)]
+    pub action: AgentCliAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentCliAction {
+    /// List all registered custom agents
+    List,
+    /// Show details for a named agent
+    Inspect {
+        /// Agent name
+        name: String,
+    },
+    /// Run a custom agent with a task
+    Run {
+        /// Agent name (must match a .toml in ~/.agent007/agents/)
+        name: String,
+        /// Task description to execute
+        task: String,
+    },
+    /// Create a new agent definition stub
+    Create {
+        /// Agent name
+        name: String,
+        /// Agent type: worker | sub-orchestrator
+        #[arg(long, default_value = "sub-orchestrator")]
+        agent_type: String,
+        /// Memory namespace (default: agent name)
+        #[arg(long)]
+        namespace: Option<String>,
+    },
+}
+
+#[derive(Parser, Debug)]
 pub struct BundleArgs {
     #[command(subcommand)]
     pub action: BundleAction,
@@ -317,6 +354,40 @@ async fn main() -> anyhow::Result<()> {
         Commands::Tui(args) => commands::operator_tui::execute(config, args).await,
         Commands::Serve { port, no_dashboard } => {
             commands::serve::execute(config, port, no_dashboard).await
+        }
+        Commands::Agent(a) => {
+            use commands::agent::{execute as agent_execute, AgentAction};
+            use commands::run::{agent007_home, build_stack};
+            let stack = build_stack(&config).await?;
+            let agents_dir = agent007_home().join("agents");
+            let registry = std::sync::Arc::new(
+                agent007_custom_agents::AgentRegistry::load(&agents_dir)
+                    .unwrap_or_else(|_| agent007_custom_agents::AgentRegistry::empty()),
+            );
+            let action = match a.action {
+                AgentCliAction::List => AgentAction::List,
+                AgentCliAction::Inspect { name } => AgentAction::Inspect { name },
+                AgentCliAction::Run { name, task } => AgentAction::Run { name, task },
+                AgentCliAction::Create {
+                    name,
+                    agent_type,
+                    namespace,
+                } => AgentAction::Create {
+                    name,
+                    agent_type,
+                    namespace,
+                },
+            };
+            agent_execute(
+                registry,
+                action,
+                stack.model_router,
+                stack.dispatcher,
+                stack.memory_store,
+                stack.persona_registry
+                    as std::sync::Arc<dyn agent007_core::persona::PersonaProvider + Send + Sync>,
+            )
+            .await
         }
         Commands::Skill(s) => commands::skill::execute(config, s.action).await,
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,
