@@ -909,8 +909,7 @@ impl Agent007Server {
                  The agent decomposes the task into subtasks, dispatches them to worker \
                  personas in parallel, synthesises a combined result, and persists a \
                  last_run summary to its memory namespace. \
-                 Use agent007_agent_list (CLI) or inspect the agents directory to see \
-                 available agents.",
+                 Use the `agent007 agent list` CLI command to see available agents.",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -2000,13 +1999,22 @@ impl ServerHandler for Agent007Server {
                     .unwrap_or_else(|| def.name.clone());
                 let scoped = Arc::new(stack.memory_store.scoped(&ns));
 
+                // Prefer the server's shared dispatcher so worker events
+                // (WorkerResult/WorkerBlocked) reach the same dashboard stream
+                // as TaskAssigned/TaskCompleted.
                 use agent007_core::dispatcher::Dispatcher;
+                let run_dispatcher: Arc<dyn Dispatcher> = self
+                    .dispatcher
+                    .clone()
+                    .map(|d| d as Arc<dyn Dispatcher>)
+                    .unwrap_or_else(|| stack.dispatcher as Arc<dyn Dispatcher>);
+
                 let orch = agent007_custom_agents::SubOrchestrator::new(
                     def,
                     scoped,
                     stack.model_router,
                     stack.persona_registry as Arc<dyn agent007_core::persona::PersonaProvider>,
-                    stack.dispatcher as Arc<dyn Dispatcher>,
+                    run_dispatcher,
                     0,
                     3,
                 );
@@ -2037,9 +2045,22 @@ impl ServerHandler for Agent007Server {
                         self.publish_task_completed(&aid, task_id, &output).await;
                         Ok(CallToolResult::success(vec![Content::text(output)]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Agent run failed: {e}"
-                    ))])),
+                    Err(e) => {
+                        // Publish a terminal event so the dashboard doesn't show
+                        // this run stuck in "running" state indefinitely.
+                        if let Some(d) = &self.dispatcher {
+                            let _ = d
+                                .publish(agent007_core::AgentEvent::TaskFailed {
+                                    agent_id: aid.clone(),
+                                    error: e.to_string(),
+                                    model: None,
+                                })
+                                .await;
+                        }
+                        Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Agent run failed: {e}"
+                        ))]))
+                    }
                 }
             }
 

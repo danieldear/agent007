@@ -218,5 +218,5 @@ may touch. The orchestrator checks zones before dispatching.
 |---------|--------------|-----|
 | `Agent 'x' not found` | No TOML file for that name | Run `agent007 agent list` |
 | `allowed_workers is empty` | Sub-orchestrator TOML missing `allowed_workers` | Edit the TOML |
-| Workers always blocked | Personas for `allowed_workers` names don't exist | Add persona files or use built-in names (`coder`, `reviewer`, `planner`) |
+| Workers produce generic output | Personas for `allowed_workers` names don't exist | `dispatch_parallel` falls back to an empty system prompt when no persona matches; add persona files for each worker name, or use built-in names (`coder`, `reviewer`, `planner`) |
 | `MaxDepthExceeded` | Agent called itself recursively | Reduce max_depth or check TOML |

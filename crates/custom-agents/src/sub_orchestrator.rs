@@ -89,8 +89,12 @@ impl SubOrchestrator {
         // --- Plan decomposition ---
         let subtasks = self.plan(task).await?;
 
+        // Stable agent_id for the whole run; passed to worker events so the
+        // dashboard can attribute WorkerResult/WorkerBlocked to this run.
+        let run_id = AgentId::new();
+
         // --- Parallel worker execution ---
-        let mut outputs = self.dispatch_parallel(subtasks).await;
+        let mut outputs = self.dispatch_parallel(subtasks, run_id.clone()).await;
 
         // --- Dynamic replan for blocked subtasks (one round) ---
         let blocked: Vec<WorkerOutput> = outputs.drain_filter_blocked();
@@ -120,10 +124,30 @@ impl SubOrchestrator {
                  Produce a revised JSON plan ONLY for the blocked subtasks. \
                  Use the same JSON format: [{{'worker': '...', 'subtask': '...'}}]",
             );
-            let revised = self.plan(&replan_prompt).await.unwrap_or_default();
-            if !revised.is_empty() {
-                let mut replanned = self.dispatch_parallel(revised).await;
-                outputs.extend(replanned.drain(..));
+            match self.plan(&replan_prompt).await {
+                Ok(revised) if !revised.is_empty() => {
+                    let mut replanned = self.dispatch_parallel(revised, run_id.clone()).await;
+                    outputs.extend(replanned.drain(..));
+                }
+                Ok(_) => {
+                    // Replan returned an empty plan — keep the original blocked
+                    // outputs so their blocker reasons surface in SubTaskResult.
+                    tracing::warn!(
+                        orchestrator = %self.def.name,
+                        "replan returned empty plan; preserving original blocked outputs"
+                    );
+                    outputs.extend(blocked);
+                }
+                Err(e) => {
+                    // Replan itself failed — preserve original blocked outputs
+                    // rather than silently discarding them.
+                    tracing::warn!(
+                        orchestrator = %self.def.name,
+                        error = %e,
+                        "replan failed; preserving original blocked outputs"
+                    );
+                    outputs.extend(blocked);
+                }
             }
         }
 
@@ -198,8 +222,19 @@ impl SubOrchestrator {
     }
 
     /// Dispatch a list of subtasks **concurrently** using `JoinSet`.
-    /// Each worker gets the persona's system prompt and its own model call.
-    async fn dispatch_parallel(&self, subtasks: Vec<SubTask>) -> Vec<WorkerOutput> {
+    ///
+    /// `parent_id` is the stable `AgentId` for the whole orchestrator run.
+    /// It is used in `WorkerResult`/`WorkerBlocked` events so dashboard
+    /// consumers can correlate worker progress to the parent task entry.
+    ///
+    /// `WorkerResult.output` is capped at 512 chars in the event payload to
+    /// avoid bloating the dispatcher broadcast and run-trace JSONL files;
+    /// the full content is still returned through `WorkerOutput.output`.
+    async fn dispatch_parallel(
+        &self,
+        subtasks: Vec<SubTask>,
+        parent_id: AgentId,
+    ) -> Vec<WorkerOutput> {
         let mut set: JoinSet<WorkerOutput> = JoinSet::new();
 
         for sub in subtasks {
@@ -211,7 +246,7 @@ impl SubOrchestrator {
             let router = Arc::clone(&self.model_router);
             let dispatcher = Arc::clone(&self.dispatcher);
             let model = self.def.model.clone().unwrap_or_else(|| "default".into());
-            let agent_id = AgentId::new();
+            let run_agent_id = parent_id.clone();
             let worker_name = sub.worker_name.clone();
             let description = sub.description.clone();
 
@@ -242,13 +277,15 @@ impl SubOrchestrator {
 
                 match router.complete(req).await {
                     Ok(resp) => {
-                        // Emit: worker finished
+                        // Emit: worker finished (output truncated to 512 chars in
+                        // the event to keep dispatcher broadcast + JSONL compact)
+                        let preview: String = resp.content.chars().take(512).collect();
                         let _ = dispatcher
                             .publish(AgentEvent::WorkerResult {
-                                agent_id: agent_id.clone(),
+                                agent_id: run_agent_id.clone(),
                                 worker_name: worker_name.clone(),
                                 subtask: description.clone(),
-                                output: resp.content.clone(),
+                                output: preview,
                             })
                             .await;
 
@@ -264,7 +301,7 @@ impl SubOrchestrator {
                         let reason = e.to_string();
                         let _ = dispatcher
                             .publish(AgentEvent::WorkerBlocked {
-                                agent_id: agent_id.clone(),
+                                agent_id: run_agent_id.clone(),
                                 worker_name: worker_name.clone(),
                                 subtask: description.clone(),
                                 reason: reason.clone(),
@@ -331,15 +368,9 @@ trait DrainBlocked {
 
 impl DrainBlocked for Vec<WorkerOutput> {
     fn drain_filter_blocked(&mut self) -> Vec<WorkerOutput> {
-        let mut blocked = Vec::new();
-        let mut i = 0;
-        while i < self.len() {
-            if self[i].blocker.is_some() {
-                blocked.push(self.remove(i));
-            } else {
-                i += 1;
-            }
-        }
+        let (blocked, unblocked): (Vec<_>, Vec<_>) =
+            self.drain(..).partition(|w| w.blocker.is_some());
+        *self = unblocked;
         blocked
     }
 }
@@ -627,7 +658,7 @@ mod tests {
             },
         ];
 
-        let outputs = orch.dispatch_parallel(subtasks).await;
+        let outputs = orch.dispatch_parallel(subtasks, AgentId::new()).await;
         assert_eq!(outputs.len(), 2, "both workers should complete");
     }
 }
