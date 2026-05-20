@@ -271,7 +271,7 @@ function providerCardClass(status) {
   return {
     'border-success/45 bg-success/5': status === 'ready',
     'border-warning/45 bg-warning/5': status === 'fallback' || status === 'unreachable',
-    'border-base-300/70 bg-base-200': status === 'needs-config' || status === 'not-configured',
+    'border-base-content/15 bg-base-200': status === 'needs-config' || status === 'not-configured',
     'border-error/45 bg-error/5': status === 'error',
   }
 }
@@ -783,10 +783,10 @@ async function submitTask() {
     </div>
 
     <!-- ── Stats bento strip ──────────────────────────────────────────── -->
-    <div class="shrink-0 grid grid-cols-6 border-b border-base-300/60 bg-base-300/60">
+    <div class="shrink-0 grid grid-cols-6 border-b border-base-content/10 bg-base-300">
 
       <!-- Running -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-300/40">
+      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
         <div v-if="m.running_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-info/10 to-transparent pointer-events-none"></div>
         <div v-if="m.running_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-info/60"></div>
         <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Running</div>
@@ -800,7 +800,7 @@ async function submitTask() {
       </div>
 
       <!-- Awaiting Approval -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-300/40">
+      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
         <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute inset-0 bg-gradient-to-br from-warning/12 to-transparent pointer-events-none"></div>
         <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-warning/70"></div>
         <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Approvals</div>
@@ -811,14 +811,14 @@ async function submitTask() {
       </div>
 
       <!-- Completed -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-300/40">
+      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
         <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Completed</div>
         <div class="text-2xl font-bold font-mono tabular-nums leading-none text-success">{{ m.completed_tasks }}</div>
         <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ ((m.success_rate || 0) * 100).toFixed(0) }}% rate</div>
       </div>
 
       <!-- Failed -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-300/40">
+      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
         <div v-if="m.failed_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
         <div v-if="m.failed_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-error/60"></div>
         <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Failed</div>
@@ -829,7 +829,7 @@ async function submitTask() {
       </div>
 
       <!-- Tokens + Cost -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-300/40">
+      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
         <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Tokens</div>
         <div class="text-2xl font-bold font-mono tabular-nums leading-none text-primary">
           {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] text-base-content/25 ml-0.5">~</span>
@@ -850,10 +850,10 @@ async function submitTask() {
     <div class="flex-1 flex min-h-0">
 
       <!-- ── Left panel: live sessions + run list ──────────────────── -->
-      <div class="w-72 xl:w-80 flex flex-col bg-base-300/70 border-r border-base-300 overflow-hidden shrink-0">
+      <div class="w-72 xl:w-80 flex flex-col bg-base-300/70 border-r border-base-content/12 overflow-hidden shrink-0">
 
         <!-- Live sessions header -->
-        <div class="shrink-0 px-3 py-2 border-b border-base-300/60 flex items-center justify-between">
+        <div class="shrink-0 px-3 py-2 border-b border-base-content/8 flex items-center justify-between">
           <div class="flex items-center gap-2">
             <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Live</span>
             <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }}</span>
@@ -869,7 +869,7 @@ async function submitTask() {
           <button
             v-for="session in runtimeFocusSessions"
             :key="session.id"
-            class="w-full text-left px-3 py-2.5 border-b border-base-300/40 transition-all hover:bg-base-200/60 group border-l-[3px]"
+            class="w-full text-left px-3 py-2.5 border-b border-base-content/8 transition-all hover:bg-base-200/60 group border-l-[3px]"
             :class="[
               sessionBorderColor(session.lifecycle),
               expandedRunId === session.id ? 'bg-primary/8' : '',
@@ -906,12 +906,12 @@ async function submitTask() {
             </div>
           </button>
         </div>
-        <div v-else class="shrink-0 py-4 text-center text-[10px] font-mono text-base-content/20 border-b border-base-300/40">
+        <div v-else class="shrink-0 py-4 text-center text-[10px] font-mono text-base-content/20 border-b border-base-content/8">
           no active sessions
         </div>
 
         <!-- Runs header + filter -->
-        <div class="shrink-0 px-3 pt-2.5 pb-2 border-b border-base-300/50 space-y-1.5">
+        <div class="shrink-0 px-3 pt-2.5 pb-2 border-b border-base-content/8 space-y-1.5">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runs</span>
@@ -946,7 +946,7 @@ async function submitTask() {
           <button
             v-for="run in filteredRuns"
             :key="run.id"
-            class="w-full text-left px-3 py-2.5 border-b border-base-300/30 flex items-start gap-2.5 transition-all hover:bg-base-200/50 border-l-[3px]"
+            class="w-full text-left px-3 py-2.5 border-b border-base-content/6 flex items-start gap-2.5 transition-all hover:bg-base-200/50 border-l-[3px]"
             :class="expandedRunId === run.id
               ? 'bg-primary/8 border-l-primary'
               : 'border-l-transparent hover:border-l-base-content/15'"
@@ -989,8 +989,8 @@ async function submitTask() {
         <div v-if="!expandedRunId" class="p-4 space-y-4">
 
           <!-- Provider readiness -->
-          <div class="rounded-xl border border-base-300/60 bg-base-200/50 overflow-hidden">
-            <div class="px-4 py-2.5 border-b border-base-300/50 flex items-center justify-between gap-3">
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between gap-3">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Provider Readiness</span>
                 <span class="badge badge-xs font-mono" :class="providerReadiness.standalone_available ? 'badge-success' : 'badge-warning'">
@@ -1066,7 +1066,7 @@ async function submitTask() {
             </div>
 
             <!-- Token sparkline + KPI mini cards -->
-            <div class="rounded-xl border border-base-300/50 bg-base-200/50 p-4 flex flex-col justify-between gap-3" :class="etrCacheStats ? '' : 'col-span-1'">
+            <div class="rounded-xl border border-base-content/10 bg-base-200/50 p-4 flex flex-col justify-between gap-3" :class="etrCacheStats ? '' : 'col-span-1'">
               <div v-if="tokenSparkline.length >= 4" class="flex items-center gap-3">
                 <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest shrink-0">Tokens</span>
                 <svg :width="120" :height="22" class="opacity-50 shrink-0">
@@ -1099,8 +1099,8 @@ async function submitTask() {
           </div>
 
           <!-- Runtime sessions full view -->
-          <div class="rounded-xl border border-base-300/60 bg-base-200/50 overflow-hidden">
-            <div class="px-4 py-2.5 border-b border-base-300/50 flex items-center justify-between">
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runtime Sessions</span>
                 <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }} active</span>
@@ -1164,8 +1164,8 @@ async function submitTask() {
           </div>
 
           <!-- Recent Tasks table -->
-          <div class="rounded-xl border border-base-300/60 bg-base-200/50 flex flex-col" style="max-height: 28vh">
-            <div class="px-4 py-2.5 border-b border-base-300/50 flex items-center justify-between shrink-0">
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 flex flex-col" style="max-height: 28vh">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between shrink-0">
               <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Recent Tasks</span>
               <span class="text-[10px] font-mono text-base-content/25">{{ m.recent_tasks?.length || 0 }} this session</span>
             </div>
@@ -1239,15 +1239,15 @@ async function submitTask() {
 
           <!-- Metadata grid -->
           <div class="grid grid-cols-4 gap-2.5">
-            <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
               <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Run ID</div>
               <div class="font-mono text-xs text-base-content/60 truncate" :title="selectedRun.run.metadata.id">{{ selectedRun.run.metadata.id }}</div>
             </div>
-            <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
               <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Kind</div>
               <div class="font-mono text-xs text-base-content/60 truncate">{{ selectedRun.run.metadata.kind }}</div>
             </div>
-            <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
               <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Status</div>
               <span class="badge badge-sm font-mono" :class="{
                 'badge-info': selectedRun.run.metadata.status === 'running',
@@ -1256,7 +1256,7 @@ async function submitTask() {
                 'badge-error': selectedRun.run.metadata.status === 'failed',
               }">{{ selectedRun.run.metadata.status }}</span>
             </div>
-            <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
               <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Started</div>
               <div class="font-mono text-xs text-base-content/60">{{ fmtLocalTime(selectedRun.run.metadata.started_at) }}</div>
             </div>
@@ -1265,7 +1265,7 @@ async function submitTask() {
           <!-- Task -->
           <div>
             <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
-            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed border border-base-300/30"
+            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed border border-base-content/6"
               v-html="renderMarkdown(selectedRun.run.metadata.task)"
             />
           </div>
@@ -1273,13 +1273,13 @@ async function submitTask() {
           <!-- Output -->
           <div v-if="selectedRunOutput">
             <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
-            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed max-h-64 overflow-auto border border-base-300/30"
+            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed max-h-64 overflow-auto border border-base-content/6"
               v-html="renderMarkdown(selectedRunOutput)"
             />
           </div>
 
           <!-- Session notes -->
-          <div class="rounded-xl border border-base-300/50 bg-base-200/40 p-4">
+          <div class="rounded-xl border border-base-content/10 bg-base-200/40 p-4">
             <div class="flex items-center justify-between gap-3 mb-3">
               <div>
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Session Notes</div>
@@ -1292,7 +1292,7 @@ async function submitTask() {
               <div
                 v-for="message in runtimeMessages"
                 :key="message.id"
-                class="rounded-xl border border-base-300/40 bg-base-100/60 p-3"
+                class="rounded-xl border border-base-content/8 bg-base-100/60 p-3"
               >
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <div class="flex items-center gap-2">
@@ -1305,7 +1305,7 @@ async function submitTask() {
                 <div class="font-mono text-xs text-base-content/55 whitespace-pre-wrap leading-relaxed">{{ message.body }}</div>
               </div>
             </div>
-            <div v-else class="rounded-xl border border-dashed border-base-300/50 bg-base-100/30 p-3 mb-3 font-mono text-xs text-base-content/30">
+            <div v-else class="rounded-xl border border-dashed border-base-content/10 bg-base-100/30 p-3 mb-3 font-mono text-xs text-base-content/30">
               No notes yet. Add a handoff, decision, or next-action note.
             </div>
 
@@ -1346,7 +1346,7 @@ async function submitTask() {
           </div>
 
           <!-- Artifacts -->
-          <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-300/50 bg-base-200/40 p-4">
+          <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-content/10 bg-base-200/40 p-4">
             <div class="flex items-center justify-between gap-3 mb-3">
               <div>
                 <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Artifacts</div>
@@ -1369,7 +1369,7 @@ async function submitTask() {
                 </button>
               </div>
 
-              <div class="col-span-8 rounded-xl border border-base-300/40 bg-base-100/50 min-h-56 overflow-hidden">
+              <div class="col-span-8 rounded-xl border border-base-content/8 bg-base-100/50 min-h-56 overflow-hidden">
                 <div v-if="artifactPreviewStatus" class="p-4 font-mono text-xs text-warning">{{ artifactPreviewStatus }}</div>
                 <div v-else-if="!selectedArtifactPreview" class="h-full min-h-56 flex items-center justify-center text-center p-6">
                   <div>
@@ -1378,7 +1378,7 @@ async function submitTask() {
                   </div>
                 </div>
                 <div v-else>
-                  <div class="flex items-center justify-between gap-3 border-b border-base-300/40 px-3 py-2">
+                  <div class="flex items-center justify-between gap-3 border-b border-base-content/8 px-3 py-2">
                     <div class="min-w-0">
                       <div class="font-mono text-xs text-base-content/75 truncate" :title="selectedArtifactPreview.path">{{ selectedArtifactPreview.path }}</div>
                       <div class="font-mono text-[10px] text-base-content/30">{{ selectedArtifactPreview.kind }} · {{ selectedArtifactPreview.mime }} · {{ fmtBytes(selectedArtifactPreview.size_bytes) }}</div>
@@ -1418,33 +1418,33 @@ async function submitTask() {
           <div v-if="selectedRetrievalTelemetry">
             <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Retrieval Telemetry</div>
             <div class="grid grid-cols-4 gap-2.5 mb-2.5">
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Indexed Docs</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.indexed_docs || 0 }}</div>
               </div>
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Hit Rate</div>
                 <div class="font-mono text-xs text-base-content/70">{{ fmtPct(selectedRetrievalTelemetry.retrieval_hit_rate || 0) }}</div>
               </div>
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Queries / Hits</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.retrieval_queries || 0 }} / {{ selectedRetrievalTelemetry.retrieval_hits || 0 }}</div>
               </div>
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Context Chars</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
               </div>
             </div>
             <div class="grid grid-cols-3 gap-2.5">
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>
               </div>
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Fallback Hits</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.fallback_hits || 0 }}</div>
               </div>
-              <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Mock Embedding</div>
                 <div class="font-mono text-xs" :class="selectedRetrievalTelemetry.mock_embedding ? 'text-warning' : 'text-success'">
                   {{ selectedRetrievalTelemetry.mock_embedding ? 'yes' : 'no' }}
@@ -1454,7 +1454,7 @@ async function submitTask() {
           </div>
 
           <!-- Token Summary -->
-          <div v-if="selectedRunTokenSummary" class="rounded-xl border border-base-300/40 bg-base-200/50 p-3">
+          <div v-if="selectedRunTokenSummary" class="rounded-xl border border-base-content/8 bg-base-200/50 p-3">
             <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Token Summary</div>
             <div class="font-mono text-xs text-base-content/65">
               {{ selectedRunTokenSummary.tokens || 0 }} tokens · {{ selectedRunTokenSummary.requests || 0 }} request(s)
@@ -1477,11 +1477,11 @@ async function submitTask() {
             <div>
               <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-3">Workflow State</div>
               <div class="grid grid-cols-4 gap-2.5 mb-4">
-                <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                   <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Workflow</div>
                   <div class="font-mono text-xs text-base-content/70">{{ selectedWorkflowState.workflow }}</div>
                 </div>
-                <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                   <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1.5">
                     Progress · {{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}
                   </div>
@@ -1492,11 +1492,11 @@ async function submitTask() {
                     ></div>
                   </div>
                 </div>
-                <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                   <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Budget Used</div>
                   <div class="font-mono text-xs text-base-content/70">{{ fmtTokens(selectedWorkflowState.budget_used?.tokens || 0) }} tokens</div>
                 </div>
-                <div class="bg-base-200/70 rounded-xl p-3 border border-base-300/40">
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                   <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Artifacts</div>
                   <div class="font-mono text-xs text-base-content/70">{{ selectedRun.run.artifacts?.length || 0 }} file(s)</div>
                   <div class="text-[9px] font-mono text-base-content/25 mt-0.5 truncate" :title="selectedRun.run.artifacts?.join(', ')">
@@ -1641,7 +1641,7 @@ async function submitTask() {
                     :key="step.id"
                     class="rounded-xl border p-3 transition-colors"
                     :class="{
-                      'border-base-300/50': step.status === 'pending',
+                      'border-base-content/10': step.status === 'pending',
                       'border-error/60 bg-error/6': step.status === 'running' && isStaleStep(step),
                       'border-info/40 bg-info/5': step.status === 'running' && !isStaleStep(step),
                       'border-success/40 bg-success/5': step.status === 'completed',
@@ -1719,7 +1719,7 @@ async function submitTask() {
               <div
                 v-for="entry in selectedRun.run.entries.slice(-10).reverse()"
                 :key="`${entry.timestamp}-${entry.kind}`"
-                class="bg-base-200/60 rounded-xl p-3 border border-base-300/30"
+                class="bg-base-200/60 rounded-xl p-3 border border-base-content/6"
               >
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <span class="font-mono text-xs text-base-content/55">{{ entry.kind }}</span>
@@ -1837,7 +1837,7 @@ async function submitTask() {
               <button
                 v-for="(t, i) in [...(m.recent_tasks || [])].reverse().slice(0, 4)"
                 :key="i"
-                class="w-full text-left px-4 py-3 rounded-xl border border-base-300/40 hover:border-primary/30 hover:bg-primary/5 transition-all group"
+                class="w-full text-left px-4 py-3 rounded-xl border border-base-content/8 hover:border-primary/30 hover:bg-primary/5 transition-all group"
                 @click="taskInput = t.task"
               >
                 <div class="flex items-start gap-3">
@@ -1885,7 +1885,7 @@ async function submitTask() {
                       class="rounded-2xl rounded-tl-sm px-4 py-3 border"
                       :class="msg.status === 'error'
                         ? 'bg-error/8 border-error/20'
-                        : 'bg-base-200 border-base-300/40'"
+                        : 'bg-base-200 border-base-content/8'"
                     >
                       <p
                         class="font-mono text-xs whitespace-pre-wrap leading-relaxed"
@@ -1914,7 +1914,7 @@ async function submitTask() {
             v-if="showSlashMenu && filteredSlashCommands.length"
             class="mb-2 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden"
           >
-            <div class="px-3 py-1.5 border-b border-base-300/40 flex items-center justify-between">
+            <div class="px-3 py-1.5 border-b border-base-content/8 flex items-center justify-between">
               <span class="text-[10px] font-mono text-base-content/25 uppercase tracking-widest">Commands · ↑↓ navigate · ↵ select · Esc close</span>
               <span class="text-[10px] font-mono text-base-content/20">{{ filteredSlashCommands.length }} match{{ filteredSlashCommands.length !== 1 ? 'es' : '' }}</span>
             </div>
