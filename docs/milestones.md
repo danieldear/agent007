@@ -13,6 +13,7 @@
 | M2 | ✅ Complete | User-facing observability | run-detail API extension, dashboard telemetry/policy/token cards, docs updates | M1 | artifacts visible in UI and validated |
 | M3 | 📋 Planned | Safe rollout | strict-mode rollout matrix, KPI baseline tracking, rollback playbook | M2 | measured rollout decision gates |
 | M4 | 🚧 In Progress | Stronger long-lived runtime and operator UX | runtime session inventory, CLI status watch/filter, operator TUI v1, structured agent messages, provider readiness, artifact/mock viewer v1, repository skill catalog import with bulk install, artifact versioning, session notes, memory lifecycle improvements | M2 | sessions resumable, runtime visible in dashboard/TUI, first operator-grade terminal flow usable, visual artifacts reviewable in dashboard |
+| M5 | ✅ Complete | True multi-agent orchestration | Sub-orchestrator wired to CLI (`agent agent run`) and MCP (`agent007_agent_run`); parallel JoinSet worker dispatch; dynamic replan on blockers; cross-agent memory synthesis (`last_run`); new AgentEvent variants (`WorkerResult`, `WorkerBlocked`, `TaskFailed`) flowing to dashboard metrics; docs in `docs/multi-agent.md` | M1 | `cargo test --workspace` green, agent run end-to-end functional via CLI and MCP |
 
 ## Parallel Workstreams
 1. Backend: retriever/executor/policy and artifact persistence.

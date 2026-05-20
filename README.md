@@ -159,6 +159,21 @@ agent007 workflow approve <session>             Approve a pending gate
 agent007 workflow resume <session>              Resume a paused workflow
 ```
 
+### `agent007 agent`
+
+Manage and run custom multi-agent definitions stored as TOML files in `~/.agent007/agents/`.
+
+```
+agent007 agent list                            List all registered agents
+agent007 agent inspect <name>                  Show agent definition details
+agent007 agent run <name> "<task>"             Run an agent on a task
+agent007 agent create <name> [--type <type>]   Generate a new agent TOML stub
+                             [--namespace <ns>]
+```
+
+See [docs/multi-agent.md](docs/multi-agent.md) for the full execution model,
+TOML schema, and event reference.
+
 ### `agent007 persona`
 
 ```
@@ -248,13 +263,14 @@ These are available to your AI editor once `agent007 serve` is running.
 | `agent007_context_compile` | Compile a task-scoped context bundle (repo brain + memory + files) |
 | `agent007_repo_brain_refresh` | Refresh the persistent repo summary |
 
-### Personas
+### Agents & Personas
 | Tool | Description |
 |------|-------------|
+| `agent007_agent_run` | Run a named custom agent on a task (parallel worker dispatch, replan, memory synthesis) |
+| `agent007_agent_create` | Create or browse agent archetypes |
 | `agent007_persona_list` | List available personas |
 | `agent007_persona_show` | Show persona details |
 | `agent007_persona_switch` | Activate a persona |
-| `agent007_agent_create` | Create or browse agent archetypes |
 
 ### Git
 | Tool | Description |

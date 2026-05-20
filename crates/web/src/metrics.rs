@@ -224,6 +224,38 @@ impl DashboardMetrics {
             AgentEvent::ToolCallResult { .. } => {}
             AgentEvent::MemoryWrite { .. } => {}
             AgentEvent::HookFired { .. } => {}
+            // Worker events: update task counters so the dashboard reflects parallel work
+            AgentEvent::WorkerResult { agent_id, .. } => {
+                let aid = format!("{}", agent_id);
+                if let Some(entry) = self
+                    .recent_tasks
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.id == aid && e.status == "running")
+                {
+                    entry.status = "completed".to_string();
+                    entry.finished_at = Some(Utc::now().to_rfc3339());
+                }
+                self.completed_tasks += 1;
+            }
+            AgentEvent::WorkerBlocked { .. } => {
+                self.running_tasks = self.running_tasks.saturating_sub(1);
+                self.active_agents = self.running_tasks;
+            }
+            AgentEvent::TaskFailed { agent_id, .. } => {
+                self.running_tasks = self.running_tasks.saturating_sub(1);
+                self.active_agents = self.running_tasks;
+                let aid = format!("{}", agent_id);
+                if let Some(entry) = self
+                    .recent_tasks
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.id == aid && e.status == "running")
+                {
+                    entry.status = "failed".to_string();
+                    entry.finished_at = Some(Utc::now().to_rfc3339());
+                }
+            }
         }
     }
 

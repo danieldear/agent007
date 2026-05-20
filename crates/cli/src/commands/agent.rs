@@ -1,4 +1,8 @@
-use agent007_custom_agents::{AgentDef, AgentRegistry, AgentType, CustomAgentError};
+use agent007_custom_agents::{AgentDef, AgentRegistry, AgentType, CustomAgentError, SubOrchestrator};
+use agent007_core::dispatcher::LocalDispatcher;
+use agent007_core::persona::PersonaProvider;
+use agent007_memory::store::MemoryStore;
+use agent007_models::router::ModelRouter;
 use std::sync::Arc;
 
 /// Render a table-style listing of all registered agents.
@@ -33,7 +37,10 @@ pub fn format_inspect(def: &AgentDef) -> String {
             "Memory Namespace: {}",
             def.memory_namespace.as_deref().unwrap_or(&def.name)
         ),
-        format!("Model:            {}", def.model.as_deref().unwrap_or("default")),
+        format!(
+            "Model:            {}",
+            def.model.as_deref().unwrap_or("default")
+        ),
     ];
     if let Some(ref scope) = def.scope {
         lines.push(format!("Scope:            {}", scope.join(", ")));
@@ -56,13 +63,12 @@ pub fn format_inspect(def: &AgentDef) -> String {
 }
 
 /// Look up an agent by name and return formatted inspect output.
-pub fn inspect_agent(
-    registry: &AgentRegistry,
-    name: &str,
-) -> Result<String, CustomAgentError> {
+pub fn inspect_agent(registry: &AgentRegistry, name: &str) -> Result<String, CustomAgentError> {
     let def = registry
         .get(name)
-        .ok_or_else(|| CustomAgentError::NotFound { name: name.to_string() })?;
+        .ok_or_else(|| CustomAgentError::NotFound {
+            name: name.to_string(),
+        })?;
     Ok(format_inspect(def))
 }
 
@@ -91,9 +97,17 @@ pub enum AgentAction {
 }
 
 /// Entry point called from main.rs dispatch.
+///
+/// Accepts pre-built stack dependencies so `agent run` can reuse the same
+/// model router, dispatcher, memory store, and persona registry that the
+/// full `run` command uses.
 pub async fn execute(
     registry: Arc<AgentRegistry>,
     action: AgentAction,
+    model_router: Arc<ModelRouter>,
+    dispatcher: Arc<LocalDispatcher>,
+    memory_store: Arc<MemoryStore>,
+    persona_registry: Arc<dyn PersonaProvider>,
 ) -> anyhow::Result<()> {
     match action {
         AgentAction::List => {
@@ -105,12 +119,53 @@ pub async fn execute(
         AgentAction::Run { name, task } => {
             let def = registry
                 .get(&name)
-                .ok_or_else(|| CustomAgentError::NotFound { name: name.clone() })?;
-            tracing::info!("Running agent '{}' with task: {}", name, task);
-            println!("Running agent '{}' ...\nTask: {}", def.name, task);
-            // TODO: wire in SubOrchestrator once build_stack exposes it
+                .ok_or_else(|| CustomAgentError::NotFound { name: name.clone() })?
+                .clone();
+
+            let ns = def
+                .memory_namespace
+                .clone()
+                .unwrap_or_else(|| def.name.clone());
+            let scoped = Arc::new(memory_store.scoped(&ns));
+
+            let orch = SubOrchestrator::new(
+                def,
+                scoped,
+                model_router,
+                persona_registry,
+                dispatcher as Arc<dyn agent007_core::dispatcher::Dispatcher>,
+                0,
+                3,
+            );
+
+            println!("🤖 Running agent '{name}' …\n   Task: {task}\n");
+            match orch.run(&task).await {
+                Ok(result) => {
+                    println!("{}", result.output);
+                    if !result.blockers.is_empty() {
+                        println!("\n⚠️  Blockers:");
+                        for b in &result.blockers {
+                            println!("  • {b}");
+                        }
+                    }
+                    if !result.files_changed.is_empty() {
+                        println!("\n📂 Files changed:");
+                        for f in &result.files_changed {
+                            println!("  • {}", f.display());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Agent run failed: {e}");
+                    return Err(anyhow::anyhow!("{e}"));
+                }
+            }
         }
-        AgentAction::Create { name, agent_type, namespace } => {
+        AgentAction::Create {
+            name,
+            agent_type,
+            namespace,
+        } => {
             let toml_str = generate_agent_toml(&name, &agent_type, namespace.as_deref());
             let home = std::env::var("AGENT007_HOME")
                 .map(std::path::PathBuf::from)
@@ -122,7 +177,8 @@ pub async fn execute(
                 });
             let agents_dir = home.join("agents");
             std::fs::create_dir_all(&agents_dir)?;
-            let path = agents_dir.join(format!("{}.toml", name.to_lowercase().replace(' ', "_")));
+            let path =
+                agents_dir.join(format!("{}.toml", name.to_lowercase().replace(' ', "_")));
             std::fs::write(&path, &toml_str)?;
             println!("Created agent definition at: {}", path.display());
             println!("\n{toml_str}");
@@ -134,8 +190,8 @@ pub async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     const WORKER_TOML: &str = r#"
         name = "WorkerA"
@@ -212,7 +268,6 @@ mod tests {
 
     #[test]
     fn create_wizard_generates_valid_toml() {
-        // Smoke test: generate_agent_toml returns parseable TOML with expected fields
         let toml_str = generate_agent_toml("NewAgent", "sub-orchestrator", Some("new-ns"));
         let def: agent007_custom_agents::AgentDef = toml::from_str(&toml_str).unwrap();
         assert_eq!(def.name, "NewAgent");

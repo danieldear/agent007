@@ -904,6 +904,30 @@ impl Agent007Server {
             ),
 
             tool(
+                "agent007_agent_run",
+                "Run a named custom agent (sub-orchestrator or worker) on a task. \
+                 The agent decomposes the task into subtasks, dispatches them to worker \
+                 personas in parallel, synthesises a combined result, and persists a \
+                 last_run summary to its memory namespace. \
+                 Use agent007_agent_list (CLI) or inspect the agents directory to see \
+                 available agents.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the agent to run (must match a TOML file in ~/.agent007/agents/)"
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Task description for the agent to execute"
+                        }
+                    },
+                    "required": ["name", "task"]
+                }),
+            ),
+
+            tool(
                 "agent007_budget_estimate",
                 "Estimate prompt budget pressure for a task or text block and recommend whether to use full, compact, or aggressive context.",
                 serde_json::json!({
@@ -1937,6 +1961,84 @@ impl ServerHandler for Agent007Server {
             "agent007_etr_list" => {
                 let result = etr_list();
                 Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+
+            // Multi-agent execution
+            "agent007_agent_run" => {
+                let name = extract_string(request.arguments.as_ref(), "name")?;
+                let task = extract_string(request.arguments.as_ref(), "task")?;
+
+                let agents_dir = agent007_home().join("agents");
+                let registry = Arc::new(
+                    agent007_custom_agents::AgentRegistry::load(&agents_dir)
+                        .unwrap_or_else(|_| agent007_custom_agents::AgentRegistry::empty()),
+                );
+
+                let def = match registry.get(&name) {
+                    Some(d) => d.clone(),
+                    None => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Agent '{}' not found. \
+                             Use `agent007 agent list` (CLI) or inspect ~/.agent007/agents/.",
+                            name
+                        ))]));
+                    }
+                };
+
+                let stack = match build_stack(&self.config).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Error initialising agent stack: {e}"
+                        ))]));
+                    }
+                };
+
+                let ns = def.memory_namespace.clone().unwrap_or_else(|| def.name.clone());
+                let scoped = Arc::new(stack.memory_store.scoped(&ns));
+
+                use agent007_core::dispatcher::Dispatcher;
+                let orch = agent007_custom_agents::SubOrchestrator::new(
+                    def,
+                    scoped,
+                    stack.model_router,
+                    stack.persona_registry
+                        as Arc<dyn agent007_core::persona::PersonaProvider>,
+                    stack.dispatcher as Arc<dyn Dispatcher>,
+                    0,
+                    3,
+                );
+
+                let aid = agent007_core::types::AgentId::new();
+                let core_task = agent007_core::Task::new(&format!("agent:{name}:{task}"));
+                let task_id = core_task.id;
+                self.publish_task_assigned(&aid, &core_task).await;
+
+                match orch.run(&task).await {
+                    Ok(result) => {
+                        let mut lines = vec![result.output.clone()];
+                        if !result.blockers.is_empty() {
+                            lines.push("\nBlockers:".to_string());
+                            for b in &result.blockers {
+                                lines.push(format!("  • {b}"));
+                            }
+                        }
+                        if !result.files_changed.is_empty() {
+                            lines.push("\nFiles changed:".to_string());
+                            for f in &result.files_changed {
+                                lines.push(format!("  • {}", f.display()));
+                            }
+                        }
+                        let output = lines.join("\n");
+                        let token_est = output.len() / 4;
+                        self.publish_model_request(token_est).await;
+                        self.publish_task_completed(&aid, task_id, &output).await;
+                        Ok(CallToolResult::success(vec![Content::text(output)]))
+                    }
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Agent run failed: {e}"
+                    ))])),
+                }
             }
 
             name => Err(rmcp::model::ErrorData::new(
