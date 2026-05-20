@@ -484,7 +484,11 @@ impl MemoryStore {
     /// Fire-and-forget — a closed or lagging receiver is silently ignored.
     fn enqueue_index_task(&self, namespace: &str, key: &str, value: &str) {
         if let Some(tx) = self.index_tx.get() {
-            let ns_label = if namespace.is_empty() { "default" } else { namespace };
+            let ns_label = if namespace.is_empty() {
+                "default"
+            } else {
+                namespace
+            };
             let _ = tx.send(IndexTask {
                 doc_id: format!("memory:{ns_label}:{key}"),
                 content: value.to_string(),

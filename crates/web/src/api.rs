@@ -831,20 +831,19 @@ pub async fn skills_run_handler(
     // web handler reads the index that CLI runs actually populate.
     let vectordb_path = agent007_write_home().join("vectordb");
     let _ = std::fs::create_dir_all(&vectordb_path);
-    let db: Arc<dyn agent007_memory::VectorDB> =
-        match agent007_memory::vectordb::LanceDBStore::new(
-            vectordb_path.to_str().unwrap_or(".lance"),
-            "skills",
-            384,
-        )
-        .await
-        {
-            Ok(store) => Arc::new(store),
-            Err(e) => {
-                tracing::warn!(error = %e, "LanceDB unavailable in web skill run; using no-op VectorDB");
-                Arc::new(NoOpVectorDB)
-            }
-        };
+    let db: Arc<dyn agent007_memory::VectorDB> = match agent007_memory::vectordb::LanceDBStore::new(
+        vectordb_path.to_str().unwrap_or(".lance"),
+        "skills",
+        384,
+    )
+    .await
+    {
+        Ok(store) => Arc::new(store),
+        Err(e) => {
+            tracing::warn!(error = %e, "LanceDB unavailable in web skill run; using no-op VectorDB");
+            Arc::new(NoOpVectorDB)
+        }
+    };
     let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
 
     let memory_store = memory_store_for_web();
