@@ -20,7 +20,7 @@ const KNOWN_TOOL_NAMES = KNOWN_TOOLS.map(t => t.name)
 const form = ref({
   name: '',
   description: '',
-  preferred_model: 'codex',
+  preferred_model: 'claude-sonnet-4-6',
   allowed_tools: [],
   custom_tools: '',
   system_prompt: '',
@@ -35,7 +35,7 @@ async function loadPersonas() {
 
 function openCreate() {
   editTarget.value = null
-  form.value = { name: '', description: '', preferred_model: 'codex', allowed_tools: [], custom_tools: '', system_prompt: '' }
+  form.value = { name: '', description: '', preferred_model: 'claude-sonnet-4-6', allowed_tools: [], custom_tools: '', system_prompt: '' }
   showForm.value = true
 }
 
