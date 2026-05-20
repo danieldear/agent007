@@ -1,12 +1,13 @@
-use crate::{AgentDef, CustomAgentError, SubTaskResult};
+use crate::{AgentDef, AgentType, AgentZoneOverrides, CustomAgentError, SubTaskResult};
 use agent007_core::dispatcher::Dispatcher;
 use agent007_core::events::AgentEvent;
-use agent007_core::persona::PersonaProvider;
+use agent007_core::persona::{PersonaProvider, PersonaSpec};
 use agent007_core::types::AgentId;
 use agent007_memory::store::ScopedMemoryStore;
 use agent007_models::provider::ModelProvider;
 use agent007_models::router::ModelRouter;
 use agent007_models::types::{CompletionRequest, Message, Role};
+use agent007_skills::SkillContentProvider;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -55,6 +56,97 @@ impl SubOrchestrator {
             depth,
             max_depth,
         }
+    }
+
+    /// Construct a `SubOrchestrator` from a `PersonaSpec`.
+    ///
+    /// Skill domain knowledge (from `persona.skills`) is injected at the top of
+    /// the system prompt using the format:
+    /// ```text
+    /// ## Domain Knowledge
+    ///
+    /// <skill body>
+    ///
+    /// ---
+    ///
+    /// <original system prompt>
+    /// ```
+    ///
+    /// If `worker_names` is non-empty it overrides `persona.allowed_workers`;
+    /// otherwise `persona.allowed_workers` is used as-is.  This lets workflow
+    /// steps supply an explicit worker list without having to edit the persona
+    /// TOML file.
+    ///
+    /// Zone overrides are converted from `ZoneConfig` (Vec-based) to
+    /// `AgentZoneOverrides` (Option<Vec>-based): empty vecs become `None`.
+    pub fn from_persona(
+        persona: &PersonaSpec,
+        worker_names: Vec<String>,
+        skill_provider: &dyn SkillContentProvider,
+        scoped_memory: Arc<ScopedMemoryStore>,
+        model_router: Arc<ModelRouter>,
+        persona_provider: Arc<dyn PersonaProvider>,
+        dispatcher: Arc<dyn Dispatcher>,
+        depth: usize,
+        max_depth: usize,
+    ) -> Self {
+        // Inject skill domain knowledge into the system prompt (prepend each
+        // skill block so the most recently injected body appears first).
+        let mut system_prompt = persona.system_prompt.clone();
+        for trigger in &persona.skills {
+            if let Some(body) = skill_provider.load_content(trigger) {
+                system_prompt =
+                    format!("## Domain Knowledge\n\n{body}\n\n---\n\n{system_prompt}");
+            }
+        }
+
+        // Convert ZoneConfig (Vec-based) → AgentZoneOverrides (Option<Vec>-based).
+        let zones = persona.zones.as_ref().map(|z| AgentZoneOverrides {
+            readonly: if z.readonly.is_empty() {
+                None
+            } else {
+                Some(z.readonly.clone())
+            },
+            sensitive: if z.sensitive.is_empty() {
+                None
+            } else {
+                Some(z.sensitive.clone())
+            },
+            forbidden: if z.forbidden.is_empty() {
+                None
+            } else {
+                Some(z.forbidden.clone())
+            },
+        });
+
+        // Explicit worker_names override persona.allowed_workers when provided.
+        let effective_workers = if worker_names.is_empty() {
+            persona.allowed_workers.clone()
+        } else {
+            Some(worker_names)
+        };
+
+        let def = AgentDef {
+            name: persona.name.clone(),
+            r#type: AgentType::SubOrchestrator,
+            description: Some(persona.description.clone()),
+            scope: None,
+            system_prompt,
+            allowed_workers: effective_workers,
+            model: Some(persona.preferred_model.clone()),
+            memory_namespace: persona.memory_namespace.clone(),
+            zones,
+        };
+
+        Self::new(
+            def,
+            scoped_memory,
+            model_router,
+            persona_provider,
+            dispatcher,
+            depth,
+            max_depth,
+        )
     }
 
     /// Decompose the task into subtasks and execute via allowed worker personas.
@@ -409,7 +501,6 @@ fn parse_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AgentType;
     use agent007_core::dispatcher::LocalDispatcher;
     use agent007_core::persona::NoOpPersonaProvider;
     use agent007_memory::store::MemoryStore;
@@ -660,5 +751,216 @@ mod tests {
 
         let outputs = orch.dispatch_parallel(subtasks, AgentId::new()).await;
         assert_eq!(outputs.len(), 2, "both workers should complete");
+    }
+
+    // ── from_persona tests ──────────────────────────────────────────────────
+
+    fn make_persona(name: &str, system_prompt: &str) -> PersonaSpec {
+        PersonaSpec {
+            name: name.to_string(),
+            description: format!("{name} persona"),
+            system_prompt: system_prompt.to_string(),
+            preferred_model: "claude".to_string(),
+            allowed_tools: vec![],
+            memory_namespace: None,
+            zones: None,
+            skills: vec![],
+            agent_type: None,
+            allowed_workers: None,
+        }
+    }
+
+    fn skill_provider_with(trigger: &str, body: &str) -> agent007_skills::SkillIndex {
+        use agent007_skills::{Skill, SkillFrontmatter};
+        let skill = Skill {
+            frontmatter: SkillFrontmatter {
+                name: trigger.to_string(),
+                description: "test".to_string(),
+                trigger: trigger.to_string(),
+                model: "claude".to_string(),
+                category: "test".to_string(),
+                version: "1.0.0".to_string(),
+                tags: vec![],
+            },
+            template: body.to_string(),
+            manifest_path: std::path::PathBuf::from("test.md"),
+            entry_path: std::path::PathBuf::from("test.md"),
+            skill_dir: std::path::PathBuf::from("."),
+        };
+        agent007_skills::SkillIndex::from_skills(vec![skill])
+    }
+
+    fn make_orch_infra() -> (
+        Arc<ScopedMemoryStore>,
+        Arc<ModelRouter>,
+        Arc<dyn Dispatcher>,
+    ) {
+        let dir = tempdir().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let scoped = Arc::new(store.scoped("test-ns"));
+        let mock = Arc::new(MockProvider::new("mock", "mock"));
+        let mut router = ModelRouter::new("mock");
+        router.register("mock", mock as Arc<dyn ModelProvider>);
+        let router = Arc::new(router);
+        let dispatcher = LocalDispatcher::new(16);
+        (scoped, router, dispatcher)
+    }
+
+    #[test]
+    fn from_persona_preserves_name_and_model() {
+        let persona = make_persona("Architect", "You design systems.");
+        let noop = agent007_skills::NoOpSkillContentProvider;
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec![],
+            &noop,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert_eq!(orch.def.name, "Architect");
+        assert_eq!(orch.def.model.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn from_persona_injects_skill_into_system_prompt() {
+        let mut persona = make_persona("Coder", "You write Rust code.");
+        persona.skills = vec!["rust-debug".to_string()];
+
+        let provider = skill_provider_with("rust-debug", "Rust debugging knowledge.");
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec![],
+            &provider,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert!(
+            orch.def.system_prompt.contains("## Domain Knowledge"),
+            "system prompt should contain injected domain knowledge header"
+        );
+        assert!(
+            orch.def.system_prompt.contains("Rust debugging knowledge."),
+            "system prompt should contain skill body"
+        );
+        assert!(
+            orch.def.system_prompt.contains("You write Rust code."),
+            "original system prompt should still be present"
+        );
+    }
+
+    #[test]
+    fn from_persona_no_skill_leaves_prompt_unchanged() {
+        let persona = make_persona("Reviewer", "You review pull requests.");
+        let noop = agent007_skills::NoOpSkillContentProvider;
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec![],
+            &noop,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert_eq!(orch.def.system_prompt, "You review pull requests.");
+    }
+
+    #[test]
+    fn from_persona_explicit_workers_override_persona_allowed_workers() {
+        let mut persona = make_persona("Lead", "Orchestrate.");
+        persona.allowed_workers = Some(vec!["OldWorker".to_string()]);
+
+        let noop = agent007_skills::NoOpSkillContentProvider;
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec!["NewWorker".to_string()],
+            &noop,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert_eq!(
+            orch.def.allowed_workers.as_deref(),
+            Some(&["NewWorker".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn from_persona_empty_workers_falls_back_to_persona_allowed_workers() {
+        let mut persona = make_persona("Lead", "Orchestrate.");
+        persona.allowed_workers = Some(vec!["FallbackWorker".to_string()]);
+
+        let noop = agent007_skills::NoOpSkillContentProvider;
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec![],
+            &noop,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        assert_eq!(
+            orch.def.allowed_workers.as_deref(),
+            Some(&["FallbackWorker".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn from_persona_zone_config_converted_correctly() {
+        use agent007_zones::ZoneConfig;
+        let mut persona = make_persona("Locked", "Careful agent.");
+        persona.zones = Some(ZoneConfig {
+            forbidden: vec!["secrets/".to_string()],
+            readonly: vec!["config/".to_string()],
+            sensitive: vec![],
+            unrestricted: vec![],
+        });
+
+        let noop = agent007_skills::NoOpSkillContentProvider;
+        let (mem, router, disp) = make_orch_infra();
+        let orch = SubOrchestrator::from_persona(
+            &persona,
+            vec![],
+            &noop,
+            mem,
+            router,
+            Arc::new(NoOpPersonaProvider),
+            disp,
+            0,
+            3,
+        );
+        let zones = orch.def.zones.expect("zones should be set");
+        assert_eq!(
+            zones.forbidden.as_deref(),
+            Some(&["secrets/".to_string()][..])
+        );
+        assert_eq!(
+            zones.readonly.as_deref(),
+            Some(&["config/".to_string()][..])
+        );
+        assert!(
+            zones.sensitive.is_none(),
+            "empty vec should map to None"
+        );
     }
 }

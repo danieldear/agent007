@@ -337,6 +337,94 @@ impl WorkflowRunner {
                         continue;
                     }
 
+                    // MultiAgent steps build a SubOrchestrator from the step's persona and
+                    // worker list, inject skill domain knowledge, and run inline (not spawned)
+                    // to avoid requiring the orchestrator and its deps to be Send.
+                    if step.r#type == StepType::MultiAgent {
+                        let multi_result: Result<
+                            (crate::types::StepDef, String, String, usize),
+                            WorkflowError,
+                        > = async {
+                            // Resolve the orchestrator persona.
+                            let persona_name = step.agent.clone();
+                            let persona_spec =
+                                persona_provider.get(&persona_name).ok_or_else(|| {
+                                    WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: format!(
+                                            "persona '{persona_name}' not found for multi-agent step"
+                                        ),
+                                    }
+                                })?;
+
+                            // Collect explicit worker persona names from the step config.
+                            let worker_names: Vec<String> = step
+                                .workers
+                                .as_ref()
+                                .map(|ws| ws.iter().map(|w| w.persona.clone()).collect())
+                                .unwrap_or_default();
+
+                            // Build a SkillIndex from the current skills directory.
+                            let skills_dir =
+                                agent007_core::paths::agent007_home().join("skills");
+                            let skill_index: Box<dyn agent007_skills::SkillContentProvider> =
+                                match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                                    Ok(skills) => Box::new(
+                                        agent007_skills::SkillIndex::from_skills(skills),
+                                    ),
+                                    Err(_) => {
+                                        Box::new(agent007_skills::NoOpSkillContentProvider)
+                                    }
+                                };
+
+                            // Construct a persistent-ish memory store keyed by persona name.
+                            let memory_dir =
+                                agent007_core::paths::agent007_home().join("memory");
+                            let _ = std::fs::create_dir_all(&memory_dir);
+                            let mem_store = Arc::new(
+                                agent007_memory::store::MemoryStore::new(&memory_dir),
+                            );
+                            let ns = persona_spec
+                                .memory_namespace
+                                .clone()
+                                .unwrap_or_else(|| persona_spec.name.clone());
+                            let scoped = Arc::new(mem_store.scoped(&ns));
+
+                            // Build and run the sub-orchestrator.
+                            let orchestrator =
+                                agent007_custom_agents::SubOrchestrator::from_persona(
+                                    &persona_spec,
+                                    worker_names,
+                                    skill_index.as_ref(),
+                                    scoped,
+                                    router.clone(),
+                                    persona_provider.clone(),
+                                    sub_dispatcher.clone(),
+                                    0,
+                                    3,
+                                );
+
+                            let result =
+                                orchestrator.run(&task_str).await.map_err(|e| {
+                                    WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: format!("multi-agent step failed: {e}"),
+                                    }
+                                })?;
+
+                            // Tokens are not tracked by SubOrchestrator today.
+                            Ok((
+                                step,
+                                result.output,
+                                format!("multi-agent/{persona_name}"),
+                                0usize,
+                            ))
+                        }
+                        .await;
+                        step_futures.push(tokio::spawn(async move { multi_result }));
+                        continue;
+                    }
+
                     step_futures.push(tokio::spawn(async move {
                         // 1. Resolve prompt from inline or skill reference
                         let prompt_template = if let Some(ref prompt) = step.prompt {
@@ -942,6 +1030,9 @@ impl WorkflowRunner {
                         // Extract steps are handled inline in the hosted engine; the
                         // parallel runner does not support them and skips post-processing.
                         StepType::Extract => {}
+                        // MultiAgent steps are dispatched via SubOrchestrator; handled
+                        // in the execution branch below. Nothing extra at post-step stage.
+                        StepType::MultiAgent => {}
                     }
 
                     completed_steps.insert(step.id.clone());

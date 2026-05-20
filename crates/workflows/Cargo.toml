@@ -4,11 +4,13 @@ version = "0.3.1"
 edition = "2021"
 
 [dependencies]
-agent007-core     = { path = "../core" }
-agent007-models   = { path = "../models" }
-agent007-skills   = { path = "../skills" }
-agent007-testing  = { path = "../testing" }
-agent007-etr      = { path = "../etr" }
+agent007-core          = { path = "../core" }
+agent007-custom-agents = { path = "../custom-agents" }
+agent007-memory        = { path = "../memory" }
+agent007-models        = { path = "../models" }
+agent007-skills        = { path = "../skills" }
+agent007-testing       = { path = "../testing" }
+agent007-etr           = { path = "../etr" }
 thiserror         = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }

@@ -864,7 +864,7 @@ impl HostedWorkflowEngine {
         state.sync_outputs(outputs.clone());
 
         match step.r#type {
-            StepType::Execute | StepType::SubWorkflow | StepType::Extract => {}
+            StepType::Execute | StepType::SubWorkflow | StepType::Extract | StepType::MultiAgent => {}
             StepType::Evaluator => {
                 let Some(eval) = &step.evaluate else {
                     state.mark_failed(

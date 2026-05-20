@@ -3,20 +3,14 @@ use crate::error::PersonaError;
 use agent007_core::PersonaSpec;
 use std::path::Path;
 
-/// Deserialisation target — mirrors PersonaSpec for TOML parsing.
-#[derive(serde::Deserialize)]
-struct PersonaFile {
-    name: String,
-    description: String,
-    system_prompt: String,
-    preferred_model: String,
-    #[serde(default)]
-    allowed_tools: Vec<String>,
-}
-
 /// Load all PersonaSpec overrides from *.toml files in user_dir.
 /// Files that fail to parse return PersonaError::ParseError.
 /// Non-.toml files are silently ignored.
+///
+/// Deserializes directly into `PersonaSpec` — all new optional fields
+/// (`memory_namespace`, `zones`, `skills`, `agent_type`, `allowed_workers`)
+/// default to None/empty when absent from the TOML file, preserving full
+/// backward compatibility with existing persona TOML files.
 pub fn load_user_overrides(user_dir: &Path) -> Result<Vec<PersonaSpec>, PersonaError> {
     let mut specs = Vec::new();
 
@@ -30,18 +24,13 @@ pub fn load_user_overrides(user_dir: &Path) -> Result<Vec<PersonaSpec>, PersonaE
         }
 
         let content = std::fs::read_to_string(&path)?;
-        let pf: PersonaFile = toml::from_str(&content).map_err(|e| PersonaError::ParseError {
-            path: path.clone(),
-            reason: e.to_string(),
-        })?;
+        let spec: PersonaSpec =
+            toml::from_str(&content).map_err(|e| PersonaError::ParseError {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?;
 
-        specs.push(PersonaSpec {
-            name: pf.name,
-            description: pf.description,
-            system_prompt: pf.system_prompt,
-            preferred_model: pf.preferred_model,
-            allowed_tools: pf.allowed_tools,
-        });
+        specs.push(spec);
     }
 
     Ok(specs)
