@@ -30,11 +30,25 @@ function normalizeSaved(t) {
 }
 
 const theme = ref(normalizeSaved(localStorage.getItem('theme')) || document.documentElement.getAttribute('data-theme') || DARK_THEME)
+const showThemePicker = ref(false)
 
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t)
   localStorage.setItem('theme', t)
   theme.value = t
+  showThemePicker.value = false
+}
+
+function isDark(id) {
+  return THEMES.find(t => t.id === id)?.dark ?? true
+}
+
+function toggleDark() {
+  if (isDark(theme.value)) {
+    applyTheme(LIGHT_THEME)
+  } else {
+    applyTheme(DARK_THEME)
+  }
 }
 
 onMounted(() => {
@@ -54,19 +68,23 @@ onMounted(async () => {
   } catch {}
 })
 
-const navItems = [
+const primaryNav = [
   { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
   { id: 'agents',    label: 'Personas',  symbol: '◉' },
   { id: 'skills',    label: 'Skills',    symbol: '⚡' },
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },
-  { id: 'tools',     label: 'Tools',     symbol: '🛠' },
-  { id: 'mcp',        label: 'MCP',        symbol: '⬡' },
-  { id: 'lsp',        label: 'LSP',        symbol: '⌘' },
-  { id: 'extensions', label: 'Extensions', symbol: '⊞' },
-  { id: 'memory',     label: 'Memory',     symbol: '◈' },
-  { id: 'sharing',   label: 'Sharing',   symbol: '⇅' },
-  { id: 'help',      label: 'Guide',     symbol: '?' },
+  { id: 'memory',    label: 'Memory',    symbol: '◈' },
 ]
+
+const configNav = [
+  { id: 'tools',      label: 'Tools',       symbol: '🛠' },
+  { id: 'mcp',        label: 'MCP',         symbol: '⬡' },
+  { id: 'lsp',        label: 'LSP',         symbol: '⌘' },
+  { id: 'extensions', label: 'Extensions',  symbol: '⊞' },
+  { id: 'sharing',    label: 'Sharing',     symbol: '⇅' },
+  { id: 'help',       label: 'Guide',       symbol: '?' },
+]
+
 </script>
 
 <template>
@@ -87,34 +105,80 @@ const navItems = [
     </div>
 
     <!-- Navigation -->
-    <nav class="flex-1 py-3 space-y-0.5">
-      <button
-        v-for="item in navItems"
-        :key="item.id"
-        class="relative w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors duration-100"
-        :class="current === item.id
-          ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
-          : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
-        :title="item.label"
-        @click="$emit('navigate', item.id)"
-      >
-        <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
-          {{ item.symbol }}
-        </span>
-        <span class="font-mono text-[12px] tracking-wide leading-tight line-clamp-2 break-words">{{ item.label }}</span>
-      </button>
+    <nav class="flex-1 py-2 overflow-y-auto">
+      <!-- Primary section -->
+      <div class="px-3 pt-1 pb-0.5">
+        <span class="text-[9px] font-mono uppercase tracking-widest text-base-content/20">Primary</span>
+      </div>
+      <div class="space-y-0.5 mb-2">
+        <button
+          v-for="item in primaryNav"
+          :key="item.id"
+          class="relative w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors duration-100"
+          :class="current === item.id
+            ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
+            : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
+          :title="item.label"
+          @click="$emit('navigate', item.id)"
+        >
+          <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
+            {{ item.symbol }}
+          </span>
+          <span class="font-mono text-[12px] tracking-wide leading-tight">{{ item.label }}</span>
+        </button>
+      </div>
+
+      <!-- Config section -->
+      <div class="px-3 pt-2 pb-0.5 border-t border-base-300/40">
+        <span class="text-[9px] font-mono uppercase tracking-widest text-base-content/20">Config</span>
+      </div>
+      <div class="space-y-0.5">
+        <button
+          v-for="item in configNav"
+          :key="item.id"
+          class="relative w-full text-left px-4 py-2 flex items-center gap-3 transition-colors duration-100"
+          :class="current === item.id
+            ? 'text-primary bg-primary/8 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:rounded-r'
+            : 'text-base-content/55 hover:text-base-content/90 hover:bg-base-300/40'"
+          :title="item.label"
+          @click="$emit('navigate', item.id)"
+        >
+          <span class="text-sm w-4 text-center shrink-0" :class="current === item.id ? 'text-primary' : 'text-base-content/35'">
+            {{ item.symbol }}
+          </span>
+          <span class="font-mono text-[12px] tracking-wide leading-tight">{{ item.label }}</span>
+        </button>
+      </div>
     </nav>
 
-    <!-- Appearance: always-visible theme swatches -->
-    <div class="px-4 pt-2 pb-1 border-t border-base-300/80">
-      <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/25 mb-1.5 flex items-center gap-1.5">
-        <span>🎨</span><span>Appearance</span>
+    <!-- Appearance -->
+    <div class="px-3 pt-2 pb-1 border-t border-base-300/80">
+      <!-- Toggle row: dark/light + theme picker button -->
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-[9px] font-mono uppercase tracking-widest text-base-content/25">Theme</span>
+        <button
+          class="text-[10px] font-mono text-base-content/35 hover:text-base-content/70 transition-colors"
+          :title="showThemePicker ? 'Close picker' : 'Pick theme'"
+          @click="showThemePicker = !showThemePicker"
+        >{{ showThemePicker ? '▲' : '▼' }}</button>
       </div>
-      <div class="grid grid-cols-3 gap-1">
+
+      <!-- Quick dark/light toggle -->
+      <button
+        class="w-full flex items-center gap-2 px-2 py-1.5 rounded border border-base-300/60 bg-base-300/30 hover:bg-base-300/60 transition-colors"
+        @click="toggleDark"
+      >
+        <span class="text-sm">{{ isDark(theme) ? '🌙' : '☀️' }}</span>
+        <span class="font-mono text-[11px] text-base-content/60 flex-1 text-left">{{ THEMES.find(t => t.id === theme)?.label?.split(' ').slice(1).join(' ') || theme }}</span>
+        <span class="text-[9px] font-mono text-base-content/25">{{ isDark(theme) ? 'dark' : 'light' }}</span>
+      </button>
+
+      <!-- Expanded theme picker -->
+      <div v-if="showThemePicker" class="mt-1.5 grid grid-cols-2 gap-1">
         <button
           v-for="t in THEMES"
           :key="t.id"
-          class="rounded px-1 py-1.5 text-[10px] font-mono leading-tight flex items-center gap-1 transition-all duration-150 truncate"
+          class="rounded px-1.5 py-1.5 text-[10px] font-mono leading-tight flex items-center gap-1 transition-all duration-150 truncate"
           :class="theme === t.id
             ? 'bg-primary/15 text-primary ring-1 ring-primary/50 font-bold'
             : 'bg-base-300/30 text-base-content/45 hover:bg-base-300/70 hover:text-base-content/80'"

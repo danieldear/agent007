@@ -208,7 +208,7 @@ const uptime = computed(() => {
 })
 
 function fmtTokens(n) {
-  if (!n) return '0'
+  if (n == null) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
   return String(n)
@@ -250,11 +250,28 @@ function runtimeBadgeClass(lifecycle) {
   }
 }
 
+function sessionBorderColor(lifecycle) {
+  if (lifecycle === 'running') return 'border-l-info'
+  if (lifecycle === 'ready') return 'border-l-primary'
+  if (lifecycle === 'blocked' || lifecycle === 'attention') return 'border-l-warning'
+  if (lifecycle === 'complete') return 'border-l-success'
+  if (lifecycle === 'failed') return 'border-l-error'
+  return 'border-l-base-content/20'
+}
+
+function workflowProgressColor(lifecycle) {
+  if (lifecycle === 'running') return 'bg-info'
+  if (lifecycle === 'blocked' || lifecycle === 'attention') return 'bg-warning'
+  if (lifecycle === 'complete') return 'bg-success'
+  if (lifecycle === 'failed') return 'bg-error'
+  return 'bg-primary'
+}
+
 function providerCardClass(status) {
   return {
     'border-success/45 bg-success/5': status === 'ready',
     'border-warning/45 bg-warning/5': status === 'fallback' || status === 'unreachable',
-    'border-base-300/70 bg-base-200': status === 'needs-config' || status === 'not-configured',
+    'border-base-content/15 bg-base-200': status === 'needs-config' || status === 'not-configured',
     'border-error/45 bg-error/5': status === 'error',
   }
 }
@@ -521,12 +538,10 @@ async function refreshDashboardSnapshots() {
   if (results[3].status === 'fulfilled' && results[3].value) {
     providerStatus.value = results[3].value
   }
-  // Keep the last successful snapshots when any individual refresh fails.
 }
 
 async function refreshRuns() {
   runs.value = await api.listRuns() || []
-  // Never auto-select — only refresh detail for the currently expanded run
   if (expandedRunId.value) {
     if (runs.value.find(r => r.id === expandedRunId.value)) {
       selectedRun.value = await api.getRunDetail(expandedRunId.value)
@@ -696,9 +711,7 @@ async function submitTask() {
   const input = taskInput.value.trim()
   if (!input || chatPending.value) return
 
-  // Add user bubble immediately
   chatMessages.value.push({ role: 'user', content: input })
-  // Add pending assistant bubble
   chatMessages.value.push({ role: 'assistant', content: '', status: 'running', sessionId: null })
   const replyIdx = chatMessages.value.length - 1
 
@@ -757,13 +770,10 @@ async function submitTask() {
       </div>
       <div class="flex items-center gap-3 shrink-0">
         <span class="text-[11px] font-mono text-base-content/30 hidden sm:block">{{ uptime }}</span>
-        <span class="w-1.5 h-1.5 rounded-full" :class="connected ? 'bg-success shadow-[0_0_4px_theme(colors.success)]' : 'bg-error'"></span>
-        <span class="text-[11px] font-mono" :class="connected ? 'text-success/60' : 'text-error/60'">{{ connected ? 'live' : 'offline' }}</span>
+        <span class="w-1.5 h-1.5 rounded-full" :class="connected ? 'bg-success shadow-[0_0_6px_oklch(var(--su)/0.8)]' : 'bg-error'"></span>
+        <span class="text-[11px] font-mono" :class="connected ? 'text-success/70' : 'text-error/60'">{{ connected ? 'live' : 'offline' }}</span>
         <div class="w-px h-4 bg-base-300"></div>
-        <button
-          class="btn btn-sm btn-primary font-mono text-xs gap-1.5"
-          @click="taskPanelOpen = true"
-        >
+        <button class="btn btn-sm btn-primary font-mono text-xs gap-1.5" @click="taskPanelOpen = true">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
           </svg>
@@ -772,857 +782,972 @@ async function submitTask() {
       </div>
     </div>
 
-    <!-- ── Scrollable body ────────────────────────────────────────────── -->
-    <div class="flex-1 overflow-auto p-4 space-y-4">
+    <!-- ── Stats bento strip ──────────────────────────────────────────── -->
+    <div class="shrink-0 px-4 py-3 border-b border-base-content/8 bg-base-200">
+      <div class="grid grid-cols-6 rounded-xl border border-base-content/10 bg-base-300 overflow-hidden">
 
-      <!-- Primary Stats: 4 hero cards -->
-      <div class="grid grid-cols-4 gap-3">
-        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
-          <div class="absolute inset-0 bg-gradient-to-br from-primary/8 to-transparent pointer-events-none"></div>
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Active Agents</div>
-          <div class="text-4xl font-bold font-mono text-primary tabular-nums">{{ m.active_agents }}</div>
-          <div v-if="m.active_agents > 0" class="absolute top-4 right-4 flex items-center gap-1.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-            <span class="text-[10px] font-mono text-primary/50">active</span>
+        <!-- Running -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="m.running_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-info/10 to-transparent pointer-events-none"></div>
+          <div v-if="m.running_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-info/60"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Running</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.running_tasks > 0 ? 'text-info' : 'text-base-content/25'">
+            {{ m.running_tasks }}
           </div>
-          <div v-else class="text-[10px] font-mono text-base-content/25 mt-1">idle</div>
-        </div>
-        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
-          <div class="absolute inset-0 bg-gradient-to-br from-info/8 to-transparent pointer-events-none"></div>
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Running</div>
-          <div class="text-4xl font-bold font-mono text-info tabular-nums">{{ m.running_tasks }}</div>
-          <div v-if="m.running_tasks > 0" class="absolute top-4 right-4">
-            <span class="w-1.5 h-1.5 rounded-full bg-info animate-pulse inline-block"></span>
-          </div>
-          <div class="text-[10px] font-mono text-base-content/25 mt-1">
-            <template v-if="(m.awaiting_approvals || 0) > 0">
-              {{ m.awaiting_approvals }} awaiting approval
-            </template>
-            <template v-else>
-              {{ m.session_requests }} requests
-            </template>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1 flex items-center gap-1">
+            <span v-if="m.running_tasks > 0" class="w-1 h-1 rounded-full bg-info animate-pulse shrink-0"></span>
+            <span>{{ m.session_requests }} req</span>
           </div>
         </div>
-        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
-          <div class="absolute inset-0 bg-gradient-to-br from-success/8 to-transparent pointer-events-none"></div>
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Completed</div>
-          <div class="text-4xl font-bold font-mono text-success tabular-nums">{{ m.completed_tasks }}</div>
-          <div class="text-[10px] font-mono text-success/40 mt-1" v-if="m.success_rate">
-            {{ ((m.success_rate || 0) * 100).toFixed(1) }}% success rate
+
+        <!-- Awaiting Approval -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute inset-0 bg-gradient-to-br from-warning/12 to-transparent pointer-events-none"></div>
+          <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-warning/70"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Approvals</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="(m.awaiting_approvals || 0) > 0 ? 'text-warning' : 'text-base-content/25'">
+            {{ m.awaiting_approvals || 0 }}
           </div>
-          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-else>—</div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">pending</div>
         </div>
-        <div class="bg-base-200 rounded-xl p-5 border border-base-300 relative overflow-hidden">
-          <div class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
-          <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1">Failed</div>
-          <div class="text-4xl font-bold font-mono text-error tabular-nums">{{ m.failed_tasks }}</div>
-          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-if="m.total_retries">{{ m.total_retries }} retries</div>
-          <div class="text-[10px] font-mono text-base-content/25 mt-1" v-else>—</div>
+
+        <!-- Completed -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Completed</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-success">{{ m.completed_tasks }}</div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ ((m.success_rate || 0) * 100).toFixed(0) }}% rate</div>
         </div>
+
+        <!-- Failed -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="m.failed_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
+          <div v-if="m.failed_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-error/60"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Failed</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.failed_tasks > 0 ? 'text-error' : 'text-base-content/25'">
+            {{ m.failed_tasks }}
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ m.total_retries || 0 }} retries</div>
+        </div>
+
+        <!-- Tokens + Cost -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Tokens</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-primary">
+            {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] text-base-content/25 ml-0.5">~</span>
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
+        </div>
+
+        <!-- Latency + Reward -->
+        <div class="relative px-4 py-3 overflow-hidden">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Latency</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-accent">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ (m.avg_reward || 0).toFixed(2) }} reward</div>
+        </div>
+
       </div>
+    </div>
 
-      <!-- Secondary Stats: compact 6-column KPI row -->
-      <div class="grid grid-cols-6 gap-2">
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Tokens</div>
-          <div class="text-base font-bold font-mono text-secondary tabular-nums mt-0.5">
-            {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[9px] text-base-content/25 ml-0.5" title="Estimated from prompt length">~</span>
-          </div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.session_requests }}req</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Est. Cost</div>
-          <div class="text-base font-bold font-mono text-warning tabular-nums mt-0.5">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">${{ (m.avg_cost_usd || 0).toFixed(4) }}/run</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Success</div>
-          <div class="text-base font-bold font-mono text-success tabular-nums mt-0.5">{{ ((m.success_rate || 0) * 100).toFixed(1) }}%</div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.scorecard_run_count || 0 }} scorecards</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Avg Latency</div>
-          <div class="text-base font-bold font-mono text-info tabular-nums mt-0.5">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ (m.avg_retries_per_run || 0).toFixed(2) }} retries/run</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Avg Reward</div>
-          <div class="text-base font-bold font-mono text-accent tabular-nums mt-0.5">{{ (m.avg_reward || 0).toFixed(3) }}</div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5">{{ m.feedback_count }}fb · {{ m.prompt_improvements }}imp</div>
-        </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Uptime</div>
-          <div class="text-base font-bold font-mono text-base-content tabular-nums mt-0.5">{{ uptime }}</div>
-          <div class="text-[9px] text-base-content/25 font-mono mt-0.5 truncate">{{ m.model_provider || '—' }}</div>
-        </div>
-      </div>
+    <!-- ── Master-detail body ─────────────────────────────────────────── -->
+    <div class="flex-1 flex min-h-0">
 
-      <!-- Provider readiness: dashboard-first onboarding status -->
-      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center gap-3">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Provider Readiness</span>
-            <span class="badge badge-xs font-mono" :class="providerReadiness.standalone_available ? 'badge-success' : 'badge-warning'">
-              {{ providerReadiness.runtime_mode || 'hosted-mcp' }}
-            </span>
-            <span v-if="providerReadiness.selected_model" class="text-[10px] font-mono text-base-content/35 truncate hidden md:block">
-              {{ providerReadiness.selected_model }}
-            </span>
-          </div>
-          <div class="text-[10px] font-mono text-base-content/30 truncate max-w-[44rem]">
-            {{ providerReadiness.hints?.[0] || 'Provider status is loaded from local config and environment.' }}
-          </div>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2 p-3">
-          <div
-            v-for="provider in providerCards"
-            :key="provider.id"
-            class="rounded-lg border p-3 min-h-28 flex flex-col justify-between"
-            :class="providerCardClass(provider.status)"
-          >
-            <div>
-              <div class="flex items-start justify-between gap-2 mb-1">
-                <div class="font-mono text-xs font-semibold text-base-content/80 truncate" :title="provider.label">{{ provider.label }}</div>
-                <span class="badge badge-xs font-mono shrink-0" :class="providerBadgeClass(provider.status)">{{ provider.status }}</span>
-              </div>
-              <div class="text-[10px] font-mono text-base-content/35 truncate" :title="provider.model || provider.source">
-                {{ provider.model || provider.source || '—' }}
-              </div>
-            </div>
-            <div class="mt-3 space-y-1">
-              <div class="flex items-center gap-2 text-[10px] font-mono">
-                <span class="w-1.5 h-1.5 rounded-full" :class="provider.available ? 'bg-success' : provider.configured ? 'bg-warning' : 'bg-base-content/20'"></span>
-                <span class="text-base-content/40">{{ provider.selected ? 'selected' : provider.available ? 'available' : provider.configured ? 'configured' : 'not configured' }}</span>
-              </div>
-              <div class="text-[10px] font-mono text-base-content/30 line-clamp-2" :title="provider.hint">{{ provider.hint }}</div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- ── Left panel: live sessions + run list ──────────────────── -->
+      <div class="w-72 xl:w-80 flex flex-col bg-base-300/70 border-r border-base-content/12 overflow-hidden shrink-0">
 
-      <!-- ETR Cache Stats row -->
-      <div class="grid grid-cols-4 gap-2" v-if="etrCacheStats">
-        <div class="bg-base-200 rounded-lg p-3 border border-warning/30 col-span-3 flex items-center gap-4">
-          <span class="text-warning text-sm">⚡</span>
-          <div>
-            <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">ETR Step Cache</div>
-            <div class="text-xs font-mono text-base-content mt-0.5">
-              {{ etrCacheStats.entries ?? 0 }} entries
-              <span class="text-base-content/30 mx-1">·</span>
-              {{ etrCacheStats.size_bytes ? (etrCacheStats.size_bytes / 1024).toFixed(1) + ' KB' : '0 KB' }}
-            </div>
+        <!-- Live sessions header -->
+        <div class="shrink-0 px-3 py-2 border-b border-base-content/8 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Live</span>
+            <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }}</span>
           </div>
-          <div class="ml-auto flex gap-3 text-center">
-            <div>
-              <div class="text-[9px] font-mono text-base-content/30">Hits</div>
-              <div class="text-sm font-bold font-mono text-success">{{ etrCacheStats.hits ?? '—' }}</div>
-            </div>
-            <div>
-              <div class="text-[9px] font-mono text-base-content/30">Misses</div>
-              <div class="text-sm font-bold font-mono text-warning">{{ etrCacheStats.misses ?? '—' }}</div>
-            </div>
-            <div v-if="etrCacheStats.hits !== undefined && etrCacheStats.misses !== undefined && (etrCacheStats.hits + etrCacheStats.misses) > 0">
-              <div class="text-[9px] font-mono text-base-content/30">Hit Rate</div>
-              <div class="text-sm font-bold font-mono text-success">{{ ((etrCacheStats.hits / (etrCacheStats.hits + etrCacheStats.misses)) * 100).toFixed(0) }}%</div>
-            </div>
+          <div class="flex items-center gap-2.5 text-[9px] font-mono text-base-content/25">
+            <span>{{ runtime.counts.running }}r · {{ runtime.counts.blocked }}b · {{ runtime.counts.failed }}f</span>
+            <button class="text-primary/60 hover:text-primary transition-colors" @click="refreshRuntimeSessions" title="Refresh">↺</button>
           </div>
         </div>
-        <div class="bg-base-200 rounded-lg p-3 border border-base-300/50 flex flex-col justify-center items-center gap-2">
-          <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">Cache Actions</div>
-          <button class="btn btn-xs btn-warning btn-outline font-mono" @click="clearEtrCache">Clear Cache</button>
-        </div>
-      </div>
 
-      <!-- Sparkline token trend (visible only when we have enough data) -->
-      <div v-if="tokenSparkline.length >= 4" class="bg-base-200 rounded-lg px-4 py-2 border border-base-300/50 flex items-center gap-3">
-        <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest shrink-0">Token Trend</span>
-        <svg :width="160" :height="24" class="shrink-0 opacity-60">
-          <polyline
-            :points="sparklinePath(tokenSparkline, 160, 24)"
-            fill="none"
-            stroke="oklch(var(--s))"
-            stroke-width="1.5"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-          />
-        </svg>
-        <span class="text-[9px] font-mono text-base-content/30">last {{ tokenSparkline.length }} tasks · latest {{ fmtTokens(tokenSparkline[tokenSparkline.length - 1]) }} tok</span>
-      </div>
-
-      <!-- Runtime Sessions: compact control-center view -->
-      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runtime Sessions</span>
-            <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }} active</span>
-          </div>
-          <div class="flex items-center gap-3 text-[10px] font-mono text-base-content/30">
-            <span>{{ runtime.counts.running }} running</span>
-            <span>{{ runtime.counts.blocked }} blocked</span>
-            <span>{{ runtime.counts.failed }} failed</span>
-            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuntimeSessions">↺ refresh</button>
-          </div>
-        </div>
-        <div v-if="runtimeFocusSessions.length" class="grid grid-cols-1 xl:grid-cols-2 gap-2 p-3">
+        <!-- Live session cards -->
+        <div class="shrink-0 max-h-56 overflow-auto" v-if="runtimeFocusSessions.length">
           <button
             v-for="session in runtimeFocusSessions"
             :key="session.id"
-            class="text-left rounded-lg border p-3 transition-all hover:border-primary/40 hover:bg-base-300/20"
-            :class="runtimeLifecycleClass(session.lifecycle)"
+            class="w-full text-left px-3 py-2.5 border-b border-base-content/8 transition-all hover:bg-base-200/60 group border-l-[3px]"
+            :class="[
+              sessionBorderColor(session.lifecycle),
+              expandedRunId === session.id ? 'bg-primary/8' : '',
+            ]"
             @click="toggleRun(session.id)"
           >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="font-mono text-xs font-semibold text-base-content/80 truncate max-w-[18rem]" :title="session.kind">{{ session.kind }}</span>
-                  <span class="badge badge-xs font-mono" :class="runtimeBadgeClass(session.lifecycle)">{{ session.lifecycle }}</span>
-                </div>
-                <div class="font-mono text-xs text-base-content/50 truncate" :title="session.task">{{ session.task }}</div>
+            <!-- Kind + badge -->
+            <div class="flex items-center justify-between gap-2 mb-0.5">
+              <span class="font-mono text-[11px] font-semibold text-base-content/80 truncate">{{ session.kind }}</span>
+              <span class="badge badge-xs font-mono shrink-0" :class="runtimeBadgeClass(session.lifecycle)">{{ session.lifecycle }}</span>
+            </div>
+            <!-- Task -->
+            <div class="font-mono text-[10px] text-base-content/40 truncate mb-2">{{ session.task }}</div>
+            <!-- Workflow progress bar -->
+            <div v-if="session.workflow" class="mb-1.5">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-[9px] font-mono text-base-content/30 truncate max-w-[10rem]">{{ session.workflow.workflow }}</span>
+                <span class="text-[9px] font-mono text-base-content/30 shrink-0 ml-1">{{ session.workflow.completed_steps }}/{{ session.workflow.total_steps }}</span>
               </div>
-              <div class="text-right shrink-0">
-                <div class="text-[10px] font-mono text-base-content/35">{{ fmtAgeSeconds(session.age_seconds) }}</div>
-                <div class="text-[10px] font-mono text-base-content/25">{{ session.mode }}</div>
+              <div class="h-1 bg-base-content/10 rounded-full overflow-hidden">
+                <div
+                  class="h-full rounded-full transition-all duration-700"
+                  :class="workflowProgressColor(session.lifecycle)"
+                  :style="{ width: `${Math.min(100, ((session.workflow.completed_steps || 0) / (session.workflow.total_steps || 1)) * 100)}%` }"
+                ></div>
               </div>
+              <div v-if="session.workflow.pending_approval_step" class="text-[9px] font-mono text-warning/70 mt-1">⏸ gate: {{ session.workflow.pending_approval_step }}</div>
             </div>
-            <div class="mt-2 flex items-center gap-2 flex-wrap">
-              <span v-if="session.provider" class="badge badge-xs badge-ghost font-mono">{{ session.provider }}</span>
-              <span v-if="session.workflow" class="badge badge-xs badge-outline font-mono">{{ session.workflow.workflow }} {{ session.workflow.completed_steps }}/{{ session.workflow.total_steps }}</span>
-              <span v-if="session.workflow?.running_steps?.length" class="text-[10px] font-mono text-info/70">run: {{ session.workflow.running_steps.join(', ') }}</span>
-              <span v-if="session.workflow?.ready_steps?.length" class="text-[10px] font-mono text-primary/70">ready: {{ session.workflow.ready_steps.join(', ') }}</span>
-              <span v-if="session.workflow?.pending_approval_step" class="text-[10px] font-mono text-warning/80">gate: {{ session.workflow.pending_approval_step }}</span>
-            </div>
-            <div class="mt-2 flex items-center justify-between gap-3">
-              <span class="text-[10px] font-mono text-base-content/35 truncate" :title="session.action_hint">→ {{ session.action_hint }}</span>
-              <span class="text-[10px] font-mono text-base-content/25 shrink-0">{{ session.id.slice(0, 8) }}</span>
-            </div>
-            <div v-if="session.workflow?.last_error || session.output_preview" class="mt-2 text-[10px] font-mono text-base-content/35 truncate" :title="session.workflow?.last_error || session.output_preview">
-              {{ session.workflow?.last_error || session.output_preview }}
+            <!-- Footer: provider + age + action hint -->
+            <div class="flex items-center gap-1.5">
+              <span v-if="session.provider" class="text-[9px] font-mono text-base-content/25 truncate">{{ session.provider }}</span>
+              <span v-if="session.workflow?.running_steps?.length" class="text-[9px] font-mono text-info/60 truncate">→ {{ session.workflow.running_steps[0] }}</span>
+              <span class="text-[9px] font-mono text-base-content/20 ml-auto shrink-0">{{ fmtAgeSeconds(session.age_seconds) }}</span>
             </div>
           </button>
         </div>
-        <div v-else class="p-6 text-center text-base-content/30 text-sm font-mono">No runtime sessions yet</div>
-      </div>
-
-      <!-- Recent Tasks (session) -->
-      <div class="bg-base-200 rounded-xl border border-base-300 flex flex-col" style="max-height: 26vh">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center shrink-0">
-          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Recent Tasks</span>
-          <span class="text-[10px] font-mono text-base-content/30">{{ m.recent_tasks?.length || 0 }} this session</span>
+        <div v-else class="shrink-0 py-4 text-center text-[10px] font-mono text-base-content/20 border-b border-base-content/8">
+          no active sessions
         </div>
-        <div class="overflow-auto flex-1">
-          <table class="table table-sm w-full" v-if="m.recent_tasks?.length">
-            <thead class="sticky top-0 bg-base-200 z-10">
-              <tr class="text-[10px] text-base-content/35 uppercase tracking-wider">
-                <th class="w-[38%] font-medium">Task</th>
-                <th class="w-[12%] font-medium">Mode</th>
-                <th class="w-[15%] font-medium">Model</th>
-                <th class="w-[10%] font-medium">Status</th>
-                <th class="w-[9%] font-medium">Tokens</th>
-                <th class="w-[16%] font-medium">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30 transition-colors">
-                <td class="max-w-[0] truncate font-mono text-xs text-base-content/80" :title="t.task">{{ t.task }}</td>
-                <td>
-                  <span class="badge badge-xs font-mono" :class="{
-                    'badge-warning': t.agent === 'hosted-mcp',
-                    'badge-success': t.agent === 'standalone',
-                    'badge-info': t.agent === 'dry-run',
-                    'badge-ghost': !['hosted-mcp','standalone','dry-run'].includes(t.agent),
-                  }">{{ t.agent || '—' }}</span>
-                </td>
-                <td class="text-xs font-mono text-base-content/50 truncate max-w-[0]" :title="t.model">{{ t.model || '—' }}</td>
-                <td>
-                  <span class="badge badge-xs" :class="{
-                    'badge-info': t.status === 'running',
-                    'badge-success': t.status === 'completed',
-                    'badge-error': t.status === 'failed',
-                    'badge-warning': t.status === 'awaiting-approval',
-                  }">{{ t.status }}</span>
-                </td>
-                <td class="text-xs font-mono text-base-content/50">
-                  <span v-if="t.tokens > 0">{{ fmtTokens(t.tokens) }}<span v-if="t.agent === 'hosted-mcp'" class="text-base-content/25">~</span></span>
-                  <span v-else class="text-base-content/25">—</span>
-                </td>
-                <td class="text-[11px] text-base-content/40 font-mono">{{ fmtLocalTime(t.started_at) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="p-8 text-center text-base-content/30 text-sm font-mono">No tasks yet this session</div>
-        </div>
-      </div>
 
-      <!-- Persisted Runs: accordion list -->
-      <div class="bg-base-200 rounded-xl border border-base-300 overflow-hidden">
-        <div class="px-4 py-2.5 border-b border-base-300 flex justify-between items-center">
-          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Persisted Runs</span>
-          <div class="flex items-center gap-3">
-            <span class="text-[10px] font-mono text-base-content/30">{{ filteredRuns.length }}/{{ runs.length }} runs</span>
-            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="cleanupStaleApprovals">
-              cleanup stale approvals
-            </button>
-            <button class="btn btn-ghost btn-xs text-[10px] font-mono" @click="refreshRuns">↺ refresh</button>
+        <!-- Runs header + filter -->
+        <div class="shrink-0 px-3 pt-2.5 pb-2 border-b border-base-content/8 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runs</span>
+              <span class="text-[9px] font-mono text-base-content/20">{{ filteredRuns.length }}/{{ runs.length }}</span>
+            </div>
+            <div class="flex items-center gap-2 text-[9px] font-mono">
+              <button class="text-primary/60 hover:text-primary transition-colors" @click="refreshRuns" title="Refresh">↺</button>
+              <button class="text-base-content/30 hover:text-base-content/60 transition-colors" @click="cleanupStaleApprovals" title="Cleanup stale approvals">⌫</button>
+            </div>
           </div>
-        </div>
-        <!-- Filter bar -->
-        <div class="px-4 py-2 border-b border-base-300/40 flex items-center gap-2 flex-wrap">
           <input
             v-model="runFilter"
-            class="input input-xs input-bordered font-mono text-[10px] w-40"
+            class="w-full bg-base-200/80 border border-base-content/10 rounded-lg text-[10px] font-mono px-2.5 py-1.5 focus:outline-none focus:border-primary/50 transition-colors placeholder-base-content/20"
             placeholder="search runs…"
           />
-          <button
-            v-for="s in ['', 'running', 'succeeded', 'failed', 'awaiting-approval']"
-            :key="s"
-            class="btn btn-xs font-mono text-[10px]"
-            :class="runStatusFilter === s ? 'btn-primary' : 'btn-ghost'"
-            @click="runStatusFilter = s"
-          >{{ s === '' ? 'all' : s.replace('-', ' ') }}</button>
-        </div>
-        <div v-if="cleanupStatus" class="px-4 py-2 text-[10px] font-mono text-base-content/45 border-b border-base-300/40">
-          {{ cleanupStatus }}
-        </div>
-
-        <div v-if="filteredRuns.length" class="divide-y divide-base-300/40">
-          <div v-for="run in filteredRuns" :key="run.id">
-            <!-- Run row: click to expand/collapse -->
+          <div class="flex gap-1 flex-wrap">
             <button
-              class="w-full text-left px-4 py-3 hover:bg-base-300/20 transition-colors flex items-center gap-4 group"
-              :class="expandedRunId === run.id ? 'bg-base-300/30' : ''"
-              @click="toggleRun(run.id)"
-            >
-              <!-- Expand chevron -->
-              <svg
-                class="w-3.5 h-3.5 text-base-content/25 shrink-0 transition-transform duration-200"
-                :class="expandedRunId === run.id ? 'rotate-90 text-primary/50' : 'group-hover:text-base-content/40'"
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+              v-for="s in ['', 'running', 'succeeded', 'failed', 'awaiting-approval']"
+              :key="s"
+              class="px-1.5 py-0.5 text-[9px] font-mono rounded-md transition-colors border"
+              :class="runStatusFilter === s
+                ? 'bg-primary/15 border-primary/40 text-primary'
+                : 'bg-transparent border-base-content/10 text-base-content/30 hover:border-base-content/25 hover:text-base-content/50'"
+              @click="runStatusFilter = s"
+            >{{ s === '' ? 'all' : s.replace('-', ' ') }}</button>
+          </div>
+          <div v-if="cleanupStatus" class="text-[9px] font-mono text-base-content/35 leading-relaxed">{{ cleanupStatus }}</div>
+        </div>
+
+        <!-- Runs scrollable list -->
+        <div class="flex-1 overflow-auto">
+          <button
+            v-for="run in filteredRuns"
+            :key="run.id"
+            class="w-full text-left px-3 py-2.5 border-b border-base-content/6 flex items-start gap-2.5 transition-all hover:bg-base-200/50 border-l-[3px]"
+            :class="expandedRunId === run.id
+              ? 'bg-primary/8 border-l-primary'
+              : 'border-l-transparent hover:border-l-base-content/15'"
+            @click="toggleRun(run.id)"
+          >
+            <!-- Status dot -->
+            <span class="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5" :class="{
+              'bg-info animate-pulse': run.status === 'running',
+              'bg-warning animate-pulse': run.status === 'awaiting-approval',
+              'bg-success': run.status === 'succeeded',
+              'bg-error': run.status === 'failed',
+              'bg-base-content/20': !['running','awaiting-approval','succeeded','failed'].includes(run.status),
+            }"></span>
+            <!-- Content -->
+            <div class="min-w-0 flex-1">
+              <div class="font-mono text-[11px] text-base-content/65 truncate leading-tight">{{ run.kind }}</div>
+              <div class="font-mono text-[10px] text-base-content/35 truncate mt-0.5 leading-tight">{{ run.task }}</div>
+            </div>
+            <!-- Status badge -->
+            <span class="badge badge-xs shrink-0 mt-0.5" :class="{
+              'badge-info': run.status === 'running',
+              'badge-warning': run.status === 'awaiting-approval',
+              'badge-success': run.status === 'succeeded',
+              'badge-error': run.status === 'failed',
+            }">{{ run.status }}</span>
+          </button>
+          <div v-if="!filteredRuns.length" class="py-10 text-center text-[10px] font-mono text-base-content/20">
+            <template v-if="runFilter || runStatusFilter">no runs match</template>
+            <template v-else>no persisted runs yet</template>
+          </div>
+        </div>
+
+      </div>
+      <!-- /left panel -->
+
+      <!-- ── Right panel ───────────────────────────────────────────── -->
+      <div class="flex-1 overflow-auto bg-base-100/30">
+
+        <!-- ── Idle view: shown when no run is selected ──────────── -->
+        <div v-if="!expandedRunId" class="p-4 space-y-4">
+
+          <!-- Provider readiness -->
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Provider Readiness</span>
+                <span class="badge badge-xs font-mono" :class="providerReadiness.standalone_available ? 'badge-success' : 'badge-warning'">
+                  {{ providerReadiness.runtime_mode || 'hosted-mcp' }}
+                </span>
+                <span v-if="providerReadiness.selected_model" class="text-[10px] font-mono text-base-content/35 truncate hidden md:block">
+                  {{ providerReadiness.selected_model }}
+                </span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/25 truncate max-w-[40rem] hidden lg:block">
+                {{ providerReadiness.hints?.[0] || 'Provider status loaded from local config and environment.' }}
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2.5 p-3">
+              <div
+                v-for="provider in providerCards"
+                :key="provider.id"
+                class="rounded-xl border p-3 min-h-28 flex flex-col justify-between"
+                :class="providerCardClass(provider.status)"
               >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-              </svg>
-              <!-- Status dot -->
-              <span class="w-2 h-2 rounded-full shrink-0" :class="{
-                'bg-info animate-pulse': run.status === 'running',
-                'bg-warning animate-pulse': run.status === 'awaiting-approval',
-                'bg-success': run.status === 'succeeded',
-                'bg-error': run.status === 'failed',
-                'bg-base-content/20': !['running','awaiting-approval','succeeded','failed'].includes(run.status),
-              }"></span>
-              <!-- Kind -->
-              <span class="font-mono text-xs text-base-content/60 shrink-0 w-44 truncate" :title="run.kind">{{ run.kind }}</span>
-              <!-- Task -->
-              <span class="font-mono text-xs text-base-content/50 flex-1 truncate" :title="run.task">{{ run.task }}</span>
-              <!-- Mode / provider (hidden on small screens) -->
-              <span class="text-[10px] font-mono text-base-content/25 shrink-0 hidden lg:block">{{ run.mode }} · {{ run.provider || 'hosted-mcp' }}</span>
-              <!-- Status badge -->
-              <span class="badge badge-xs shrink-0" :class="{
-                'badge-info': run.status === 'running',
-                'badge-warning': run.status === 'awaiting-approval',
-                'badge-success': run.status === 'succeeded',
-                'badge-error': run.status === 'failed',
-              }">{{ run.status }}</span>
-            </button>
-
-            <!-- Accordion detail panel -->
-            <div
-              v-if="expandedRunId === run.id && selectedRun?.run"
-              class="border-t border-base-300/40 bg-base-100/50 px-6 py-5 space-y-5"
-            >
-              <!-- Metadata grid -->
-              <div class="grid grid-cols-4 gap-3">
-                <div class="bg-base-200 rounded-lg p-3">
-                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Run ID</div>
-                  <div class="font-mono text-xs text-base-content/60 truncate" :title="selectedRun.run.metadata.id">{{ selectedRun.run.metadata.id }}</div>
-                </div>
-                <div class="bg-base-200 rounded-lg p-3">
-                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Kind</div>
-                  <div class="font-mono text-xs text-base-content/60 truncate">{{ selectedRun.run.metadata.kind }}</div>
-                </div>
-                <div class="bg-base-200 rounded-lg p-3">
-                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Status</div>
-                  <span class="badge badge-sm font-mono" :class="{
-                    'badge-info': selectedRun.run.metadata.status === 'running',
-                    'badge-warning': selectedRun.run.metadata.status === 'awaiting-approval',
-                    'badge-success': selectedRun.run.metadata.status === 'succeeded',
-                    'badge-error': selectedRun.run.metadata.status === 'failed',
-                  }">{{ selectedRun.run.metadata.status }}</span>
-                </div>
-                <div class="bg-base-200 rounded-lg p-3">
-                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Started</div>
-                  <div class="font-mono text-xs text-base-content/60">{{ fmtLocalTime(selectedRun.run.metadata.started_at) }}</div>
-                </div>
-              </div>
-
-              <!-- Task -->
-              <div>
-                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
-                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed"
-                  v-html="renderMarkdown(selectedRun.run.metadata.task)"
-                /></div>
-
-              <!-- Output -->
-              <div v-if="selectedRunOutput">
-                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
-                <div class="md-step-output bg-base-200 rounded-lg p-4 text-xs leading-relaxed max-h-48 overflow-auto"
-                  v-html="renderMarkdown(selectedRunOutput)"
-                /></div>
-
-              <!-- Session notes -->
-              <div class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">
-                <div class="flex items-center justify-between gap-3 mb-3">
-                  <div>
-                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Session Notes</div>
-                    <div class="font-mono text-xs text-base-content/45 mt-1">Operator and agent messages attached to this run for handoff, review, and continuation context.</div>
-                  </div>
-                  <span class="badge badge-sm badge-ghost font-mono">{{ runtimeMessages.length }} note(s)</span>
-                </div>
-
-                <div v-if="runtimeMessages.length" class="space-y-2 max-h-48 overflow-auto pr-1 mb-3">
-                  <div
-                    v-for="message in runtimeMessages"
-                    :key="message.id"
-                    class="rounded-lg border border-base-300/50 bg-base-100 p-3"
-                  >
-                    <div class="flex items-center justify-between gap-2 mb-1">
-                      <div class="flex items-center gap-2">
-                        <span class="font-mono text-xs text-base-content/70">{{ message.from || message.author || 'operator' }}</span>
-                        <span v-if="message.to" class="font-mono text-[10px] text-base-content/35">→ {{ message.to }}</span>
-                        <span class="badge badge-xs badge-ghost font-mono">{{ message.kind || 'note' }}</span>
-                      </div>
-                      <span class="text-[10px] text-base-content/30 font-mono">{{ fmtLocalTime(message.created_at) }}</span>
-                    </div>
-                    <div class="font-mono text-xs text-base-content/55 whitespace-pre-wrap leading-relaxed">{{ message.body }}</div>
-                  </div>
-                </div>
-                <div v-else class="rounded-lg border border-dashed border-base-300 bg-base-100/40 p-3 mb-3 font-mono text-xs text-base-content/35">
-                  No notes yet. Add a compact handoff, decision, or next-action note.
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2">
-                  <select v-model="runtimeMessageKind" class="select select-bordered select-sm md:col-span-3 font-mono text-xs">
-                    <option value="note">note</option>
-                    <option value="request">request</option>
-                    <option value="handoff">handoff</option>
-                    <option value="progress">progress</option>
-                    <option value="warning">warning</option>
-                    <option value="result">result</option>
-                  </select>
-                  <input
-                    v-model="runtimeMessageTo"
-                    class="input input-bordered input-sm md:col-span-9 font-mono text-xs"
-                    placeholder="optional target agent/session e.g. Coder"
-                  />
-                </div>
-
-                <div class="flex flex-col lg:flex-row gap-2">
-                  <textarea
-                    v-model="runtimeMessageText"
-                    class="textarea textarea-bordered textarea-sm flex-1 font-mono min-h-[74px]"
-                    placeholder="Add a session note for future agents..."
-                    @keydown.meta.enter.prevent="postRuntimeMessage"
-                    @keydown.ctrl.enter.prevent="postRuntimeMessage"
-                  ></textarea>
-                  <div class="flex lg:flex-col gap-2 lg:w-36">
-                    <button
-                      class="btn btn-sm btn-primary font-mono text-xs"
-                      :class="{ 'loading': runtimeMessageBusy }"
-                      :disabled="!runtimeMessageText.trim() || runtimeMessageBusy"
-                      @click="postRuntimeMessage"
-                    >add note</button>
-                    <button class="btn btn-sm btn-ghost font-mono text-xs" @click="loadRuntimeMessages()">refresh</button>
-                  </div>
-                </div>
-                <div v-if="runtimeMessageStatus" class="font-mono text-[10px] mt-2" :class="runtimeMessageStatus.startsWith('Error') ? 'text-error' : 'text-base-content/40'">{{ runtimeMessageStatus }}</div>
-              </div>
-
-              <!-- Artifacts -->
-              <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-300/60 bg-base-200/35 p-4">
-                <div class="flex items-center justify-between gap-3 mb-3">
-                  <div>
-                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Artifacts</div>
-                    <div class="font-mono text-xs text-base-content/45 mt-1">Preview generated reports, diagrams, mocks, text, and images without leaving the dashboard.</div>
-                  </div>
-                  <span class="badge badge-sm badge-ghost font-mono">{{ selectedRunArtifacts.length }} file(s)</span>
-                </div>
-
-                <div class="grid grid-cols-12 gap-3">
-                  <div class="col-span-4 space-y-1 max-h-56 overflow-auto pr-1">
-                    <button
-                      v-for="artifact in selectedRunArtifacts"
-                      :key="artifact"
-                      class="btn btn-xs h-auto min-h-0 w-full justify-start normal-case font-mono text-left py-2 px-2"
-                      :class="selectedArtifactPath === artifact ? 'btn-primary' : 'btn-ghost'"
-                      :title="artifact"
-                      @click="previewArtifact(artifact)"
-                    >
-                      <span class="truncate">{{ artifact }}</span>
-                    </button>
-                  </div>
-
-                  <div class="col-span-8 rounded-lg border border-base-300/60 bg-base-100 min-h-56 overflow-hidden">
-                    <div v-if="artifactPreviewStatus" class="p-4 font-mono text-xs text-warning">{{ artifactPreviewStatus }}</div>
-                    <div v-else-if="!selectedArtifactPreview" class="h-full min-h-56 flex items-center justify-center text-center p-6">
-                      <div>
-                        <div class="text-2xl mb-2">▣</div>
-                        <div class="font-mono text-xs text-base-content/45">Select an artifact to preview.</div>
-                      </div>
-                    </div>
-                    <div v-else>
-                      <div class="flex items-center justify-between gap-3 border-b border-base-300/60 px-3 py-2">
-                        <div class="min-w-0">
-                          <div class="font-mono text-xs text-base-content/80 truncate" :title="selectedArtifactPreview.path">{{ selectedArtifactPreview.path }}</div>
-                          <div class="font-mono text-[10px] text-base-content/35">{{ selectedArtifactPreview.kind }} · {{ selectedArtifactPreview.mime }} · {{ fmtBytes(selectedArtifactPreview.size_bytes) }}</div>
-                        </div>
-                        <a class="btn btn-xs btn-ghost" :href="selectedArtifactRawUrl" target="_blank" rel="noreferrer">raw</a>
-                      </div>
-
-                      <div v-if="selectedArtifactPreview.truncated" class="p-4 font-mono text-xs text-warning">Artifact is larger than the inline preview limit. Open the raw artifact instead.</div>
-                      <div
-                        v-else-if="selectedArtifactPreview.kind === 'markdown'"
-                        ref="artifactPreviewRef"
-                        class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto"
-                        v-html="renderMarkdown(selectedArtifactPreview.content || '')"
-                      />
-                      <iframe
-                        v-else-if="selectedArtifactPreview.kind === 'html'"
-                        class="w-full h-96 bg-white"
-                        sandbox
-                        :srcdoc="selectedArtifactPreview.content || ''"
-                      />
-                      <img
-                        v-else-if="selectedArtifactPreview.kind === 'image'"
-                        class="max-h-96 max-w-full mx-auto p-3 object-contain"
-                        :src="selectedArtifactRawUrl"
-                        :alt="selectedArtifactPreview.path"
-                      />
-                      <div v-else-if="selectedArtifactPreview.kind === 'mermaid'" ref="artifactPreviewRef" class="p-4 max-h-96 overflow-auto">
-                        <div class="artifact-mermaid-block">{{ selectedArtifactPreview.content || '' }}</div>
-                      </div>
-                      <pre v-else-if="selectedArtifactIsRenderable" class="p-4 text-xs whitespace-pre-wrap max-h-96 overflow-auto"><code>{{ selectedArtifactPreview.content || '' }}</code></pre>
-                      <div v-else class="p-4 font-mono text-xs text-base-content/50">Binary artifact. Open the raw artifact to inspect it.</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Retrieval Telemetry -->
-              <div v-if="selectedRetrievalTelemetry">
-                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Retrieval Telemetry</div>
-                <div class="grid grid-cols-4 gap-3">
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Indexed Docs</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.indexed_docs || 0 }}</div>
-                  </div>
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Hit Rate</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ fmtPct(selectedRetrievalTelemetry.retrieval_hit_rate || 0) }}</div>
-                  </div>
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Queries/Hits</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.retrieval_queries || 0 }} / {{ selectedRetrievalTelemetry.retrieval_hits || 0 }}</div>
-                  </div>
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Context Chars</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
-                  </div>
-                </div>
-                <div class="grid grid-cols-3 gap-3 mt-3">
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>
-                  </div>
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Fallback Hits</div>
-                    <div class="font-mono text-xs text-base-content/75">{{ selectedRetrievalTelemetry.fallback_hits || 0 }}</div>
-                  </div>
-                  <div class="bg-base-200 rounded-lg p-3">
-                    <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Mock Embedding</div>
-                    <div class="font-mono text-xs" :class="selectedRetrievalTelemetry.mock_embedding ? 'text-warning' : 'text-success'">
-                      {{ selectedRetrievalTelemetry.mock_embedding ? 'yes' : 'no' }}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Token Summary -->
-              <div v-if="selectedRunTokenSummary" class="rounded-lg border border-base-300/60 bg-base-200 p-3">
-                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Token Summary</div>
-                <div class="font-mono text-xs text-base-content/70">
-                  {{ selectedRunTokenSummary.tokens || 0 }} tokens · {{ selectedRunTokenSummary.requests || 0 }} request(s)
-                </div>
-              </div>
-
-              <!-- Persona Policy Warning -->
-              <div v-if="selectedPersonaPolicyWarning" class="rounded-lg border border-warning/40 bg-warning/10 p-4">
-                <div class="text-xs font-bold uppercase tracking-wider text-warning mb-2">Persona Tool Policy</div>
-                <div class="font-mono text-xs text-base-content/70 whitespace-pre-wrap">
-                  {{ selectedPersonaPolicyWarning.message || 'Tool policy warning recorded.' }}
-                </div>
-                <div class="font-mono text-[11px] text-base-content/50 mt-2">
-                  persona={{ selectedPersonaPolicyWarning.active_persona || 'unknown' }} · tool={{ selectedPersonaPolicyWarning.requested_tool || 'unknown' }} · strict={{ selectedPersonaPolicyWarning.strict_mode ? 'on' : 'off' }}
-                </div>
-              </div>
-
-              <!-- Workflow State -->
-              <template v-if="selectedWorkflowState">
                 <div>
-                  <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-3">Workflow State</div>
-                  <div class="grid grid-cols-4 gap-3 mb-4">
-                    <div class="bg-base-200 rounded-lg p-3">
-                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Workflow</div>
-                      <div class="font-mono text-xs text-base-content/75">{{ selectedWorkflowState.workflow }}</div>
-                    </div>
-                    <div class="bg-base-200 rounded-lg p-3">
-                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1.5">Progress · {{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}</div>
-                      <progress class="progress progress-primary w-full h-1.5" :value="selectedWorkflowState.steps_completed" :max="selectedWorkflowState.steps_total || 1"></progress>
-                    </div>
-                    <div class="bg-base-200 rounded-lg p-3">
-                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Budget Used</div>
-                      <div class="font-mono text-xs text-base-content/75">{{ fmtTokens(selectedWorkflowState.budget_used?.tokens || 0) }} tokens</div>
-                    </div>
-                    <div class="bg-base-200 rounded-lg p-3">
-                      <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Artifacts</div>
-                      <div class="font-mono text-xs text-base-content/75">{{ selectedRun.run.artifacts?.length || 0 }} file(s)</div>
-                      <div class="text-[9px] font-mono text-base-content/30 mt-0.5 truncate" :title="selectedRun.run.artifacts?.join(', ')">{{ selectedRun.run.artifacts?.join(', ') || '—' }}</div>
-                    </div>
+                  <div class="flex items-start justify-between gap-2 mb-1.5">
+                    <div class="font-mono text-xs font-semibold text-base-content/80 truncate" :title="provider.label">{{ provider.label }}</div>
+                    <span class="badge badge-xs font-mono shrink-0" :class="providerBadgeClass(provider.status)">{{ provider.status }}</span>
                   </div>
-
-                  <!-- Eval Gate -->
-                  <div
-                    v-if="selectedEvalGateDecision"
-                    class="rounded-lg p-4 mb-4 border"
-                    :class="{
-                      'border-success/40 bg-success/10': selectedEvalGateDecision.decision === 'pass',
-                      'border-warning/40 bg-warning/10': selectedEvalGateDecision.decision === 'warn',
-                      'border-error/40 bg-error/10': selectedEvalGateDecision.decision === 'block',
-                    }"
-                  >
-                    <div class="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <div class="text-xs font-bold uppercase tracking-wider" :class="{
-                          'text-success': selectedEvalGateDecision.decision === 'pass',
-                          'text-warning': selectedEvalGateDecision.decision === 'warn',
-                          'text-error': selectedEvalGateDecision.decision === 'block',
-                        }">Eval Gate</div>
-                        <div class="font-mono text-xs mt-1 text-base-content/55">{{ selectedEvalGateDecision.workflow }} · {{ selectedEvalGateDecision.mode }}</div>
-                      </div>
-                      <span class="badge badge-sm" :class="{
-                        'badge-success': selectedEvalGateDecision.decision === 'pass',
-                        'badge-warning': selectedEvalGateDecision.decision === 'warn',
-                        'badge-error': selectedEvalGateDecision.decision === 'block',
-                      }">{{ selectedEvalGateDecision.decision }}</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 mb-3">
-                      <div class="bg-base-300/30 rounded p-2">
-                        <div class="text-[9px] text-base-content/35 uppercase">Baseline</div>
-                        <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_sample_size }}/{{ selectedEvalGateDecision.min_baseline_runs }}</div>
-                      </div>
-                      <div class="bg-base-300/30 rounded p-2">
-                        <div class="text-[9px] text-base-content/35 uppercase">Window</div>
-                        <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_window }} runs</div>
-                      </div>
-                      <div class="bg-base-300/30 rounded p-2">
-                        <div class="text-[9px] text-base-content/35 uppercase">Reasons</div>
-                        <div class="font-mono text-xs mt-1 truncate" :title="fmtReasonCodes(selectedEvalGateDecision.reason_codes)">{{ fmtReasonCodes(selectedEvalGateDecision.reason_codes) }}</div>
-                      </div>
-                    </div>
-                    <div class="font-mono text-xs whitespace-pre-wrap text-base-content/65">{{ selectedEvalGateDecision.message }}</div>
-                  </div>
-
-                  <!-- Routing Recommendations -->
-                  <div v-if="selectedRoutingRecommendations.length" class="rounded-lg border border-info/30 bg-info/10 p-4 mb-4">
-                    <div class="flex items-center justify-between mb-3">
-                      <div>
-                        <div class="text-xs font-bold uppercase tracking-wider text-info">Adaptive Shadow</div>
-                        <div class="font-mono text-xs mt-0.5 text-base-content/50">Advisory only — execution not changed.</div>
-                      </div>
-                      <span class="badge badge-sm badge-info">shadow-only</span>
-                    </div>
-                    <div class="space-y-3">
-                      <div v-for="rec in selectedRoutingRecommendations" :key="rec.step_id" class="bg-base-300/25 rounded-lg p-3">
-                        <div class="flex items-center justify-between gap-2 mb-2">
-                          <div>
-                            <div class="text-[9px] text-base-content/35 uppercase">Router Step</div>
-                            <div class="font-mono text-xs mt-0.5">{{ rec.step_id }}</div>
-                          </div>
-                          <span class="badge badge-xs" :class="rec.fallback_used ? 'badge-warning' : 'badge-success'">{{ rec.fallback_used ? 'fallback' : 'recommended' }}</span>
-                        </div>
-                        <div class="grid grid-cols-3 gap-2 mb-2">
-                          <div class="bg-base-200/50 rounded p-2">
-                            <div class="text-[9px] text-base-content/30">Current</div>
-                            <div class="font-mono text-xs mt-0.5">{{ rec.current_route }}</div>
-                          </div>
-                          <div class="bg-base-200/50 rounded p-2">
-                            <div class="text-[9px] text-base-content/30">Recommended</div>
-                            <div class="font-mono text-xs mt-0.5">{{ rec.recommended_route }}</div>
-                          </div>
-                          <div class="bg-base-200/50 rounded p-2">
-                            <div class="text-[9px] text-base-content/30">Confidence</div>
-                            <div class="font-mono text-xs mt-0.5">{{ fmtConfidence(rec.confidence) }} · {{ rec.sample_size }}s</div>
-                          </div>
-                        </div>
-                        <div class="font-mono text-xs whitespace-pre-wrap text-base-content/55">{{ rec.reason }}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Approval Pending -->
-                  <div v-if="pendingApproval" class="rounded-lg border border-warning/40 bg-warning/10 p-4 mb-4">
-                    <div class="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <div class="text-xs font-bold uppercase tracking-wider text-warning">Approval Pending</div>
-                        <div class="font-mono text-xs mt-0.5 text-base-content/55">{{ pendingApproval.step_id }} · {{ pendingApproval.agent }}</div>
-                      </div>
-                      <span class="badge badge-sm badge-warning">awaiting</span>
-                    </div>
-                    <div class="font-mono text-xs whitespace-pre-wrap text-base-content/65 bg-base-300/30 rounded-lg p-3 mb-3">{{ pendingApproval.content_preview }}</div>
-                    <template v-if="dashboardOwnsSelectedWorkflow">
-                      <textarea
-                        v-model="approvalEditContent"
-                        class="textarea textarea-bordered textarea-sm w-full font-mono text-xs mb-3"
-                        rows="5"
-                        placeholder="Edited approval content"
-                      />
-                      <div class="flex items-center gap-2 flex-wrap">
-                        <button class="btn btn-sm btn-success" @click="recordApproval('approve')">Approve</button>
-                        <button class="btn btn-sm btn-warning" @click="recordApproval('edit')">Approve Edit</button>
-                        <button class="btn btn-sm btn-error" @click="recordApproval('deny')">Deny</button>
-                        <span v-if="approvalStatus" class="text-xs text-base-content/55 flex-1">{{ approvalStatus }}</span>
-                      </div>
-                    </template>
-                    <div v-else class="text-xs text-base-content/55">{{ externalWorkflowControlNotice }}</div>
-                  </div>
-
-                  <!-- External Control Notice -->
-                  <div v-else-if="externalWorkflowControlNotice" class="rounded-lg border border-info/40 bg-info/10 p-4 mb-4">
-                    <div class="text-xs font-bold uppercase tracking-wider text-info mb-1.5">External Control</div>
-                    <div class="text-xs text-base-content/55">{{ externalWorkflowControlNotice }}</div>
-                  </div>
-
-                  <!-- Resume Ready -->
-                  <div v-else-if="canResumeSelectedRun" class="rounded-lg border border-info/40 bg-info/10 p-4 mb-4">
-                    <div class="flex items-start justify-between gap-3">
-                      <div class="min-w-0">
-                        <div class="text-xs font-bold uppercase tracking-wider text-info mb-1">Resume Ready</div>
-                        <div v-if="m.runtime_mode === 'hosted-mcp'" class="text-xs text-base-content/55">
-                          Approval recorded. Ask your AI assistant to call <code class="font-mono bg-base-200 px-1 py-0.5 rounded text-[10px]">agent007_workflow_next</code>.
-                        </div>
-                        <div v-else class="text-xs text-base-content/55">Approval recorded. Resume to continue execution.</div>
-                      </div>
-                      <button v-if="m.runtime_mode !== 'hosted-mcp'" class="btn btn-sm btn-info shrink-0" @click="resumeSelectedRun">Resume</button>
-                    </div>
-                    <div v-if="resumeStatus" class="text-xs text-base-content/55 mt-2">{{ resumeStatus }}</div>
-                  </div>
-
-                  <!-- Workflow Steps -->
-                  <div>
-                    <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Steps</div>
-                    <div class="space-y-2">
-                      <div
-                        v-for="step in selectedWorkflowState.steps || []"
-                        :key="step.id"
-                        class="rounded-lg border p-3 transition-colors"
-                        :class="{
-                          'border-base-300/60': step.status === 'pending',
-                          'border-error/60 bg-error/8': step.status === 'running' && isStaleStep(step),
-                          'border-info/40 bg-info/5': step.status === 'running' && !isStaleStep(step),
-                          'border-success/40 bg-success/5': step.status === 'completed',
-                          'border-error/40 bg-error/5': step.status === 'failed',
-                          'border-warning/40 bg-warning/5': step.status === 'awaiting-approval' || step.status === 'skipped',
-                        }"
-                      >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="font-mono text-xs font-medium text-base-content/80">{{ step.id }}</span>
-                          <div class="flex items-center gap-1.5">
-                            <span v-if="step.status === 'running' && isStaleStep(step)" class="badge badge-xs badge-error">stale</span>
-                            <span v-if="isSlowStep(step)" class="badge badge-xs badge-warning">slow</span>
-                            <span v-if="stepDuration(step)" class="text-[10px] font-mono text-base-content/40">⏱ {{ stepDuration(step) }}</span>
-                            <span class="badge badge-xs" :class="{
-                              'badge-ghost': step.status === 'pending',
-                              'badge-info': step.status === 'running' && !isStaleStep(step),
-                              'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
-                              'badge-success': step.status === 'completed',
-                              'badge-error': step.status === 'failed' || (step.status === 'running' && isStaleStep(step)),
-                            }">{{ step.status }}</span>
-                          </div>
-                        </div>
-                        <div class="text-[10px] text-base-content/35 mt-1">{{ step.agent }} · {{ step.attempts }} attempt(s)</div>
-                        <!-- Liveness row for running steps -->
-                        <div v-if="step.status === 'running'" class="mt-2 flex items-center gap-2 flex-wrap">
-                          <template v-if="step.last_heartbeat_hint">
-                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono"
-                              :class="isStaleStep(step) ? 'bg-error/15 text-error/80' : 'bg-info/15 text-info/80'">
-                              <span class="w-1.5 h-1.5 rounded-full animate-pulse"
-                                :class="isStaleStep(step) ? 'bg-error' : 'bg-info'"></span>
-                              {{ step.last_heartbeat_hint }}
-                            </span>
-                            <span class="text-[10px] font-mono text-base-content/30">{{ heartbeatAge(step) }}</span>
-                          </template>
-                          <template v-else>
-                            <span class="text-[10px] font-mono text-base-content/30 italic">no heartbeat yet</span>
-                          </template>
-                        </div>
-                        <!-- Step output (expandable — rendered as markdown when expanded) -->
-                        <div v-if="step.output_preview" class="mt-2">
-                          <!-- Collapsed: markdown preview (truncated) -->
-                          <div v-if="!expandedSteps.has(step.id)"
-                            class="md-step-output text-xs bg-base-300/20 rounded p-2 max-h-20 overflow-hidden"
-                            v-html="renderMarkdown(step.output_preview)"
-                          />
-                          <!-- Expanded raw view -->
-                          <div v-else-if="rawStepView.has(step.id)"
-                            class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto leading-relaxed"
-                          >{{ stepFullOutput(step) }}</div>
-                          <!-- Expanded markdown-rendered view -->
-                          <div v-else
-                            class="md-step-output text-xs bg-base-300/20 rounded p-3 max-h-[500px] overflow-auto"
-                            v-html="renderMarkdown(stepFullOutput(step))"
-                          />
-                          <div class="flex items-center gap-3 mt-1">
-                            <button
-                              class="text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
-                              @click="toggleStepExpand(step.id)"
-                            >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
-                            <button v-if="expandedSteps.has(step.id)"
-                              class="text-[10px] font-mono text-base-content/30 hover:text-base-content/60 transition-colors"
-                              @click="toggleRawStep(step.id)"
-                            >{{ rawStepView.has(step.id) ? '◈ rendered' : '⌂ raw' }}</button>
-                          </div>
-                        </div>
-                        <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
-                      </div>
-                    </div>
+                  <div class="text-[10px] font-mono text-base-content/35 truncate" :title="provider.model || provider.source">
+                    {{ provider.model || provider.source || '—' }}
                   </div>
                 </div>
-              </template>
+                <div class="mt-3 space-y-1">
+                  <div class="flex items-center gap-2 text-[10px] font-mono">
+                    <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="provider.available ? 'bg-success' : provider.configured ? 'bg-warning' : 'bg-base-content/20'"></span>
+                    <span class="text-base-content/40">{{ provider.selected ? 'selected' : provider.available ? 'available' : provider.configured ? 'configured' : 'not configured' }}</span>
+                  </div>
+                  <div class="text-[10px] font-mono text-base-content/30 line-clamp-2" :title="provider.hint">{{ provider.hint }}</div>
+                </div>
+              </div>
+              <div v-if="!providerCards.length" class="col-span-full py-6 text-center text-[10px] font-mono text-base-content/20">
+                no providers configured
+              </div>
+            </div>
+          </div>
 
-              <!-- Recent Trace -->
-              <div v-if="selectedRun.run.entries?.length">
-                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Recent Trace</div>
+          <!-- ETR cache stats + sparkline row -->
+          <div class="grid gap-3" :class="etrCacheStats ? 'grid-cols-3' : 'grid-cols-1'">
+
+            <!-- ETR cache stats -->
+            <div v-if="etrCacheStats" class="col-span-2 rounded-xl border border-warning/25 bg-base-200/50 p-4 flex items-center gap-5">
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-warning text-base">⚡</span>
+                <div>
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest">ETR Step Cache</div>
+                  <div class="text-xs font-mono text-base-content/70 mt-0.5">
+                    {{ etrCacheStats.entries ?? 0 }} entries · {{ etrCacheStats.size_bytes ? (etrCacheStats.size_bytes / 1024).toFixed(1) + ' KB' : '0 KB' }}
+                  </div>
+                </div>
+              </div>
+              <div class="flex gap-5 ml-auto">
+                <div class="text-center">
+                  <div class="text-[9px] font-mono text-base-content/30">Hits</div>
+                  <div class="text-base font-bold font-mono text-success tabular-nums">{{ etrCacheStats.hits ?? '—' }}</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-[9px] font-mono text-base-content/30">Misses</div>
+                  <div class="text-base font-bold font-mono text-warning tabular-nums">{{ etrCacheStats.misses ?? '—' }}</div>
+                </div>
+                <div v-if="etrCacheStats.hits !== undefined && etrCacheStats.misses !== undefined && (etrCacheStats.hits + etrCacheStats.misses) > 0" class="text-center">
+                  <div class="text-[9px] font-mono text-base-content/30">Hit Rate</div>
+                  <div class="text-base font-bold font-mono text-success tabular-nums">{{ ((etrCacheStats.hits / (etrCacheStats.hits + etrCacheStats.misses)) * 100).toFixed(0) }}%</div>
+                </div>
+              </div>
+              <button class="btn btn-xs btn-warning btn-outline font-mono ml-4" @click="clearEtrCache">clear</button>
+            </div>
+
+            <!-- Token sparkline + KPI mini cards -->
+            <div class="rounded-xl border border-base-content/10 bg-base-200/50 p-4 flex flex-col justify-between gap-3" :class="etrCacheStats ? '' : 'col-span-1'">
+              <div v-if="tokenSparkline.length >= 4" class="flex items-center gap-3">
+                <span class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest shrink-0">Tokens</span>
+                <svg :width="120" :height="22" class="opacity-50 shrink-0">
+                  <polyline
+                    :points="sparklinePath(tokenSparkline, 120, 22)"
+                    fill="none"
+                    stroke="oklch(var(--p))"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <span class="text-[9px] font-mono text-base-content/25">{{ fmtTokens(tokenSparkline[tokenSparkline.length - 1]) }} last</span>
+              </div>
+              <div class="grid grid-cols-3 gap-2">
+                <div>
+                  <div class="text-[9px] font-mono text-base-content/25 uppercase tracking-widest">Success</div>
+                  <div class="text-sm font-bold font-mono text-success tabular-nums">{{ ((m.success_rate || 0) * 100).toFixed(0) }}%</div>
+                </div>
+                <div>
+                  <div class="text-[9px] font-mono text-base-content/25 uppercase tracking-widest">Cost/run</div>
+                  <div class="text-sm font-bold font-mono text-warning tabular-nums">${{ (m.avg_cost_usd || 0).toFixed(3) }}</div>
+                </div>
+                <div>
+                  <div class="text-[9px] font-mono text-base-content/25 uppercase tracking-widest">Reward</div>
+                  <div class="text-sm font-bold font-mono text-accent tabular-nums">{{ (m.avg_reward || 0).toFixed(2) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Runtime sessions full view -->
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Runtime Sessions</span>
+                <span class="badge badge-xs badge-ghost font-mono">{{ runtime.counts.active }} active</span>
+              </div>
+              <div class="flex items-center gap-3 text-[10px] font-mono text-base-content/25">
+                <span>{{ runtime.counts.running }} running · {{ runtime.counts.blocked }} blocked · {{ runtime.counts.failed }} failed</span>
+                <button class="text-primary/60 hover:text-primary transition-colors" @click="refreshRuntimeSessions">↺ refresh</button>
+              </div>
+            </div>
+            <div v-if="runtimeFocusSessions.length" class="grid grid-cols-1 xl:grid-cols-2 gap-2 p-3">
+              <button
+                v-for="session in runtimeFocusSessions"
+                :key="session.id"
+                class="text-left rounded-xl border p-3 transition-all hover:border-primary/40 hover:bg-base-300/20"
+                :class="runtimeLifecycleClass(session.lifecycle)"
+                @click="toggleRun(session.id)"
+              >
+                <div class="flex items-start justify-between gap-3 mb-2">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2 mb-0.5">
+                      <span class="font-mono text-xs font-semibold text-base-content/80 truncate max-w-[16rem]">{{ session.kind }}</span>
+                      <span class="badge badge-xs font-mono" :class="runtimeBadgeClass(session.lifecycle)">{{ session.lifecycle }}</span>
+                    </div>
+                    <div class="font-mono text-xs text-base-content/45 truncate">{{ session.task }}</div>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <div class="text-[10px] font-mono text-base-content/35">{{ fmtAgeSeconds(session.age_seconds) }}</div>
+                    <div class="text-[10px] font-mono text-base-content/20">{{ session.mode }}</div>
+                  </div>
+                </div>
+                <!-- Progress bar for workflow sessions -->
+                <div v-if="session.workflow" class="mb-2">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="text-[9px] font-mono text-base-content/30">{{ session.workflow.workflow }}</span>
+                    <span class="text-[9px] font-mono text-base-content/30">{{ session.workflow.completed_steps }}/{{ session.workflow.total_steps }} steps</span>
+                  </div>
+                  <div class="h-1 bg-base-content/10 rounded-full overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all duration-700"
+                      :class="workflowProgressColor(session.lifecycle)"
+                      :style="{ width: `${Math.min(100, ((session.workflow.completed_steps || 0) / (session.workflow.total_steps || 1)) * 100)}%` }"
+                    ></div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span v-if="session.provider" class="badge badge-xs badge-ghost font-mono">{{ session.provider }}</span>
+                  <span v-if="session.workflow?.running_steps?.length" class="text-[10px] font-mono text-info/70">→ {{ session.workflow.running_steps.join(', ') }}</span>
+                  <span v-if="session.workflow?.ready_steps?.length" class="text-[10px] font-mono text-primary/70">ready: {{ session.workflow.ready_steps.join(', ') }}</span>
+                  <span v-if="session.workflow?.pending_approval_step" class="text-[10px] font-mono text-warning/80">⏸ {{ session.workflow.pending_approval_step }}</span>
+                </div>
+                <div class="mt-2 flex items-center justify-between gap-3">
+                  <span class="text-[10px] font-mono text-base-content/30 truncate">{{ session.action_hint }}</span>
+                  <span class="text-[10px] font-mono text-base-content/20 shrink-0">{{ session.id.slice(0, 8) }}</span>
+                </div>
+                <div v-if="session.workflow?.last_error || session.output_preview" class="mt-1 text-[10px] font-mono text-base-content/30 truncate">
+                  {{ session.workflow?.last_error || session.output_preview }}
+                </div>
+              </button>
+            </div>
+            <div v-else class="p-8 text-center text-base-content/20 text-sm font-mono">no runtime sessions yet</div>
+          </div>
+
+          <!-- Recent Tasks table -->
+          <div class="rounded-xl border border-base-content/12 bg-base-200/50 flex flex-col" style="max-height: 28vh">
+            <div class="px-4 py-2.5 border-b border-base-content/10 flex items-center justify-between shrink-0">
+              <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Recent Tasks</span>
+              <span class="text-[10px] font-mono text-base-content/25">{{ m.recent_tasks?.length || 0 }} this session</span>
+            </div>
+            <div class="overflow-auto flex-1">
+              <table class="table table-sm w-full" v-if="m.recent_tasks?.length">
+                <thead class="sticky top-0 bg-base-200 z-10">
+                  <tr class="text-[10px] text-base-content/35 uppercase tracking-wider">
+                    <th class="w-[38%] font-medium">Task</th>
+                    <th class="w-[12%] font-medium">Mode</th>
+                    <th class="w-[14%] font-medium">Model</th>
+                    <th class="w-[10%] font-medium">Status</th>
+                    <th class="w-[9%] font-medium">Tokens</th>
+                    <th class="w-[17%] font-medium">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(t, i) in [...(m.recent_tasks || [])].reverse()" :key="i" class="hover:bg-base-300/30 transition-colors">
+                    <td class="max-w-[0] truncate font-mono text-xs text-base-content/75" :title="t.task">{{ t.task }}</td>
+                    <td>
+                      <span class="badge badge-xs font-mono" :class="{
+                        'badge-warning': t.agent === 'hosted-mcp',
+                        'badge-success': t.agent === 'standalone',
+                        'badge-info': t.agent === 'dry-run',
+                        'badge-ghost': !['hosted-mcp','standalone','dry-run'].includes(t.agent),
+                      }">{{ t.agent || '—' }}</span>
+                    </td>
+                    <td class="text-xs font-mono text-base-content/45 truncate max-w-[0]" :title="t.model">{{ t.model || '—' }}</td>
+                    <td>
+                      <span class="badge badge-xs" :class="{
+                        'badge-info': t.status === 'running',
+                        'badge-success': t.status === 'completed' || t.status === 'succeeded',
+                        'badge-error': t.status === 'failed',
+                        'badge-warning': t.status === 'awaiting-approval',
+                      }">{{ t.status }}</span>
+                    </td>
+                    <td class="text-xs font-mono text-base-content/45">
+                      <span v-if="t.tokens > 0">{{ fmtTokens(t.tokens) }}<span v-if="t.agent === 'hosted-mcp'" class="text-base-content/25">~</span></span>
+                      <span v-else class="text-base-content/20">—</span>
+                    </td>
+                    <td class="text-[10px] text-base-content/35 font-mono">{{ fmtLocalTime(t.started_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="py-10 text-center text-base-content/20 text-sm font-mono">no tasks yet this session</div>
+            </div>
+          </div>
+
+        </div>
+        <!-- /idle view -->
+
+        <!-- ── Run detail view ──────────────────────────────────────── -->
+        <div v-else-if="selectedRun?.run" class="p-4 space-y-4">
+
+          <!-- Detail header / back -->
+          <div class="flex items-center gap-3">
+            <button
+              class="btn btn-ghost btn-xs font-mono text-[10px] gap-1 text-base-content/40 hover:text-base-content/70 px-2"
+              @click="toggleRun(expandedRunId)"
+            >← back</button>
+            <div class="flex-1 min-w-0 flex items-center gap-2">
+              <span class="font-mono text-xs text-base-content/55 truncate">{{ selectedRun.run.metadata.kind }}</span>
+              <span class="badge badge-sm font-mono" :class="{
+                'badge-info': selectedRun.run.metadata.status === 'running',
+                'badge-warning': selectedRun.run.metadata.status === 'awaiting-approval',
+                'badge-success': selectedRun.run.metadata.status === 'succeeded',
+                'badge-error': selectedRun.run.metadata.status === 'failed',
+              }">{{ selectedRun.run.metadata.status }}</span>
+            </div>
+            <span class="text-[10px] font-mono text-base-content/25 shrink-0">{{ fmtLocalTime(selectedRun.run.metadata.started_at) }}</span>
+          </div>
+
+          <!-- Metadata grid -->
+          <div class="grid grid-cols-4 gap-2.5">
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+              <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Run ID</div>
+              <div class="font-mono text-xs text-base-content/60 truncate" :title="selectedRun.run.metadata.id">{{ selectedRun.run.metadata.id }}</div>
+            </div>
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+              <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Kind</div>
+              <div class="font-mono text-xs text-base-content/60 truncate">{{ selectedRun.run.metadata.kind }}</div>
+            </div>
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+              <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Status</div>
+              <span class="badge badge-sm font-mono" :class="{
+                'badge-info': selectedRun.run.metadata.status === 'running',
+                'badge-warning': selectedRun.run.metadata.status === 'awaiting-approval',
+                'badge-success': selectedRun.run.metadata.status === 'succeeded',
+                'badge-error': selectedRun.run.metadata.status === 'failed',
+              }">{{ selectedRun.run.metadata.status }}</span>
+            </div>
+            <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+              <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Started</div>
+              <div class="font-mono text-xs text-base-content/60">{{ fmtLocalTime(selectedRun.run.metadata.started_at) }}</div>
+            </div>
+          </div>
+
+          <!-- Task -->
+          <div>
+            <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Task</div>
+            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed border border-base-content/6"
+              v-html="renderMarkdown(selectedRun.run.metadata.task)"
+            />
+          </div>
+
+          <!-- Output -->
+          <div v-if="selectedRunOutput">
+            <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Output</div>
+            <div class="md-step-output bg-base-200/60 rounded-xl p-4 text-xs leading-relaxed max-h-64 overflow-auto border border-base-content/6"
+              v-html="renderMarkdown(selectedRunOutput)"
+            />
+          </div>
+
+          <!-- Session notes -->
+          <div class="rounded-xl border border-base-content/10 bg-base-200/40 p-4">
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Session Notes</div>
+                <div class="font-mono text-xs text-base-content/40 mt-1">Operator and agent messages for handoff, review, and continuation context.</div>
+              </div>
+              <span class="badge badge-sm badge-ghost font-mono">{{ runtimeMessages.length }} note(s)</span>
+            </div>
+
+            <div v-if="runtimeMessages.length" class="space-y-2 max-h-48 overflow-auto pr-1 mb-3">
+              <div
+                v-for="message in runtimeMessages"
+                :key="message.id"
+                class="rounded-xl border border-base-content/8 bg-base-100/60 p-3"
+              >
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-xs text-base-content/70">{{ message.from || message.author || 'operator' }}</span>
+                    <span v-if="message.to" class="font-mono text-[10px] text-base-content/30">→ {{ message.to }}</span>
+                    <span class="badge badge-xs badge-ghost font-mono">{{ message.kind || 'note' }}</span>
+                  </div>
+                  <span class="text-[10px] text-base-content/25 font-mono">{{ fmtLocalTime(message.created_at) }}</span>
+                </div>
+                <div class="font-mono text-xs text-base-content/55 whitespace-pre-wrap leading-relaxed">{{ message.body }}</div>
+              </div>
+            </div>
+            <div v-else class="rounded-xl border border-dashed border-base-content/10 bg-base-100/30 p-3 mb-3 font-mono text-xs text-base-content/30">
+              No notes yet. Add a handoff, decision, or next-action note.
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2">
+              <select v-model="runtimeMessageKind" class="select select-bordered select-sm md:col-span-3 font-mono text-xs">
+                <option value="note">note</option>
+                <option value="request">request</option>
+                <option value="handoff">handoff</option>
+                <option value="progress">progress</option>
+                <option value="warning">warning</option>
+                <option value="result">result</option>
+              </select>
+              <input
+                v-model="runtimeMessageTo"
+                class="input input-bordered input-sm md:col-span-9 font-mono text-xs"
+                placeholder="optional target agent/session e.g. Coder"
+              />
+            </div>
+            <div class="flex flex-col lg:flex-row gap-2">
+              <textarea
+                v-model="runtimeMessageText"
+                class="textarea textarea-bordered textarea-sm flex-1 font-mono min-h-[74px]"
+                placeholder="Add a session note for future agents..."
+                @keydown.meta.enter.prevent="postRuntimeMessage"
+                @keydown.ctrl.enter.prevent="postRuntimeMessage"
+              ></textarea>
+              <div class="flex lg:flex-col gap-2 lg:w-36">
+                <button
+                  class="btn btn-sm btn-primary font-mono text-xs"
+                  :class="{ 'loading': runtimeMessageBusy }"
+                  :disabled="!runtimeMessageText.trim() || runtimeMessageBusy"
+                  @click="postRuntimeMessage"
+                >add note</button>
+                <button class="btn btn-sm btn-ghost font-mono text-xs" @click="loadRuntimeMessages()">refresh</button>
+              </div>
+            </div>
+            <div v-if="runtimeMessageStatus" class="font-mono text-[10px] mt-2" :class="runtimeMessageStatus.startsWith('Error') ? 'text-error' : 'text-base-content/40'">{{ runtimeMessageStatus }}</div>
+          </div>
+
+          <!-- Artifacts -->
+          <div v-if="selectedRunArtifacts.length" class="rounded-xl border border-base-content/10 bg-base-200/40 p-4">
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35">Artifacts</div>
+                <div class="font-mono text-xs text-base-content/40 mt-1">Preview reports, diagrams, mocks, and images without leaving the dashboard.</div>
+              </div>
+              <span class="badge badge-sm badge-ghost font-mono">{{ selectedRunArtifacts.length }} file(s)</span>
+            </div>
+
+            <div class="grid grid-cols-12 gap-3">
+              <div class="col-span-4 space-y-1 max-h-56 overflow-auto pr-1">
+                <button
+                  v-for="artifact in selectedRunArtifacts"
+                  :key="artifact"
+                  class="btn btn-xs h-auto min-h-0 w-full justify-start normal-case font-mono text-left py-2 px-2"
+                  :class="selectedArtifactPath === artifact ? 'btn-primary' : 'btn-ghost'"
+                  :title="artifact"
+                  @click="previewArtifact(artifact)"
+                >
+                  <span class="truncate">{{ artifact }}</span>
+                </button>
+              </div>
+
+              <div class="col-span-8 rounded-xl border border-base-content/8 bg-base-100/50 min-h-56 overflow-hidden">
+                <div v-if="artifactPreviewStatus" class="p-4 font-mono text-xs text-warning">{{ artifactPreviewStatus }}</div>
+                <div v-else-if="!selectedArtifactPreview" class="h-full min-h-56 flex items-center justify-center text-center p-6">
+                  <div>
+                    <div class="text-2xl mb-2 opacity-20">▣</div>
+                    <div class="font-mono text-xs text-base-content/30">Select an artifact to preview.</div>
+                  </div>
+                </div>
+                <div v-else>
+                  <div class="flex items-center justify-between gap-3 border-b border-base-content/8 px-3 py-2">
+                    <div class="min-w-0">
+                      <div class="font-mono text-xs text-base-content/75 truncate" :title="selectedArtifactPreview.path">{{ selectedArtifactPreview.path }}</div>
+                      <div class="font-mono text-[10px] text-base-content/30">{{ selectedArtifactPreview.kind }} · {{ selectedArtifactPreview.mime }} · {{ fmtBytes(selectedArtifactPreview.size_bytes) }}</div>
+                    </div>
+                    <a class="btn btn-xs btn-ghost" :href="selectedArtifactRawUrl" target="_blank" rel="noopener noreferrer">raw</a>
+                  </div>
+                  <div v-if="selectedArtifactPreview.truncated" class="p-4 font-mono text-xs text-warning">Artifact exceeds inline preview limit. Open raw instead.</div>
+                  <div
+                    v-else-if="selectedArtifactPreview.kind === 'markdown'"
+                    ref="artifactPreviewRef"
+                    class="md-step-output p-4 text-xs leading-relaxed max-h-96 overflow-auto"
+                    v-html="renderMarkdown(selectedArtifactPreview.content || '')"
+                  />
+                  <iframe
+                    v-else-if="selectedArtifactPreview.kind === 'html'"
+                    class="w-full h-96 bg-white"
+                    sandbox
+                    :srcdoc="selectedArtifactPreview.content || ''"
+                  />
+                  <img
+                    v-else-if="selectedArtifactPreview.kind === 'image'"
+                    class="max-h-96 max-w-full mx-auto p-3 object-contain"
+                    :src="selectedArtifactRawUrl"
+                    :alt="selectedArtifactPreview.path"
+                  />
+                  <div v-else-if="selectedArtifactPreview.kind === 'mermaid'" ref="artifactPreviewRef" class="p-4 max-h-96 overflow-auto">
+                    <div class="artifact-mermaid-block">{{ selectedArtifactPreview.content || '' }}</div>
+                  </div>
+                  <pre v-else-if="selectedArtifactIsRenderable" class="p-4 text-xs whitespace-pre-wrap max-h-96 overflow-auto"><code>{{ selectedArtifactPreview.content || '' }}</code></pre>
+                  <div v-else class="p-4 font-mono text-xs text-base-content/40">Binary artifact. Open raw to inspect.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Retrieval Telemetry -->
+          <div v-if="selectedRetrievalTelemetry">
+            <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Retrieval Telemetry</div>
+            <div class="grid grid-cols-4 gap-2.5 mb-2.5">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Indexed Docs</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.indexed_docs || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Hit Rate</div>
+                <div class="font-mono text-xs text-base-content/70">{{ fmtPct(selectedRetrievalTelemetry.retrieval_hit_rate || 0) }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Queries / Hits</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.retrieval_queries || 0 }} / {{ selectedRetrievalTelemetry.retrieval_hits || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Context Chars</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2.5">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Fallback Hits</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.fallback_hits || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Mock Embedding</div>
+                <div class="font-mono text-xs" :class="selectedRetrievalTelemetry.mock_embedding ? 'text-warning' : 'text-success'">
+                  {{ selectedRetrievalTelemetry.mock_embedding ? 'yes' : 'no' }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Token Summary -->
+          <div v-if="selectedRunTokenSummary" class="rounded-xl border border-base-content/8 bg-base-200/50 p-3">
+            <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Token Summary</div>
+            <div class="font-mono text-xs text-base-content/65">
+              {{ selectedRunTokenSummary.tokens || 0 }} tokens · {{ selectedRunTokenSummary.requests || 0 }} request(s)
+            </div>
+          </div>
+
+          <!-- Persona Policy Warning -->
+          <div v-if="selectedPersonaPolicyWarning" class="rounded-xl border border-warning/40 bg-warning/8 p-4">
+            <div class="text-xs font-bold uppercase tracking-wider text-warning mb-2">Persona Tool Policy</div>
+            <div class="font-mono text-xs text-base-content/65 whitespace-pre-wrap">
+              {{ selectedPersonaPolicyWarning.message || 'Tool policy warning recorded.' }}
+            </div>
+            <div class="font-mono text-[11px] text-base-content/45 mt-2">
+              persona={{ selectedPersonaPolicyWarning.active_persona || 'unknown' }} · tool={{ selectedPersonaPolicyWarning.requested_tool || 'unknown' }} · strict={{ selectedPersonaPolicyWarning.strict_mode ? 'on' : 'off' }}
+            </div>
+          </div>
+
+          <!-- Workflow State -->
+          <template v-if="selectedWorkflowState">
+            <div>
+              <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-3">Workflow State</div>
+              <div class="grid grid-cols-4 gap-2.5 mb-4">
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Workflow</div>
+                  <div class="font-mono text-xs text-base-content/70">{{ selectedWorkflowState.workflow }}</div>
+                </div>
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1.5">
+                    Progress · {{ selectedWorkflowState.steps_completed }}/{{ selectedWorkflowState.steps_total }}
+                  </div>
+                  <div class="h-1.5 bg-base-content/10 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-primary rounded-full transition-all duration-700"
+                      :style="{ width: `${Math.min(100, ((selectedWorkflowState.steps_completed || 0) / (selectedWorkflowState.steps_total || 1)) * 100)}%` }"
+                    ></div>
+                  </div>
+                </div>
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Budget Used</div>
+                  <div class="font-mono text-xs text-base-content/70">{{ fmtTokens(selectedWorkflowState.budget_used?.tokens || 0) }} tokens</div>
+                </div>
+                <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                  <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Artifacts</div>
+                  <div class="font-mono text-xs text-base-content/70">{{ selectedRun.run.artifacts?.length || 0 }} file(s)</div>
+                  <div class="text-[9px] font-mono text-base-content/25 mt-0.5 truncate" :title="selectedRun.run.artifacts?.join(', ')">
+                    {{ selectedRun.run.artifacts?.join(', ') || '—' }}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Eval Gate -->
+              <div
+                v-if="selectedEvalGateDecision"
+                class="rounded-xl p-4 mb-4 border"
+                :class="{
+                  'border-success/40 bg-success/8': selectedEvalGateDecision.decision === 'pass',
+                  'border-warning/40 bg-warning/8': selectedEvalGateDecision.decision === 'warn',
+                  'border-error/40 bg-error/8': selectedEvalGateDecision.decision === 'block',
+                }"
+              >
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider" :class="{
+                      'text-success': selectedEvalGateDecision.decision === 'pass',
+                      'text-warning': selectedEvalGateDecision.decision === 'warn',
+                      'text-error': selectedEvalGateDecision.decision === 'block',
+                    }">Eval Gate</div>
+                    <div class="font-mono text-xs mt-1 text-base-content/50">{{ selectedEvalGateDecision.workflow }} · {{ selectedEvalGateDecision.mode }}</div>
+                  </div>
+                  <span class="badge badge-sm" :class="{
+                    'badge-success': selectedEvalGateDecision.decision === 'pass',
+                    'badge-warning': selectedEvalGateDecision.decision === 'warn',
+                    'badge-error': selectedEvalGateDecision.decision === 'block',
+                  }">{{ selectedEvalGateDecision.decision }}</span>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mb-3">
+                  <div class="bg-base-300/30 rounded-lg p-2">
+                    <div class="text-[9px] text-base-content/30 uppercase">Baseline</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_sample_size }}/{{ selectedEvalGateDecision.min_baseline_runs }}</div>
+                  </div>
+                  <div class="bg-base-300/30 rounded-lg p-2">
+                    <div class="text-[9px] text-base-content/30 uppercase">Window</div>
+                    <div class="font-mono text-xs mt-1">{{ selectedEvalGateDecision.baseline_window }} runs</div>
+                  </div>
+                  <div class="bg-base-300/30 rounded-lg p-2">
+                    <div class="text-[9px] text-base-content/30 uppercase">Reasons</div>
+                    <div class="font-mono text-xs mt-1 truncate" :title="fmtReasonCodes(selectedEvalGateDecision.reason_codes)">{{ fmtReasonCodes(selectedEvalGateDecision.reason_codes) }}</div>
+                  </div>
+                </div>
+                <div class="font-mono text-xs whitespace-pre-wrap text-base-content/60">{{ selectedEvalGateDecision.message }}</div>
+              </div>
+
+              <!-- Routing Recommendations -->
+              <div v-if="selectedRoutingRecommendations.length" class="rounded-xl border border-info/30 bg-info/8 p-4 mb-4">
+                <div class="flex items-center justify-between mb-3">
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider text-info">Adaptive Shadow</div>
+                    <div class="font-mono text-xs mt-0.5 text-base-content/45">Advisory only — execution not changed.</div>
+                  </div>
+                  <span class="badge badge-sm badge-info">shadow-only</span>
+                </div>
+                <div class="space-y-3">
+                  <div v-for="rec in selectedRoutingRecommendations" :key="rec.step_id" class="bg-base-300/25 rounded-xl p-3">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                      <div>
+                        <div class="text-[9px] text-base-content/30 uppercase">Router Step</div>
+                        <div class="font-mono text-xs mt-0.5">{{ rec.step_id }}</div>
+                      </div>
+                      <span class="badge badge-xs" :class="rec.fallback_used ? 'badge-warning' : 'badge-success'">{{ rec.fallback_used ? 'fallback' : 'recommended' }}</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 mb-2">
+                      <div class="bg-base-200/50 rounded-lg p-2">
+                        <div class="text-[9px] text-base-content/25">Current</div>
+                        <div class="font-mono text-xs mt-0.5">{{ rec.current_route }}</div>
+                      </div>
+                      <div class="bg-base-200/50 rounded-lg p-2">
+                        <div class="text-[9px] text-base-content/25">Recommended</div>
+                        <div class="font-mono text-xs mt-0.5">{{ rec.recommended_route }}</div>
+                      </div>
+                      <div class="bg-base-200/50 rounded-lg p-2">
+                        <div class="text-[9px] text-base-content/25">Confidence</div>
+                        <div class="font-mono text-xs mt-0.5">{{ fmtConfidence(rec.confidence) }} · {{ rec.sample_size }}s</div>
+                      </div>
+                    </div>
+                    <div class="font-mono text-xs whitespace-pre-wrap text-base-content/50">{{ rec.reason }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Approval Pending -->
+              <div v-if="pendingApproval" class="rounded-xl border border-warning/40 bg-warning/8 p-4 mb-4">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider text-warning">Approval Pending</div>
+                    <div class="font-mono text-xs mt-0.5 text-base-content/50">{{ pendingApproval.step_id }} · {{ pendingApproval.agent }}</div>
+                  </div>
+                  <span class="badge badge-sm badge-warning">awaiting</span>
+                </div>
+                <div class="font-mono text-xs whitespace-pre-wrap text-base-content/60 bg-base-300/30 rounded-xl p-3 mb-3">{{ pendingApproval.content_preview }}</div>
+                <template v-if="dashboardOwnsSelectedWorkflow">
+                  <textarea
+                    v-model="approvalEditContent"
+                    class="textarea textarea-bordered textarea-sm w-full font-mono text-xs mb-3"
+                    rows="5"
+                    placeholder="Edited approval content"
+                  />
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <button class="btn btn-sm btn-success" @click="recordApproval('approve')">Approve</button>
+                    <button class="btn btn-sm btn-warning" @click="recordApproval('edit')">Approve Edit</button>
+                    <button class="btn btn-sm btn-error" @click="recordApproval('deny')">Deny</button>
+                    <span v-if="approvalStatus" class="text-xs text-base-content/50 flex-1">{{ approvalStatus }}</span>
+                  </div>
+                </template>
+                <div v-else class="text-xs text-base-content/50">{{ externalWorkflowControlNotice }}</div>
+              </div>
+
+              <!-- External Control Notice -->
+              <div v-else-if="externalWorkflowControlNotice" class="rounded-xl border border-info/40 bg-info/8 p-4 mb-4">
+                <div class="text-xs font-bold uppercase tracking-wider text-info mb-1.5">External Control</div>
+                <div class="text-xs text-base-content/50">{{ externalWorkflowControlNotice }}</div>
+              </div>
+
+              <!-- Resume Ready -->
+              <div v-else-if="canResumeSelectedRun" class="rounded-xl border border-info/40 bg-info/8 p-4 mb-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-xs font-bold uppercase tracking-wider text-info mb-1">Resume Ready</div>
+                    <div v-if="m.runtime_mode === 'hosted-mcp'" class="text-xs text-base-content/50">
+                      Approval recorded. Ask your AI assistant to call <code class="font-mono bg-base-200 px-1 py-0.5 rounded text-[10px]">agent007_workflow_next</code>.
+                    </div>
+                    <div v-else class="text-xs text-base-content/50">Approval recorded. Resume to continue execution.</div>
+                  </div>
+                  <button v-if="m.runtime_mode !== 'hosted-mcp'" class="btn btn-sm btn-info shrink-0" @click="resumeSelectedRun">Resume</button>
+                </div>
+                <div v-if="resumeStatus" class="text-xs text-base-content/50 mt-2">{{ resumeStatus }}</div>
+              </div>
+
+              <!-- Workflow Steps -->
+              <div>
+                <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Steps</div>
                 <div class="space-y-2">
                   <div
-                    v-for="entry in selectedRun.run.entries.slice(-10).reverse()"
-                    :key="`${entry.timestamp}-${entry.kind}`"
-                    class="bg-base-200 rounded-lg p-3"
+                    v-for="step in selectedWorkflowState.steps || []"
+                    :key="step.id"
+                    class="rounded-xl border p-3 transition-colors"
+                    :class="{
+                      'border-base-content/10': step.status === 'pending',
+                      'border-error/60 bg-error/6': step.status === 'running' && isStaleStep(step),
+                      'border-info/40 bg-info/5': step.status === 'running' && !isStaleStep(step),
+                      'border-success/40 bg-success/5': step.status === 'completed',
+                      'border-error/40 bg-error/5': step.status === 'failed',
+                      'border-warning/40 bg-warning/5': step.status === 'awaiting-approval' || step.status === 'skipped',
+                    }"
                   >
-                    <div class="flex items-center justify-between gap-2 mb-1">
-                      <span class="font-mono text-xs text-base-content/60">{{ entry.kind }}</span>
-                      <span class="text-[10px] text-base-content/30 font-mono">{{ fmtLocalTime(entry.timestamp) }}</span>
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-mono text-xs font-medium text-base-content/80">{{ step.id }}</span>
+                      <div class="flex items-center gap-1.5">
+                        <span v-if="step.status === 'running' && isStaleStep(step)" class="badge badge-xs badge-error">stale</span>
+                        <span v-if="isSlowStep(step)" class="badge badge-xs badge-warning">slow</span>
+                        <span v-if="stepDuration(step)" class="text-[10px] font-mono text-base-content/35">⏱ {{ stepDuration(step) }}</span>
+                        <span class="badge badge-xs" :class="{
+                          'badge-ghost': step.status === 'pending',
+                          'badge-info': step.status === 'running' && !isStaleStep(step),
+                          'badge-warning': step.status === 'awaiting-approval' || step.status === 'skipped',
+                          'badge-success': step.status === 'completed',
+                          'badge-error': step.status === 'failed' || (step.status === 'running' && isStaleStep(step)),
+                        }">{{ step.status }}</span>
+                      </div>
                     </div>
-                    <div class="font-mono text-[10px] text-base-content/45 whitespace-pre-wrap leading-relaxed">{{ JSON.stringify(entry.payload, null, 2) }}</div>
+                    <div class="text-[10px] text-base-content/30 mt-1">{{ step.agent }} · {{ step.attempts }} attempt(s)</div>
+                    <!-- Liveness for running steps -->
+                    <div v-if="step.status === 'running'" class="mt-2 flex items-center gap-2 flex-wrap">
+                      <template v-if="step.last_heartbeat_hint">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono"
+                          :class="isStaleStep(step) ? 'bg-error/15 text-error/80' : 'bg-info/15 text-info/80'">
+                          <span class="w-1.5 h-1.5 rounded-full animate-pulse"
+                            :class="isStaleStep(step) ? 'bg-error' : 'bg-info'"></span>
+                          {{ step.last_heartbeat_hint }}
+                        </span>
+                        <span class="text-[10px] font-mono text-base-content/25">{{ heartbeatAge(step) }}</span>
+                      </template>
+                      <template v-else>
+                        <span class="text-[10px] font-mono text-base-content/25 italic">no heartbeat yet</span>
+                      </template>
+                    </div>
+                    <!-- Step output (expandable) -->
+                    <div v-if="step.output_preview" class="mt-2">
+                      <div v-if="!expandedSteps.has(step.id)"
+                        class="md-step-output text-xs bg-base-300/20 rounded-lg p-2 max-h-20 overflow-hidden"
+                        v-html="renderMarkdown(step.output_preview)"
+                      />
+                      <div v-else-if="rawStepView.has(step.id)"
+                        class="font-mono text-xs whitespace-pre-wrap text-base-content/55 bg-base-300/20 rounded-lg p-3 max-h-[500px] overflow-auto leading-relaxed"
+                      >{{ stepFullOutput(step) }}</div>
+                      <div v-else
+                        class="md-step-output text-xs bg-base-300/20 rounded-lg p-3 max-h-[500px] overflow-auto"
+                        v-html="renderMarkdown(stepFullOutput(step))"
+                      />
+                      <div class="flex items-center gap-3 mt-1">
+                        <button
+                          class="text-[10px] font-mono text-primary/60 hover:text-primary transition-colors"
+                          @click="toggleStepExpand(step.id)"
+                        >{{ expandedSteps.has(step.id) ? '▴ Collapse' : '▾ Expand' }}</button>
+                        <button v-if="expandedSteps.has(step.id)"
+                          class="text-[10px] font-mono text-base-content/25 hover:text-base-content/60 transition-colors"
+                          @click="toggleRawStep(step.id)"
+                        >{{ rawStepView.has(step.id) ? '◈ rendered' : '⌂ raw' }}</button>
+                      </div>
+                    </div>
+                    <div v-if="step.error" class="text-xs text-error mt-2">{{ step.error }}</div>
                   </div>
                 </div>
               </div>
 
             </div>
-            <!-- /accordion detail -->
+          </template>
+
+          <!-- Recent Trace -->
+          <div v-if="selectedRun.run.entries?.length">
+            <div class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/35 mb-2">Recent Trace</div>
+            <div class="space-y-2">
+              <div
+                v-for="entry in selectedRun.run.entries.slice(-10).reverse()"
+                :key="`${entry.timestamp}-${entry.kind}`"
+                class="bg-base-200/60 rounded-xl p-3 border border-base-content/6"
+              >
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <span class="font-mono text-xs text-base-content/55">{{ entry.kind }}</span>
+                  <span class="text-[10px] text-base-content/25 font-mono">{{ fmtLocalTime(entry.timestamp) }}</span>
+                </div>
+                <div class="font-mono text-[10px] text-base-content/40 whitespace-pre-wrap leading-relaxed">{{ JSON.stringify(entry.payload, null, 2) }}</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <!-- /run detail -->
+
+        <!-- Loading state -->
+        <div v-else-if="expandedRunId" class="p-10 text-center text-base-content/25 font-mono text-sm">
+          <div class="inline-flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            loading run details…
           </div>
         </div>
-        <div v-else class="p-10 text-center text-base-content/30 text-sm font-mono">No persisted runs yet</div>
+
       </div>
+      <!-- /right panel -->
 
     </div>
-    <!-- /scrollable body -->
+    <!-- /master-detail body -->
 
     <!-- ── Task submission slide-over ─────────────────────────────────── -->
 
@@ -1658,7 +1783,7 @@ async function submitTask() {
         <!-- Chat header -->
         <div class="px-5 py-3.5 border-b border-base-300 bg-base-200 flex items-center justify-between shrink-0">
           <div class="flex items-center gap-3">
-            <div class="w-7 h-7 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+            <div class="w-7 h-7 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
               <svg class="w-3.5 h-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
               </svg>
@@ -1666,7 +1791,7 @@ async function submitTask() {
             <div>
               <div class="text-sm font-semibold text-base-content/80 leading-none mb-1">agent007</div>
               <div class="flex items-center gap-1.5">
-                <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="connected ? 'bg-success' : 'bg-base-content/20'"></span>
+                <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="connected ? 'bg-success shadow-[0_0_4px_oklch(var(--su)/0.8)]' : 'bg-base-content/20'"></span>
                 <span class="badge badge-xs font-mono" :class="{
                   'badge-warning': m.runtime_mode === 'hosted-mcp',
                   'badge-success': m.runtime_mode === 'standalone' || m.runtime_mode === 'local-ollama',
@@ -1679,12 +1804,12 @@ async function submitTask() {
           <div class="flex items-center gap-1">
             <button
               v-if="chatMessages.length"
-              class="btn btn-ghost btn-xs font-mono text-[10px] text-base-content/35 hover:text-base-content/60"
+              class="btn btn-ghost btn-xs font-mono text-[10px] text-base-content/30 hover:text-base-content/60"
               @click="chatMessages = []"
               title="Clear conversation"
             >clear</button>
             <button
-              class="btn btn-ghost btn-sm btn-square text-base-content/35 hover:text-base-content"
+              class="btn btn-ghost btn-sm btn-square text-base-content/30 hover:text-base-content"
               @click="taskPanelOpen = false"
             >
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1697,7 +1822,7 @@ async function submitTask() {
         <!-- Chat messages area -->
         <div class="flex-1 overflow-auto flex flex-col" ref="chatScrollRef">
 
-          <!-- Empty state: show suggested prompts -->
+          <!-- Empty state -->
           <div v-if="!chatMessages.length" class="flex-1 flex flex-col items-center justify-center p-8 gap-6">
             <div class="text-center">
               <div class="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
@@ -1706,16 +1831,15 @@ async function submitTask() {
                 </svg>
               </div>
               <div class="text-sm font-medium text-base-content/50 mb-1">What should agent007 do?</div>
-              <div class="text-xs text-base-content/30 font-mono">Run skills, workflows, or any task</div>
+              <div class="text-xs text-base-content/25 font-mono">Run skills, workflows, or any task</div>
             </div>
 
-            <!-- Suggested prompts from recent tasks -->
             <div v-if="m.recent_tasks?.length" class="w-full space-y-2">
-              <div class="text-[10px] font-mono text-base-content/25 uppercase tracking-widest text-center mb-3">recent tasks</div>
+              <div class="text-[10px] font-mono text-base-content/20 uppercase tracking-widest text-center mb-3">recent tasks</div>
               <button
                 v-for="(t, i) in [...(m.recent_tasks || [])].reverse().slice(0, 4)"
                 :key="i"
-                class="w-full text-left px-4 py-3 rounded-xl border border-base-300/50 hover:border-primary/30 hover:bg-primary/5 transition-all group"
+                class="w-full text-left px-4 py-3 rounded-xl border border-base-content/8 hover:border-primary/30 hover:bg-primary/5 transition-all group"
                 @click="taskInput = t.task"
               >
                 <div class="flex items-start gap-3">
@@ -1725,7 +1849,7 @@ async function submitTask() {
                     'bg-info animate-pulse': t.status === 'running',
                     'bg-base-content/15': !['completed','failed','running'].includes(t.status),
                   }"></span>
-                  <span class="font-mono text-xs text-base-content/45 group-hover:text-base-content/70 transition-colors leading-relaxed line-clamp-2">{{ t.task }}</span>
+                  <span class="font-mono text-xs text-base-content/40 group-hover:text-base-content/65 transition-colors leading-relaxed line-clamp-2">{{ t.task }}</span>
                 </div>
               </button>
             </div>
@@ -1735,7 +1859,7 @@ async function submitTask() {
           <div v-else class="flex flex-col gap-4 p-5">
             <template v-for="(msg, i) in chatMessages" :key="i">
 
-              <!-- User message: right-aligned bubble -->
+              <!-- User message -->
               <div v-if="msg.role === 'user'" class="flex justify-end">
                 <div class="max-w-[82%]">
                   <div class="bg-primary/15 border border-primary/20 rounded-2xl rounded-tr-sm px-4 py-3">
@@ -1744,44 +1868,37 @@ async function submitTask() {
                 </div>
               </div>
 
-              <!-- Assistant message: left-aligned -->
+              <!-- Assistant message -->
               <div v-else class="flex items-start gap-3">
-                <!-- Avatar -->
                 <div class="w-6 h-6 rounded-lg bg-primary/15 flex items-center justify-center shrink-0 mt-0.5">
                   <svg class="w-3 h-3 text-primary/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                   </svg>
                 </div>
-
                 <div class="flex-1 min-w-0">
-                  <!-- Thinking indicator -->
                   <div v-if="msg.status === 'running'" class="flex items-center gap-2 py-2">
                     <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 0ms"></span>
                     <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 150ms"></span>
                     <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 300ms"></span>
-                    <span class="text-xs font-mono text-base-content/35 ml-1">running…</span>
+                    <span class="text-xs font-mono text-base-content/30 ml-1">running…</span>
                   </div>
-
-                  <!-- Response content -->
                   <template v-else>
                     <div
                       class="rounded-2xl rounded-tl-sm px-4 py-3 border"
                       :class="msg.status === 'error'
-                        ? 'bg-error/10 border-error/25'
-                        : 'bg-base-200 border-base-300/50'"
+                        ? 'bg-error/8 border-error/20'
+                        : 'bg-base-200 border-base-content/8'"
                     >
                       <p
                         class="font-mono text-xs whitespace-pre-wrap leading-relaxed"
-                        :class="msg.status === 'error' ? 'text-error/80' : 'text-base-content/75'"
+                        :class="msg.status === 'error' ? 'text-error/80' : 'text-base-content/70'"
                       >{{ msg.content }}</p>
                     </div>
-
-                    <!-- Session metadata pill -->
                     <div v-if="msg.sessionId" class="flex items-center gap-2 mt-1.5 px-1">
                       <span class="badge badge-xs" :class="msg.status === 'completed' ? 'badge-success' : 'badge-error'">
                         {{ msg.status }}
                       </span>
-                      <span class="text-[10px] font-mono text-base-content/25">{{ msg.sessionId }}</span>
+                      <span class="text-[10px] font-mono text-base-content/20">{{ msg.sessionId }}</span>
                     </div>
                   </template>
                 </div>
@@ -1791,17 +1908,17 @@ async function submitTask() {
           </div>
         </div>
 
-        <!-- Input area: always pinned at bottom -->
+        <!-- Input area -->
         <div class="shrink-0 border-t border-base-300 bg-base-200/60 p-4">
 
-          <!-- Slash command menu (floats above input) -->
+          <!-- Slash command menu -->
           <div
             v-if="showSlashMenu && filteredSlashCommands.length"
             class="mb-2 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden"
           >
-            <div class="px-3 py-1.5 border-b border-base-300/50 flex items-center justify-between">
-              <span class="text-[10px] font-mono text-base-content/30 uppercase tracking-widest">Commands · ↑↓ navigate · ↵ select · Esc close</span>
-              <span class="text-[10px] font-mono text-base-content/25">{{ filteredSlashCommands.length }} match{{ filteredSlashCommands.length !== 1 ? 'es' : '' }}</span>
+            <div class="px-3 py-1.5 border-b border-base-content/8 flex items-center justify-between">
+              <span class="text-[10px] font-mono text-base-content/25 uppercase tracking-widest">Commands · ↑↓ navigate · ↵ select · Esc close</span>
+              <span class="text-[10px] font-mono text-base-content/20">{{ filteredSlashCommands.length }} match{{ filteredSlashCommands.length !== 1 ? 'es' : '' }}</span>
             </div>
             <div ref="slashMenuRef" class="max-h-64 overflow-auto">
               <button
@@ -1813,7 +1930,6 @@ async function submitTask() {
                 @mouseenter="slashMenuIndex = i"
                 @click="selectSlashCommand(cmd)"
               >
-                <!-- Type icon -->
                 <div
                   class="w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5"
                   :class="cmd.type === 'workflow' ? 'bg-secondary/15' : 'bg-primary/15'"
@@ -1825,14 +1941,13 @@ async function submitTask() {
                     <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                   </svg>
                 </div>
-                <!-- Content -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-mono text-xs font-medium text-base-content/85">{{ cmd.trigger }}</span>
                     <span class="badge badge-xs" :class="cmd.type === 'workflow' ? 'badge-secondary' : 'badge-primary'" style="opacity:0.7">{{ cmd.type }}</span>
                     <span v-if="cmd.source === 'project'" class="badge badge-xs badge-ghost" style="opacity:0.6">proj</span>
                   </div>
-                  <div v-if="cmd.description && cmd.name !== cmd.trigger" class="text-[11px] text-base-content/40 truncate mt-0.5">{{ cmd.description }}</div>
+                  <div v-if="cmd.description && cmd.name !== cmd.trigger" class="text-[11px] text-base-content/35 truncate mt-0.5">{{ cmd.description }}</div>
                 </div>
               </button>
             </div>
@@ -1860,8 +1975,8 @@ async function submitTask() {
             </button>
           </div>
           <div class="flex items-center justify-between mt-2 px-1">
-            <span class="text-[10px] font-mono text-base-content/20">↵ send · Shift↵ newline · / for commands</span>
-            <span class="text-[10px] font-mono text-base-content/20" v-if="chatMessages.length">{{ chatMessages.filter(m => m.role === 'user').length }} task(s)</span>
+            <span class="text-[10px] font-mono text-base-content/15">↵ send · Shift↵ newline · / for commands</span>
+            <span class="text-[10px] font-mono text-base-content/15" v-if="chatMessages.length">{{ chatMessages.filter(m => m.role === 'user').length }} task(s)</span>
           </div>
         </div>
       </div>
