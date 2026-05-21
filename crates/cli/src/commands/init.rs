@@ -1713,11 +1713,16 @@ steps:
     agent: DebugAgent
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a log error specialist. Analyze the following logs and extract ALL
       errors, exceptions, stack traces, and warnings. For each one provide:
@@ -1733,11 +1738,16 @@ steps:
     agent: Researcher
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a log pattern analyst. Analyze the following logs and identify:
       - Recurring patterns and sequences
@@ -1753,11 +1763,16 @@ steps:
     agent: SecurityReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a security log analyst. Scan the following logs for:
       - Authentication failures or brute-force patterns
@@ -1774,11 +1789,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are the lead analyst. Synthesize the specialist reports below into a
       single executive report with:
@@ -1836,11 +1856,16 @@ steps:
     agent: SecurityReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a security code reviewer. Review the following code for:
       - Injection vulnerabilities (SQL, command, XSS)
@@ -1863,11 +1888,16 @@ steps:
     agent: PerformanceEngineer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a performance code reviewer. Review the following code for:
       - Algorithmic complexity issues (O(n²), N+1 queries)
@@ -1890,11 +1920,16 @@ steps:
     agent: CodeReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a code quality reviewer. Review for:
       - Code smells and anti-patterns
@@ -1918,11 +1953,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Synthesize the three specialist reviews into a final code review report:
 
@@ -1977,11 +2017,16 @@ steps:
     agent: SecurityReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are an application security expert. Perform an OWASP Top 10 audit.
 
@@ -2013,11 +2058,16 @@ steps:
     agent: SecurityReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a secrets detection specialist. Scan the following for credential leaks.
 
@@ -2042,11 +2092,16 @@ steps:
     agent: Architect
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a threat modeling expert using the STRIDE framework.
 
@@ -2074,11 +2129,16 @@ steps:
     agent: SecurityReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a supply chain security expert. Analyze dependencies for risk.
 
@@ -2104,11 +2164,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Synthesize all security audit findings into a final executive report.
 
@@ -2171,11 +2236,16 @@ steps:
     agent: Researcher
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       SPARC Phase 1 — Specification.
       Write a detailed specification for: {{task}}
@@ -2194,11 +2264,16 @@ steps:
     agent: Coder
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       SPARC Phase 2 — Pseudocode.
       Based on this specification:
@@ -2212,11 +2287,16 @@ steps:
     agent: Architect
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       SPARC Phase 3 — Architecture.
       Spec: {{specification}}
@@ -2234,11 +2314,16 @@ steps:
     agent: CodeReviewer
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       SPARC Phase 4 — Refinement.
       Review the architecture for correctness, security, performance, and scalability.
@@ -2252,11 +2337,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       SPARC Phase 5 — Completion.
       Produce the final deliverable based on:
@@ -2304,11 +2394,16 @@ steps:
     agent: TestDesigner
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       TDD Red Phase — write a failing test for: {{task}}
       Produce: test file with failing test cases covering the requirement.
@@ -2324,11 +2419,16 @@ steps:
     agent: Coder
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       TDD Green Phase — write minimal code to make these tests pass:
       {{failing_tests}}
@@ -2343,11 +2443,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       TDD Blue/Refactor Phase — refactor this implementation for quality:
       {{implementation}}
@@ -2397,11 +2502,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a research specialist. Gather comprehensive context for:
 
@@ -2431,11 +2541,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Research is complete. Human: please review the findings and confirm
       the direction before architecture begins.
@@ -2452,11 +2567,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a documentation specialist. Capture the ideation phase output
       as a structured document.
@@ -2480,11 +2600,16 @@ steps:
     model: claude-sonnet-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a product manager. Write a Product Requirements Document for:
 
@@ -2508,11 +2633,16 @@ steps:
     model: claude-opus-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a system architect. Design the technical architecture for:
 
@@ -2538,11 +2668,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Capture the architecture and PRD into a unified Design Document.
 
@@ -2562,11 +2697,16 @@ steps:
     model: claude-sonnet-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a project planner. Break the work into milestones and features.
 
@@ -2586,11 +2726,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Write the final Milestones & Features Document.
 
@@ -2608,11 +2753,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       The ideation phase is complete. Write the key outputs as real project
       documentation files so feature teams and future agents can reference them.
@@ -2643,11 +2793,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       The project documentation has been written to docs/. Index the repository
       so that all future agents can use semantic search to find relevant context.
@@ -2667,11 +2822,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       The ideation phase is complete. Present a full summary to the human
       for final approval before feature work begins.
@@ -2751,11 +2911,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Load project context for this feature using semantic search across the
       indexed repository, then supplement with any directly provided context.
@@ -2795,11 +2960,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Research context for this feature:
 
@@ -2818,11 +2988,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Write a Feature Brief document.
 
@@ -2840,11 +3015,16 @@ steps:
     model: claude-sonnet-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a product manager. Write a Feature Specification for:
 
@@ -2871,11 +3051,16 @@ steps:
     model: claude-opus-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Design the technical approach for this feature.
 
@@ -2898,11 +3083,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Implement the feature following the architecture and spec.
 
@@ -2923,11 +3113,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Implementation is complete. Human: please review the implementation
       against the spec before running the full review pipeline.
@@ -2947,11 +3142,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Review the implementation for code quality.
 
@@ -2969,11 +3169,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Security review of the implementation.
 
@@ -2991,11 +3196,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Performance review of the implementation.
 
@@ -3013,11 +3223,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Gap analysis: compare implementation against the feature spec and architecture.
 
@@ -3036,11 +3251,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Issue analysis: identify potential bugs and failure modes.
 
@@ -3058,11 +3278,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Rework the implementation based on all review findings.
 
@@ -3086,11 +3311,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Design a comprehensive test suite for the feature.
 
@@ -3109,11 +3339,16 @@ steps:
     model: gpt-5.3-codex
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Review the test suite for completeness and quality.
 
@@ -3133,11 +3368,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Write the final feature documentation.
 
@@ -3158,11 +3398,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Feature delivery is complete. Prepare release sign-off summary.
 
@@ -3224,11 +3469,16 @@ steps:
     model: claude-sonnet-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a brainstorming specialist using the Double Diamond design-thinking methodology.
       Explore the problem space for:
@@ -3269,11 +3519,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Brainstorm complete. Human: please review the approaches and select a direction.
 
@@ -3291,11 +3546,16 @@ steps:
     model: claude-sonnet-4-6
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       You are a product manager. Write a Product Requirements Document (PRD) for:
 
@@ -3321,11 +3581,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Capture the brainstorm and approved direction as a structured Ideation Document.
 
@@ -3349,11 +3614,16 @@ steps:
     model: claude-haiku-4-5-20251001
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       Write the brainstorm outputs as project documentation files.
 
@@ -3378,11 +3648,16 @@ steps:
     requires_approval: true
     prompt: |
       Operating protocol:
-      - Use repository, memory, and prior-step context before making broad claims.
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
       - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
-      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
       - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
       - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.
 
       The brainstorm phase is complete. Present the results for final review.
 
