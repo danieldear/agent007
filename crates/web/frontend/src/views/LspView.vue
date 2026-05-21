@@ -9,7 +9,8 @@ const error = ref('')
 const ok = ref('')
 
 const enabled = ref(true)
-const categoriesCsv = ref('code_completion,reasoning')
+const defaultCategories = ['code_completion', 'reasoning', 'code', 'dev', 'frontend']
+const categoriesCsv = ref(defaultCategories.join(','))
 const servers = ref([{ language: 'rust', command: 'rust-analyzer' }])
 
 function normalizeServersMap() {
@@ -29,7 +30,7 @@ async function loadConfig() {
   try {
     const cfg = await api.getLspConfig()
     enabled.value = cfg?.enabled ?? true
-    categoriesCsv.value = (cfg?.inject_for_categories || ['code_completion', 'reasoning']).join(',')
+    categoriesCsv.value = (cfg?.inject_for_categories || defaultCategories).join(',')
     const rows = Object.entries(cfg?.servers || {}).map(([language, command]) => ({ language, command }))
     servers.value = rows.length ? rows : [{ language: '', command: '' }]
   } catch (e) {
@@ -104,7 +105,7 @@ onMounted(loadConfig)
 
         <div>
           <label class="label"><span class="label-text font-mono text-xs">Inject for categories (comma-separated)</span></label>
-          <input class="input input-bordered input-sm w-full font-mono" v-model="categoriesCsv" placeholder="code_completion,reasoning" />
+          <input class="input input-bordered input-sm w-full font-mono" v-model="categoriesCsv" placeholder="code_completion,reasoning,code,dev,frontend" />
         </div>
 
         <div class="space-y-2">

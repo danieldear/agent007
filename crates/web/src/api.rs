@@ -6844,11 +6844,18 @@ fn config_toml_candidate_paths_for_read() -> Vec<std::path::PathBuf> {
     paths
 }
 
+fn default_lsp_inject_categories() -> Vec<String> {
+    ["code_completion", "reasoning", "code", "dev", "frontend"]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
     // Merge global + project with project taking precedence.
     let mut enabled = true;
     let mut servers = std::collections::HashMap::new();
-    let mut inject_for_categories = vec!["code_completion".to_string(), "reasoning".to_string()];
+    let mut inject_for_categories = default_lsp_inject_categories();
 
     let mut seen_any = false;
     // read in order: global first, then project, so project overrides
@@ -6887,7 +6894,7 @@ fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
         return Ok(LspConfigResponse {
             enabled: true,
             servers: std::collections::HashMap::new(),
-            inject_for_categories: vec!["code_completion".to_string(), "reasoning".to_string()],
+            inject_for_categories: default_lsp_inject_categories(),
         });
     }
 

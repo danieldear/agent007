@@ -48,7 +48,10 @@ impl SkillExecutor {
             memory,
             global_memory: None,
             router: None,
-            lsp_inject_categories: vec!["code_completion".to_string(), "reasoning".to_string()],
+            lsp_inject_categories: ["code_completion", "reasoning", "code", "dev", "frontend"]
+                .into_iter()
+                .map(ToString::to_string)
+                .collect(),
         }
     }
 

@@ -134,6 +134,38 @@ fn write_if_missing(path: &Path, content: &str, label: &str) -> Result<bool> {
     write_file(path, content, label, false)
 }
 
+const WORKFLOW_OPERATING_PROTOCOL_MARKER: &str = "{{WORKFLOW_OPERATING_PROTOCOL}}";
+
+const WORKFLOW_OPERATING_PROTOCOL: &str = "\
+Operating protocol:
+      - Identify this step's goal, success criteria, inputs, constraints, and expected downstream handoff before producing the output.
+      - Reason stepwise internally, but do not expose private chain-of-thought; return concise rationale, key trade-offs, and decision criteria.
+      - Build an evidence ledger before making claims: files inspected, commands run, ETR/tool outputs, source citations, upstream step IDs, and confidence level.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Use shell/build/test tools for execution and verification, not for noisy parsing that ETR can perform deterministically.
+      - Separate facts, inferences, assumptions, and recommendations. If required context is missing, state the assumption and choose a reversible, low-risk path.
+      - Stay within this step's role; name handoffs for other agents instead of expanding scope silently.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+      - When multiple options are plausible, compare them with explicit criteria and recommend one default path.";
+
+fn render_builtin_workflow_template(template: &str) -> String {
+    template.replace(
+        WORKFLOW_OPERATING_PROTOCOL_MARKER,
+        WORKFLOW_OPERATING_PROTOCOL,
+    )
+}
+
+fn write_workflow_file(path: &Path, template: &str, label: &str, force: bool) -> Result<bool> {
+    let rendered = render_builtin_workflow_template(template);
+    write_file(path, &rendered, label, force)
+}
+
+fn write_workflow_if_missing(path: &Path, template: &str, label: &str) -> Result<bool> {
+    let rendered = render_builtin_workflow_template(template);
+    write_if_missing(path, &rendered, label)
+}
+
 fn backup_path_for(path: &Path) -> Result<PathBuf> {
     let file_name = path
         .file_name()
@@ -503,49 +535,49 @@ pub async fn execute(
     // ── 4. Built-in workflows ───────────────────────────────────────────────
     section("4. Writing built-in workflows");
     let wf_dir = home.join("workflows");
-    write_file(
+    write_workflow_file(
         &wf_dir.join("log-analysis.yaml"),
         WORKFLOW_LOG_ANALYSIS,
         "workflows/log-analysis.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("code-review.yaml"),
         WORKFLOW_CODE_REVIEW,
         "workflows/code-review.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("security-audit.yaml"),
         WORKFLOW_SECURITY_AUDIT,
         "workflows/security-audit.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("sparc.yaml"),
         WORKFLOW_SPARC,
         "workflows/sparc.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("tdd.yaml"),
         WORKFLOW_TDD,
         "workflows/tdd.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("ideation.yaml"),
         WORKFLOW_IDEATION,
         "workflows/ideation.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("feature.yaml"),
         WORKFLOW_FEATURE,
         "workflows/feature.yaml",
         force,
     )?;
-    write_file(
+    write_workflow_file(
         &wf_dir.join("brainstorm.yaml"),
         WORKFLOW_BRAINSTORM,
         "workflows/brainstorm.yaml",
@@ -1480,42 +1512,42 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
             .unwrap_or(true);
     if wf_missing {
         std::fs::create_dir_all(&wf_dir)?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("log-analysis.yaml"),
             WORKFLOW_LOG_ANALYSIS,
             "~/.agent007/workflows/log-analysis.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("code-review.yaml"),
             WORKFLOW_CODE_REVIEW,
             "~/.agent007/workflows/code-review.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("security-audit.yaml"),
             WORKFLOW_SECURITY_AUDIT,
             "~/.agent007/workflows/security-audit.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("sparc.yaml"),
             WORKFLOW_SPARC,
             "~/.agent007/workflows/sparc.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("tdd.yaml"),
             WORKFLOW_TDD,
             "~/.agent007/workflows/tdd.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("ideation.yaml"),
             WORKFLOW_IDEATION,
             "~/.agent007/workflows/ideation.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("feature.yaml"),
             WORKFLOW_FEATURE,
             "~/.agent007/workflows/feature.yaml",
         )?;
-        write_if_missing(
+        write_workflow_if_missing(
             &wf_dir.join("brainstorm.yaml"),
             WORKFLOW_BRAINSTORM,
             "~/.agent007/workflows/brainstorm.yaml",
@@ -1712,6 +1744,8 @@ steps:
   - id: find-errors
     agent: DebugAgent
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a log error specialist. Analyze the following logs and extract ALL
       errors, exceptions, stack traces, and warnings. For each one provide:
       - Error type and message
@@ -1725,6 +1759,8 @@ steps:
   - id: find-patterns
     agent: Researcher
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a log pattern analyst. Analyze the following logs and identify:
       - Recurring patterns and sequences
       - Anomalous spikes or gaps
@@ -1738,6 +1774,8 @@ steps:
   - id: security-check
     agent: SecurityReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a security log analyst. Scan the following logs for:
       - Authentication failures or brute-force patterns
       - Unauthorized access attempts
@@ -1752,6 +1790,8 @@ steps:
     agent: Researcher
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are the lead analyst. Synthesize the specialist reports below into a
       single executive report with:
       1. Summary (3-5 bullet points)
@@ -1807,6 +1847,8 @@ steps:
   - id: security-review
     agent: SecurityReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a security code reviewer. Review the following code for:
       - Injection vulnerabilities (SQL, command, XSS)
       - Authentication/authorization flaws
@@ -1827,6 +1869,8 @@ steps:
   - id: performance-review
     agent: PerformanceEngineer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a performance code reviewer. Review the following code for:
       - Algorithmic complexity issues (O(n²), N+1 queries)
       - Memory leaks or excessive allocations
@@ -1847,6 +1891,8 @@ steps:
   - id: quality-review
     agent: CodeReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a code quality reviewer. Review for:
       - Code smells and anti-patterns
       - Missing error handling
@@ -1868,6 +1914,8 @@ steps:
     agent: CodeReviewer
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Synthesize the three specialist reviews into a final code review report:
 
       SECURITY:
@@ -1920,6 +1968,8 @@ steps:
   - id: owasp-scan
     agent: SecurityReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are an application security expert. Perform an OWASP Top 10 audit.
 
       Target: {{task}}
@@ -1949,6 +1999,8 @@ steps:
   - id: secrets-scan
     agent: SecurityReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a secrets detection specialist. Scan the following for credential leaks.
 
       Target: {{task}}
@@ -1971,6 +2023,8 @@ steps:
   - id: threat-model
     agent: Architect
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a threat modeling expert using the STRIDE framework.
 
       Target: {{task}}
@@ -1996,6 +2050,8 @@ steps:
   - id: dep-scan
     agent: SecurityReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a supply chain security expert. Analyze dependencies for risk.
 
       Target: {{task}}
@@ -2019,6 +2075,8 @@ steps:
     agent: SecurityReviewer
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Synthesize all security audit findings into a final executive report.
 
       OWASP FINDINGS:
@@ -2079,6 +2137,8 @@ steps:
   - id: spec
     agent: Researcher
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       SPARC Phase 1 — Specification.
       Write a detailed specification for: {{task}}
       Include: goals, constraints, user stories, acceptance criteria, edge cases.
@@ -2095,6 +2155,8 @@ steps:
   - id: pseudocode
     agent: Coder
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       SPARC Phase 2 — Pseudocode.
       Based on this specification:
       {{specification}}
@@ -2106,6 +2168,8 @@ steps:
   - id: architecture
     agent: Architect
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       SPARC Phase 3 — Architecture.
       Spec: {{specification}}
       Pseudocode: {{pseudocode}}
@@ -2121,6 +2185,8 @@ steps:
   - id: refinement
     agent: CodeReviewer
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       SPARC Phase 4 — Refinement.
       Review the architecture for correctness, security, performance, and scalability.
       Architecture: {{architecture}}
@@ -2132,6 +2198,8 @@ steps:
     agent: ExpertCoder
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       SPARC Phase 5 — Completion.
       Produce the final deliverable based on:
       Spec: {{specification}}
@@ -2177,6 +2245,8 @@ steps:
   - id: red
     agent: TestDesigner
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       TDD Red Phase — write a failing test for: {{task}}
       Produce: test file with failing test cases covering the requirement.
       Tests must fail because the implementation doesn't exist yet.
@@ -2190,6 +2260,8 @@ steps:
   - id: green
     agent: Coder
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       TDD Green Phase — write minimal code to make these tests pass:
       {{failing_tests}}
 
@@ -2202,6 +2274,8 @@ steps:
     agent: ExpertCoder
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       TDD Blue/Refactor Phase — refactor this implementation for quality:
       {{implementation}}
 
@@ -2249,6 +2323,8 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a research specialist. Gather comprehensive context for:
 
       {{task}}
@@ -2276,6 +2352,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Research is complete. Human: please review the findings and confirm
       the direction before architecture begins.
 
@@ -2290,6 +2368,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a documentation specialist. Capture the ideation phase output
       as a structured document.
 
@@ -2311,6 +2391,8 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a product manager. Write a Product Requirements Document for:
 
       {{task}}
@@ -2332,6 +2414,8 @@ steps:
     agent: Architect
     model: claude-opus-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a system architect. Design the technical architecture for:
 
       {{task}}
@@ -2355,6 +2439,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Capture the architecture and PRD into a unified Design Document.
 
       ARCHITECTURE:
@@ -2372,6 +2458,8 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a project planner. Break the work into milestones and features.
 
       TASK: {{task}}
@@ -2389,6 +2477,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Write the final Milestones & Features Document.
 
       PROJECT PLAN:
@@ -2404,6 +2494,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       The ideation phase is complete. Write the key outputs as real project
       documentation files so feature teams and future agents can reference them.
 
@@ -2432,6 +2524,8 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       The project documentation has been written to docs/. Index the repository
       so that all future agents can use semantic search to find relevant context.
 
@@ -2449,6 +2543,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       The ideation phase is complete. Present a full summary to the human
       for final approval before feature work begins.
 
@@ -2526,6 +2622,8 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Load project context for this feature using semantic search across the
       indexed repository, then supplement with any directly provided context.
 
@@ -2563,6 +2661,8 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Research context for this feature:
 
       PROJECT CONTEXT:
@@ -2579,6 +2679,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Write a Feature Brief document.
 
       PROJECT CONTEXT: {{project_context}}
@@ -2594,6 +2696,8 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a product manager. Write a Feature Specification for:
 
       {{task}}
@@ -2618,6 +2722,8 @@ steps:
     agent: Architect
     model: claude-opus-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Design the technical approach for this feature.
 
       FEATURE: {{task}}
@@ -2638,6 +2744,8 @@ steps:
     agent: ExpertCoder
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Implement the feature following the architecture and spec.
 
       FEATURE: {{task}}
@@ -2656,6 +2764,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Implementation is complete. Human: please review the implementation
       against the spec before running the full review pipeline.
 
@@ -2673,6 +2783,8 @@ steps:
     agent: CodeReviewer
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Review the implementation for code quality.
 
       FEATURE: {{task}}
@@ -2688,6 +2800,8 @@ steps:
     agent: SecurityReviewer
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Security review of the implementation.
 
       FEATURE: {{task}}
@@ -2703,6 +2817,8 @@ steps:
     agent: PerformanceEngineer
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Performance review of the implementation.
 
       FEATURE: {{task}}
@@ -2718,6 +2834,8 @@ steps:
     agent: CodeReviewer
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Gap analysis: compare implementation against the feature spec and architecture.
 
       FEATURE: {{task}}
@@ -2734,6 +2852,8 @@ steps:
     agent: DebugAgent
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Issue analysis: identify potential bugs and failure modes.
 
       FEATURE: {{task}}
@@ -2749,6 +2869,8 @@ steps:
     agent: ExpertCoder
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Rework the implementation based on all review findings.
 
       SPEC: {{feature_spec}}
@@ -2770,6 +2892,8 @@ steps:
     agent: TestDesigner
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Design a comprehensive test suite for the feature.
 
       FEATURE: {{task}}
@@ -2786,6 +2910,8 @@ steps:
     agent: TestDesigner
     model: gpt-5.3-codex
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Review the test suite for completeness and quality.
 
       SPEC: {{feature_spec}}
@@ -2803,6 +2929,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Write the final feature documentation.
 
       FEATURE: {{task}}
@@ -2821,6 +2949,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Feature delivery is complete. Prepare release sign-off summary.
 
       FEATURE: {{task}}
@@ -2880,6 +3010,8 @@ steps:
     agent: Researcher
     model: claude-sonnet-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a brainstorming specialist using the Double Diamond design-thinking methodology.
       Explore the problem space for:
 
@@ -2918,6 +3050,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Brainstorm complete. Human: please review the approaches and select a direction.
 
       BRAINSTORM OUTPUT:
@@ -2933,6 +3067,8 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       You are a product manager. Write a Product Requirements Document (PRD) for:
 
       {{task}}
@@ -2956,6 +3092,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Capture the brainstorm and approved direction as a structured Ideation Document.
 
       TASK: {{task}}
@@ -2977,6 +3115,8 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       Write the brainstorm outputs as project documentation files.
 
       Use the file_write tool to create the following files
@@ -2999,6 +3139,8 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
       The brainstorm phase is complete. Present the results for final review.
 
       ## Brainstorm Summary
