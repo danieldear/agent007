@@ -26,6 +26,12 @@ struct WorkerOutput {
     subtask: String,
     output: String,
     blocker: Option<String>,
+    token_estimate: usize,
+}
+
+struct WorkerContext {
+    system: String,
+    model: String,
 }
 
 pub struct SubOrchestrator {
@@ -197,7 +203,7 @@ impl SubOrchestrator {
         }
 
         // --- Plan decomposition ---
-        let subtasks = self.plan(task).await?;
+        let subtasks = self.normalize_topology(task, self.plan(task).await?)?;
 
         // Stable agent_id for the whole run; passed to worker events so the
         // dashboard can attribute WorkerResult/WorkerBlocked to this run.
@@ -279,6 +285,7 @@ impl SubOrchestrator {
             files_changed: Vec::new(),
             tests_passed: false,
             blockers: all_blockers,
+            token_estimate: outputs.iter().map(|w| w.token_estimate).sum(),
         })
     }
 
@@ -345,13 +352,24 @@ impl SubOrchestrator {
     ///
     /// Deduplication is done on **normalized** trigger keys (leading `/` stripped)
     /// so that `"/dev-debug"` and `"dev-debug"` are treated as the same skill.
-    fn build_worker_system(&self, worker_name: &str) -> String {
-        let persona_opt = self.persona_provider.get(worker_name);
+    fn build_worker_context(&self, worker_name: &str) -> Result<WorkerContext, CustomAgentError> {
+        let persona = self.persona_provider.get(worker_name).ok_or_else(|| {
+            CustomAgentError::WorkerPersonaNotFound {
+                name: worker_name.to_string(),
+            }
+        })?;
 
-        let persona_skills: Vec<String> = persona_opt
-            .as_ref()
-            .map(|p| p.skills.clone())
-            .unwrap_or_default();
+        if matches!(
+            persona.agent_type.as_deref(),
+            Some(kind) if !kind.eq_ignore_ascii_case("worker")
+        ) {
+            return Err(CustomAgentError::InvalidPersonaType {
+                name: worker_name.to_string(),
+                expected: "worker".to_string(),
+            });
+        }
+
+        let persona_skills: Vec<String> = persona.skills.clone();
 
         let spec_skills: Vec<String> = self
             .worker_specs
@@ -368,9 +386,7 @@ impl SubOrchestrator {
             .filter(|s| seen.insert(agent007_skills::normalize_trigger(s).to_string()))
             .collect();
 
-        let base_system = persona_opt
-            .map(|p| p.system_prompt.clone())
-            .unwrap_or_default();
+        let base_system = persona.system_prompt.clone();
 
         let mut injected = String::new();
         for trigger in &merged_skills {
@@ -379,11 +395,16 @@ impl SubOrchestrator {
             }
         }
 
-        if injected.is_empty() {
+        let system = if injected.is_empty() {
             base_system
         } else {
             format!("{injected}{base_system}")
-        }
+        };
+
+        Ok(WorkerContext {
+            system,
+            model: persona.preferred_model,
+        })
     }
 
     /// Execute one worker subtask and return its output.
@@ -407,14 +428,16 @@ impl SubOrchestrator {
             _ => description.clone(),
         };
 
+        let prompt_token_estimate = effective_description
+            .split_whitespace()
+            .count()
+            .saturating_mul(2);
+
         let _ = dispatcher
             .publish(AgentEvent::ModelRequest {
                 provider: model.clone(),
                 prompt_ref: agent007_core::types::PromptRef::new(),
-                token_estimate: effective_description
-                    .split_whitespace()
-                    .count()
-                    .saturating_mul(2),
+                token_estimate: prompt_token_estimate,
             })
             .await;
 
@@ -447,6 +470,8 @@ impl SubOrchestrator {
                 WorkerOutput {
                     worker_name,
                     subtask: description,
+                    token_estimate: prompt_token_estimate
+                        .saturating_add(resp.content.split_whitespace().count()),
                     output: resp.content,
                     blocker: None,
                 }
@@ -466,6 +491,7 @@ impl SubOrchestrator {
                     subtask: description,
                     output: String::new(),
                     blocker: Some(reason),
+                    token_estimate: prompt_token_estimate,
                 }
             }
         }
@@ -495,14 +521,36 @@ impl SubOrchestrator {
             });
 
         // ── Phase 1: run parallel workers concurrently ───────────────────────
-        let model = self.def.model.clone().unwrap_or_else(|| "default".into());
         let mut set: JoinSet<WorkerOutput> = JoinSet::new();
+        let mut immediate_results = Vec::new();
 
         for sub in parallel_subs {
-            let system = self.build_worker_system(&sub.worker_name);
+            let context = match self.build_worker_context(&sub.worker_name) {
+                Ok(context) => context,
+                Err(e) => {
+                    let reason = e.to_string();
+                    let _ = self
+                        .dispatcher
+                        .publish(AgentEvent::WorkerBlocked {
+                            agent_id: parent_id.clone(),
+                            worker_name: sub.worker_name.clone(),
+                            subtask: sub.description.clone(),
+                            reason: reason.clone(),
+                        })
+                        .await;
+                    immediate_results.push(WorkerOutput {
+                        worker_name: sub.worker_name,
+                        subtask: sub.description,
+                        output: String::new(),
+                        blocker: Some(reason),
+                        token_estimate: 0,
+                    });
+                    continue;
+                }
+            };
             let router = Arc::clone(&self.model_router);
             let dispatcher = Arc::clone(&self.dispatcher);
-            let model = model.clone();
+            let model = context.model;
             let run_agent_id = parent_id.clone();
             let worker_name = sub.worker_name.clone();
             let description = sub.description.clone();
@@ -513,13 +561,13 @@ impl SubOrchestrator {
                 model,
                 worker_name,
                 description,
-                system,
+                context.system,
                 None,
                 run_agent_id,
             ));
         }
 
-        let mut results = Vec::new();
+        let mut results = immediate_results;
         while let Some(res) = set.join_next().await {
             match res {
                 Ok(output) => results.push(output),
@@ -532,7 +580,7 @@ impl SubOrchestrator {
         // ── Phase 2: run sequential workers one-at-a-time ────────────────────
         if !sequential_subs.is_empty() {
             // Build a context string from parallel outputs for sequential workers.
-            let parallel_context: String = results
+            let mut sequential_context: String = results
                 .iter()
                 .filter(|o| o.blocker.is_none())
                 .map(|o| format!("[{}]\n{}", o.worker_name, o.output))
@@ -540,23 +588,100 @@ impl SubOrchestrator {
                 .join("\n\n---\n\n");
 
             for sub in sequential_subs {
-                let system = self.build_worker_system(&sub.worker_name);
+                let context = match self.build_worker_context(&sub.worker_name) {
+                    Ok(context) => context,
+                    Err(e) => {
+                        let reason = e.to_string();
+                        let _ = self
+                            .dispatcher
+                            .publish(AgentEvent::WorkerBlocked {
+                                agent_id: parent_id.clone(),
+                                worker_name: sub.worker_name.clone(),
+                                subtask: sub.description.clone(),
+                                reason: reason.clone(),
+                            })
+                            .await;
+                        results.push(WorkerOutput {
+                            worker_name: sub.worker_name,
+                            subtask: sub.description,
+                            output: String::new(),
+                            blocker: Some(reason),
+                            token_estimate: 0,
+                        });
+                        continue;
+                    }
+                };
                 let output = Self::execute_worker(
                     Arc::clone(&self.model_router),
                     Arc::clone(&self.dispatcher),
-                    model.clone(),
+                    context.model,
                     sub.worker_name.clone(),
                     sub.description.clone(),
-                    system,
-                    Some(parallel_context.clone()),
+                    context.system,
+                    Some(sequential_context.clone()),
                     parent_id.clone(),
                 )
                 .await;
+                if output.blocker.is_none() {
+                    if !sequential_context.is_empty() {
+                        sequential_context.push_str("\n\n---\n\n");
+                    }
+                    sequential_context
+                        .push_str(&format!("[{}]\n{}", output.worker_name, output.output));
+                }
                 results.push(output);
             }
         }
 
         results
+    }
+
+    /// When a workflow declares `workers`, that declaration is the topology.
+    /// The planner may still tailor task text per worker, but it cannot drop a
+    /// declared worker or introduce undeclared workers. Missing planner output
+    /// for a declared worker falls back to the original task.
+    fn normalize_topology(
+        &self,
+        task: &str,
+        planned: Vec<SubTask>,
+    ) -> Result<Vec<SubTask>, CustomAgentError> {
+        if self.worker_specs.is_empty() {
+            return Ok(planned);
+        }
+
+        let mut by_worker: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for subtask in planned {
+            by_worker
+                .entry(subtask.worker_name)
+                .or_default()
+                .push(subtask.description);
+        }
+
+        let allowed: HashSet<&str> = self.worker_specs.iter().map(|w| w.name.as_str()).collect();
+        for worker in by_worker.keys() {
+            if !allowed.contains(worker.as_str()) {
+                return Err(CustomAgentError::WorkerNotAllowed {
+                    name: worker.clone(),
+                });
+            }
+        }
+
+        Ok(self
+            .worker_specs
+            .iter()
+            .map(|worker| {
+                let description = by_worker
+                    .remove(&worker.name)
+                    .map(|parts| parts.join("\n\n"))
+                    .filter(|description| !description.trim().is_empty())
+                    .unwrap_or_else(|| task.to_string());
+                SubTask {
+                    worker_name: worker.name.clone(),
+                    description,
+                }
+            })
+            .collect())
     }
 
     /// Write a synthesis record to scoped memory under the key `last_run`.
@@ -606,9 +731,9 @@ fn parse_plan(
     raw: &str,
     allowed: Option<&[String]>,
 ) -> Result<Vec<(String, String)>, CustomAgentError> {
-    // Accepts two formats:
-    //   1. JSON array: [{"worker": "Coder", "subtask": "..."}]
-    //   2. Free-text fallback: treat entire raw text as single subtask for first allowed worker
+    // Accepts strict JSON only: [{"worker": "Coder", "subtask": "..."}].
+    // Free-text fallback was intentionally removed because it hid planner
+    // failures and silently routed malformed plans to the first worker.
     if let Ok(steps) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
         steps
             .iter()
@@ -624,12 +749,11 @@ fn parse_plan(
             })
             .collect()
     } else {
-        // Free-text fallback — assign to first allowed worker
-        let worker = allowed
-            .and_then(|a| a.first())
-            .cloned()
-            .unwrap_or_else(|| "default".into());
-        Ok(vec![(worker, raw.to_string())])
+        Err(CustomAgentError::ParseError {
+            path: std::path::PathBuf::from("<plan>"),
+            reason: "planner response must be a JSON array of {worker, subtask} objects"
+                .to_string(),
+        })
     }
 }
 
@@ -637,7 +761,7 @@ fn parse_plan(
 mod tests {
     use super::*;
     use agent007_core::dispatcher::LocalDispatcher;
-    use agent007_core::persona::NoOpPersonaProvider;
+    use agent007_core::persona::{NoOpPersonaProvider, PersonaSpec};
     use agent007_memory::store::MemoryStore;
     use agent007_models::mock::MockProvider;
     use std::sync::Arc;
@@ -657,6 +781,63 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct StaticPersonaProvider {
+        personas: Vec<PersonaSpec>,
+    }
+
+    impl StaticPersonaProvider {
+        fn with_coder() -> Self {
+            Self {
+                personas: vec![PersonaSpec {
+                    name: "Coder".to_string(),
+                    description: "test coder".to_string(),
+                    system_prompt: "You are a test coder.".to_string(),
+                    preferred_model: "mock".to_string(),
+                    allowed_tools: vec![],
+                    memory_namespace: None,
+                    zones: None,
+                    skills: vec![],
+                    agent_type: Some("worker".to_string()),
+                    allowed_workers: None,
+                }],
+            }
+        }
+
+        fn with_workers(names: &[&str], model: &str) -> Self {
+            Self {
+                personas: names
+                    .iter()
+                    .map(|name| PersonaSpec {
+                        name: (*name).to_string(),
+                        description: format!("test worker {name}"),
+                        system_prompt: format!("You are {name}."),
+                        preferred_model: model.to_string(),
+                        allowed_tools: vec![],
+                        memory_namespace: None,
+                        zones: None,
+                        skills: vec![],
+                        agent_type: Some("worker".to_string()),
+                        allowed_workers: None,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl agent007_core::persona::PersonaProvider for StaticPersonaProvider {
+        fn get(&self, name: &str) -> Option<PersonaSpec> {
+            self.personas
+                .iter()
+                .find(|persona| persona.name == name)
+                .cloned()
+        }
+
+        fn list(&self) -> Vec<PersonaSpec> {
+            self.personas.clone()
+        }
+    }
+
     fn make_orch(def: AgentDef, depth: usize) -> SubOrchestrator {
         let dir = tempdir().unwrap();
         let inner_store = Arc::new(MemoryStore::new(dir.path()));
@@ -665,11 +846,14 @@ mod tests {
             .clone()
             .unwrap_or_else(|| def.name.clone());
         let scoped = Arc::new(inner_store.scoped(&ns));
-        let mock = Arc::new(MockProvider::new("mock response", "mock"));
+        let mock = Arc::new(MockProvider::new(
+            r#"[{"worker":"Coder","subtask":"mock subtask"}]"#,
+            "mock",
+        ));
         let mut router = ModelRouter::new("mock");
         router.register("mock", mock as Arc<dyn ModelProvider>);
         let router = Arc::new(router);
-        let personas = Arc::new(NoOpPersonaProvider);
+        let personas = Arc::new(StaticPersonaProvider::with_coder());
         let dispatcher = LocalDispatcher::new(64);
         SubOrchestrator::new(def, scoped, router, personas, dispatcher, depth, 3)
     }
@@ -759,8 +943,8 @@ mod tests {
         let scoped = Arc::new(store.scoped("ns"));
         let mock = Arc::new(MockProvider::new(
             // MockProvider returns the same text for all calls:
-            // plan call gets this → treated as free-text fallback → Coder worker
-            "mock response",
+            // plan call gets this strict JSON plan → Coder worker
+            r#"[{"worker":"Coder","subtask":"mock subtask"}]"#,
             "mock",
         ));
         let mut router = ModelRouter::new("mock");
@@ -774,7 +958,7 @@ mod tests {
             def,
             scoped,
             router,
-            Arc::new(NoOpPersonaProvider),
+            Arc::new(StaticPersonaProvider::with_coder()),
             dispatcher,
             0,
             3,
@@ -1143,7 +1327,7 @@ mod tests {
     async fn dispatch_parallel_with_worker_skills_completes_without_error() {
         // Smoke test: dispatch_parallel must not panic or error when WorkerSpecs
         // carry skill triggers (even if NoOpSkillContentProvider returns None for them).
-        use agent007_core::persona::{NoOpPersonaProvider, PersonaSpec};
+        use agent007_core::persona::NoOpPersonaProvider;
 
         let dir = tempdir().unwrap();
         let store = Arc::new(MemoryStore::new(dir.path()));
@@ -1366,7 +1550,6 @@ mod tests {
     /// combined output as a context prefix.
     #[tokio::test]
     async fn dispatch_parallel_sequential_workers_receive_parallel_context() {
-        use agent007_core::persona::{NoOpPersonaProvider, PersonaSpec};
         use agent007_models::types::{CompletionRequest, CompletionResponse};
         use agent007_models::{ModelError, ModelProvider};
         use async_trait::async_trait;
@@ -1436,7 +1619,10 @@ mod tests {
             Arc::new(agent007_skills::NoOpSkillContentProvider),
             scoped,
             router,
-            Arc::new(NoOpPersonaProvider),
+            Arc::new(StaticPersonaProvider::with_workers(
+                &["ParWorker", "SeqWorker"],
+                "recording",
+            )),
             dispatcher,
             0,
             3,

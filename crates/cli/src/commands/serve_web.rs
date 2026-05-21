@@ -9,7 +9,7 @@ use crate::commands::run::{
     selected_runtime_model, selected_runtime_provider, standalone_mode_available,
 };
 use crate::config::Config;
-use agent007_web::WebServer;
+use agent007_web::{dashboard_bind_addr, WebServer};
 
 pub const DEFAULT_PORT: u16 = 8007;
 
@@ -31,7 +31,10 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
     let actual_port = registry.resolve_port(&cwd, port).await;
     PortRegistry::register(&cwd, actual_port);
 
-    tracing::info!("agent007 web dashboard starting on http://0.0.0.0:{actual_port}");
+    tracing::info!(
+        "agent007 web dashboard starting on http://{}",
+        dashboard_bind_addr(actual_port)
+    );
     let standalone_mode = standalone_mode_available(&config);
     let runtime_mode = runtime_mode_label(&config).to_string();
     let provider_label = match (
@@ -131,7 +134,7 @@ impl PortRegistry {
             if used_ports.contains(&port) {
                 continue;
             }
-            let addr = format!("0.0.0.0:{port}");
+            let addr = dashboard_bind_addr(port);
             if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
                 drop(listener);
                 return port;
@@ -178,6 +181,38 @@ fn discover_project_root(from: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarRestore {
+        key: &'static str,
+        value: Option<String>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let restore = Self {
+                key,
+                value: std::env::var(key).ok(),
+            };
+            std::env::set_var(key, value);
+            restore
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn default_port_is_8007() {
@@ -212,9 +247,12 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_port_skips_ports_used_by_other_projects() {
+        let _guard = env_lock().lock().unwrap();
+        let _env_restore = EnvVarRestore::set("AGENT007_DASHBOARD_HOST", "127.0.0.1");
+
         let dir = tempfile::tempdir().unwrap();
-        // Bind 8007 so it's occupied
-        let _listener = tokio::net::TcpListener::bind("0.0.0.0:19999")
+        // Bind the preferred dashboard address so it's occupied.
+        let _listener = tokio::net::TcpListener::bind(dashboard_bind_addr(19999))
             .await
             .unwrap();
         let mut registry = PortRegistry {

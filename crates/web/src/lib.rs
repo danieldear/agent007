@@ -10,4 +10,4 @@ pub mod tool_registry;
 pub mod ws;
 
 pub use error::WebError;
-pub use server::WebServer;
+pub use server::{dashboard_bind_addr, dashboard_bind_host, WebServer};

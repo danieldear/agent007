@@ -1,5 +1,5 @@
 use agent007_core::dispatcher::LocalDispatcher;
-use agent007_core::persona::PersonaProvider;
+use agent007_core::persona::{PersonaProvider, PersonaSpec};
 use agent007_custom_agents::{
     AgentDef, AgentRegistry, AgentType, CustomAgentError, SubOrchestrator,
 };
@@ -128,26 +128,36 @@ pub async fn execute(
             println!("{}", inspect_agent(&registry, &name)?);
         }
         AgentAction::Run { name, task } => {
-            let def = registry
-                .get(&name)
-                .ok_or_else(|| CustomAgentError::NotFound { name: name.clone() })?
-                .clone();
+            let orch = if let Some(persona) = persona_registry.get(&name) {
+                build_persona_orchestrator(
+                    persona,
+                    Arc::clone(&memory_store),
+                    model_router,
+                    persona_registry,
+                    dispatcher as Arc<dyn agent007_core::dispatcher::Dispatcher>,
+                )?
+            } else {
+                let def = registry
+                    .get(&name)
+                    .ok_or_else(|| CustomAgentError::NotFound { name: name.clone() })?
+                    .clone();
 
-            let ns = def
-                .memory_namespace
-                .clone()
-                .unwrap_or_else(|| def.name.clone());
-            let scoped = Arc::new(memory_store.scoped(&ns));
+                let ns = def
+                    .memory_namespace
+                    .clone()
+                    .unwrap_or_else(|| def.name.clone());
+                let scoped = Arc::new(memory_store.scoped(&ns));
 
-            let orch = SubOrchestrator::new(
-                def,
-                scoped,
-                model_router,
-                persona_registry,
-                dispatcher as Arc<dyn agent007_core::dispatcher::Dispatcher>,
-                0,
-                3,
-            );
+                SubOrchestrator::new(
+                    def,
+                    scoped,
+                    model_router,
+                    persona_registry,
+                    dispatcher as Arc<dyn agent007_core::dispatcher::Dispatcher>,
+                    0,
+                    3,
+                )
+            };
 
             println!("🤖 Running agent '{name}' …\n   Task: {task}\n");
             match orch.run(&task).await {
@@ -283,4 +293,46 @@ mod tests {
         assert_eq!(def.name, "NewAgent");
         assert_eq!(def.memory_namespace.as_deref(), Some("new-ns"));
     }
+}
+
+fn build_persona_orchestrator(
+    persona: PersonaSpec,
+    memory_store: Arc<MemoryStore>,
+    model_router: Arc<ModelRouter>,
+    persona_registry: Arc<dyn PersonaProvider>,
+    dispatcher: Arc<dyn agent007_core::dispatcher::Dispatcher>,
+) -> anyhow::Result<SubOrchestrator> {
+    if !matches!(
+        persona.agent_type.as_deref(),
+        Some(kind) if kind.eq_ignore_ascii_case("orchestrator")
+    ) {
+        return Err(CustomAgentError::InvalidPersonaType {
+            name: persona.name.clone(),
+            expected: "orchestrator".to_string(),
+        }
+        .into());
+    }
+    let ns = persona
+        .memory_namespace
+        .clone()
+        .unwrap_or_else(|| persona.name.clone());
+    let scoped = Arc::new(memory_store.scoped(&ns));
+    let skills_dir = agent007_core::paths::agent007_home().join("skills");
+    let skill_provider: Arc<dyn agent007_skills::SkillContentProvider> =
+        match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+            Ok(skills) => Arc::new(agent007_skills::SkillIndex::from_skills(skills)),
+            Err(_) => Arc::new(agent007_skills::NoOpSkillContentProvider),
+        };
+
+    Ok(SubOrchestrator::from_persona(
+        &persona,
+        Vec::new(),
+        skill_provider,
+        scoped,
+        model_router,
+        persona_registry,
+        dispatcher,
+        0,
+        3,
+    ))
 }
