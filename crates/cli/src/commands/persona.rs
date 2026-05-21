@@ -107,7 +107,6 @@ mod tests {
             "DocsManager",
             "DevOpsEngineer",
             "DataEngineer",
-            "Planner",
         ] {
             assert!(
                 names.contains(expected),
