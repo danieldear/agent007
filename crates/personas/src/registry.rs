@@ -26,7 +26,10 @@ impl PersonaRegistry {
         for dir in dirs {
             if dir.exists() {
                 let overrides = load_user_overrides(dir)?;
-                for spec in overrides {
+                for mut spec in overrides {
+                    if let Some(base) = registry.personas.get(&spec.name) {
+                        inherit_missing_runtime_metadata(&mut spec, base);
+                    }
                     registry.personas.insert(spec.name.clone(), spec);
                 }
             }
@@ -41,6 +44,27 @@ impl PersonaRegistry {
             personas.insert(spec.name.clone(), spec);
         }
         Self { personas }
+    }
+}
+
+fn inherit_missing_runtime_metadata(spec: &mut PersonaSpec, base: &PersonaSpec) {
+    // Existing user persona overrides created before multi-agent runtime fields
+    // should not accidentally erase built-in topology. Keep human-authored
+    // prompt/model/tool overrides, but inherit missing orchestration metadata.
+    if spec.skills.is_empty() {
+        spec.skills = base.skills.clone();
+    }
+    if spec.agent_type.is_none() {
+        spec.agent_type = base.agent_type.clone();
+    }
+    if spec.allowed_workers.is_none() {
+        spec.allowed_workers = base.allowed_workers.clone();
+    }
+    if spec.memory_namespace.is_none() {
+        spec.memory_namespace = base.memory_namespace.clone();
+    }
+    if spec.zones.is_none() {
+        spec.zones = base.zones.clone();
     }
 }
 
@@ -79,7 +103,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -98,9 +122,9 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
-            allowed_workers: None,
+            skills: vec!["dev-architect".to_string()],
+            agent_type: Some("orchestrator".to_string()),
+            allowed_workers: Some(vec!["Coder".to_string(), "CodeReviewer".to_string(), "TestDesigner".to_string(), "SecurityReviewer".to_string(), "PerformanceEngineer".to_string(), "DocumentationWriter".to_string()]),
         },
         PersonaSpec {
             name: "Coder".to_string(),
@@ -120,8 +144,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["code-refactor".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -142,8 +166,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["code-test-gen".to_string(), "dev-tdd".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -164,8 +188,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["code-security-audit".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -184,8 +208,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["code-optimize".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -206,8 +230,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["code-document".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -229,7 +253,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -251,8 +275,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["dev-debug".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -272,8 +296,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["dev-pr-review".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -298,7 +322,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -323,8 +347,8 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
-            agent_type: None,
+            skills: vec!["frontend-designer".to_string()],
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -349,7 +373,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -375,7 +399,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
         PersonaSpec {
@@ -398,7 +422,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             memory_namespace: None,
             zones: None,
             skills: vec![],
-            agent_type: None,
+            agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
     ]
@@ -529,6 +553,34 @@ allowed_tools = ["bash"]
         let coder = registry.get("Coder").unwrap();
         assert_eq!(coder.preferred_model, "claude"); // overridden
         assert_eq!(coder.description, "Overridden coder");
+        assert_eq!(coder.agent_type.as_deref(), Some("worker"));
+        assert_eq!(coder.skills, vec!["code-refactor"]);
+    }
+
+    #[test]
+    fn old_builtin_override_inherits_orchestration_metadata() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("architect.toml"),
+            r#"
+name = "Architect"
+description = "Custom architect"
+system_prompt = "Custom architect prompt."
+preferred_model = "claude"
+allowed_tools = ["file_read"]
+"#,
+        )
+        .unwrap();
+
+        let registry = PersonaRegistry::load(dir.path()).unwrap();
+        let architect = registry.get("Architect").unwrap();
+        assert_eq!(architect.description, "Custom architect");
+        assert_eq!(architect.agent_type.as_deref(), Some("orchestrator"));
+        assert_eq!(architect.skills, vec!["dev-architect"]);
+        assert!(architect
+            .allowed_workers
+            .as_ref()
+            .is_some_and(|workers| workers.contains(&"Coder".to_string())));
     }
 
     #[test]

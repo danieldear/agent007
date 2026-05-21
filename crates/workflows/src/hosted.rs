@@ -614,7 +614,7 @@ impl HostedWorkflowEngine {
         step: &StepDef,
     ) -> Result<HostedWorkflowStep, WorkflowError> {
         let prompt_template = load_step_template(step)?;
-        let prompt =
+        let mut prompt =
             render_prompt(&prompt_template, &state.task, &state.outputs).map_err(|error| {
                 WorkflowError::TemplateError {
                     id: step.id.clone(),
@@ -622,6 +622,24 @@ impl HostedWorkflowEngine {
                 }
             })?;
         let persona = self.persona_provider.get(&step.agent);
+        if step.r#type == StepType::MultiAgent {
+            if !matches!(
+                persona.as_ref().and_then(|persona| persona.agent_type.as_deref()),
+                Some(kind) if kind.eq_ignore_ascii_case("orchestrator")
+            ) {
+                return Err(WorkflowError::StepFailed {
+                    id: step.id.clone(),
+                    reason: format!(
+                        "persona '{}' must have agent_type = 'orchestrator' for hosted multi-agent step",
+                        step.agent
+                    ),
+                });
+            }
+            prompt.push_str(&hosted_multi_agent_instructions(
+                step,
+                &*self.persona_provider,
+            )?);
+        }
         let model_hint = if let Some(model) = &step.model {
             model.clone()
         } else if let Some(persona) = &persona {
@@ -1162,6 +1180,68 @@ fn sorted_keys(outputs: &HashMap<String, String>) -> Vec<String> {
     let mut keys = outputs.keys().cloned().collect::<Vec<_>>();
     keys.sort();
     keys
+}
+
+fn hosted_multi_agent_instructions(
+    step: &StepDef,
+    persona_provider: &dyn PersonaProvider,
+) -> Result<String, WorkflowError> {
+    let workers = step
+        .workers
+        .as_ref()
+        .ok_or_else(|| WorkflowError::StepFailed {
+            id: step.id.clone(),
+            reason: "multi-agent hosted step is missing workers".to_string(),
+        })?;
+
+    let mut lines = Vec::new();
+    for worker in workers {
+        let persona =
+            persona_provider
+                .get(&worker.persona)
+                .ok_or_else(|| WorkflowError::StepFailed {
+                    id: step.id.clone(),
+                    reason: format!(
+                        "worker persona '{}' not found for hosted multi-agent step",
+                        worker.persona
+                    ),
+                })?;
+        if matches!(
+            persona.agent_type.as_deref(),
+            Some(kind) if !kind.eq_ignore_ascii_case("worker")
+        ) {
+            return Err(WorkflowError::StepFailed {
+                id: step.id.clone(),
+                reason: format!(
+                    "worker persona '{}' must have agent_type = 'worker'",
+                    worker.persona
+                ),
+            });
+        }
+        let skills = if worker.skills.is_empty() {
+            "none".to_string()
+        } else {
+            worker.skills.join(", ")
+        };
+        lines.push(format!(
+            "- persona: `{}` | run: `{:?}` | model: `{}` | skills: {}",
+            worker.persona, worker.run, persona.preferred_model, skills
+        ));
+    }
+
+    Ok(format!(
+        "\n\n---\n\
+         ## Hosted multi-agent dispatch\n\
+         This is a `multi-agent` workflow step. Execute the declared worker topology explicitly; do not collapse it into a single generic response.\n\
+         Workers:\n{}\n\n\
+         Required execution rules:\n\
+         1. Run every `parallel` worker against the step task.\n\
+         2. Then run every `sequential` worker in declaration order.\n\
+         3. Pass prior parallel and sequential worker outputs as context to later sequential workers.\n\
+         4. Preserve each worker's persona/model/skills in your final output.\n\
+         5. If a worker is blocked, report the blocker under that worker instead of silently skipping it.\n",
+        lines.join("\n")
+    ))
 }
 
 #[cfg(test)]

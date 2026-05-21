@@ -2,8 +2,8 @@
 
 This document lists known security gaps in the current codebase, their severity for enterprise/office deployment, and what work is needed to close each one. It is maintained by the project team. Gaps are closed by removing them from this list and updating `SECURITY.md` accordingly.
 
-**Last updated:** 2026-05-18  
-**Current version:** 0.2.0
+**Last updated:** 2026-05-21
+**Current version:** 0.3.1
 
 ---
 
@@ -17,15 +17,15 @@ This project was flagged by an enterprise security review citing weak code, miss
 
 | # | Gap | Severity | Effort | Status | Category |
 |---|---|---|---|---|---|
-| 1 | Web dashboard has no authentication | Critical | Medium | Open | Auth |
-| 2 | Web server binds `0.0.0.0` by default | Critical | Low | Open | Network |
+| 1 | Web dashboard has no authentication | Critical | Medium | Partial | Auth |
+| 2 | Web server binds `0.0.0.0` by default | Critical | Low | Fixed | Network |
 | 3 | Path traversal in memory key parameter | High | Low | Open | Input Validation |
 | 4 | SSRF in skill discovery source expansion | High | Medium | Open | SSRF |
 | 5 | Skill import can write outside intended directory | High | Low | Open | Path Traversal |
 | 6 | Skill execution sandbox unenforced post-approval | High | High | Open | Execution |
 | 7 | Provider credentials can appear in logs | High | Low | Open | Secrets |
 | 8 | Data sent to third-party LLM providers (IP risk) | High | High | Open | IP / Data |
-| 9 | No request body size limits (DoS) | Medium | Low | Open | DoS |
+| 9 | No request body size limits (DoS) | Medium | Low | Fixed | DoS |
 | 10 | Skill registry fetches from unpinned `main` branch | Medium | Low | Open | Supply Chain |
 | 11 | Extension installer has no signature verification | Medium | High | Open | Supply Chain |
 | 12 | Zone checker is opt-in, not enforced by default | Medium | Medium | Open | Access Control |
@@ -65,10 +65,16 @@ Anyone on the same network segment (office LAN, shared Wi-Fi, corporate network)
 - Run behind a localhost-only reverse proxy with basic auth if remote access is needed
 
 **Work needed to close this gap:**
-- Add a configurable static bearer token (set via `AGENT007_DASHBOARD_TOKEN` env var or `config.toml`)
-- Apply the token check as an Axum middleware layer before all `/api/*` routes
+- Add a configurable static bearer token (set via `AGENT007_DASHBOARD_AUTH_TOKEN` env var or `config.toml`)
+- Apply the token check as an Axum middleware layer before all dashboard/static/API/websocket routes
 - Optionally: add an `--auth-token <token>` CLI flag to `serve` command
 - Document the token requirement in `SECURITY.md` and `docs/configuration.md`
+
+**Progress as of 2026-05-21:**
+- Added optional dashboard auth with `AGENT007_DASHBOARD_AUTH_TOKEN`.
+- Auth accepts `Authorization: Bearer <token>`, browser-friendly Basic auth, and `x-agent007-token`.
+- `/health` and `/api/health` remain unauthenticated for local health checks.
+- Still **partial**, not closed, because auth is opt-in and needs config-file/CLI UX plus docs before enterprise hardening can treat it as a default control.
 
 ---
 
@@ -88,6 +94,11 @@ Use `--no-dashboard` or firewall the port.
 - Change the default bind address to `127.0.0.1` (localhost only)
 - Add a `--bind <addr>` CLI flag to `serve` and `serve-web` commands so operators who need LAN/remote access can opt in explicitly
 - Update `docs/configuration.md` with the flag documentation
+
+**Progress as of 2026-05-21:**
+- Default dashboard bind host is now `127.0.0.1`.
+- Operators can opt into another host with `AGENT007_DASHBOARD_HOST`.
+- Remaining follow-up: document the env var and consider a typed CLI/config field for managed deployments.
 
 ---
 
@@ -241,6 +252,12 @@ use axum::extract::DefaultBodyLimit;
 let router = router.layer(DefaultBodyLimit::max(4 * 1024 * 1024)); // 4 MB
 ```
 Individual endpoints that legitimately need larger bodies (e.g., bundle import) can override with `axum::extract::RequestBodyLimitLayer`.
+
+**Progress as of 2026-05-21:**
+- Added an Axum `DefaultBodyLimit` to the dashboard router.
+- Default limit is 32 MiB to avoid breaking bundle import flows.
+- Operators can override with `AGENT007_DASHBOARD_MAX_BODY_BYTES`.
+- Remaining follow-up: add end-to-end oversized bundle/import regression tests and document the env var.
 
 ---
 

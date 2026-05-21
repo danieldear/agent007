@@ -63,6 +63,7 @@ pub struct SubTaskResult {
     pub files_changed: Vec<PathBuf>,
     pub tests_passed: bool,
     pub blockers: Vec<String>,
+    pub token_estimate: usize,
 }
 
 #[cfg(test)]

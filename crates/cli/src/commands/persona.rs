@@ -28,10 +28,19 @@ pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction)
             if personas.is_empty() {
                 println!("No personas available.");
             } else {
-                println!("{:<22} {:<10} {}", "NAME", "MODEL", "DESCRIPTION");
-                println!("{}", "-".repeat(72));
+                println!(
+                    "{:<22} {:<14} {:<10} {}",
+                    "NAME", "TYPE", "MODEL", "DESCRIPTION"
+                );
+                println!("{}", "-".repeat(88));
                 for p in personas {
-                    println!("{:<22} {:<10} {}", p.name, p.preferred_model, p.description);
+                    println!(
+                        "{:<22} {:<14} {:<10} {}",
+                        p.name,
+                        p.agent_type.as_deref().unwrap_or("worker"),
+                        p.preferred_model,
+                        p.description
+                    );
                 }
             }
         }
@@ -40,6 +49,22 @@ pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction)
                 println!("Name:            {}", spec.name);
                 println!("Model:           {}", spec.preferred_model);
                 println!("Description:     {}", spec.description);
+                println!(
+                    "Agent type:      {}",
+                    spec.agent_type.as_deref().unwrap_or("worker")
+                );
+                println!(
+                    "Memory ns:       {}",
+                    spec.memory_namespace.as_deref().unwrap_or(&spec.name)
+                );
+                if let Some(workers) = &spec.allowed_workers {
+                    if !workers.is_empty() {
+                        println!("Allowed workers: {}", workers.join(", "));
+                    }
+                }
+                if !spec.skills.is_empty() {
+                    println!("Skills:          {}", spec.skills.join(", "));
+                }
                 if !spec.allowed_tools.is_empty() {
                     println!("Allowed tools:   {}", spec.allowed_tools.join(", "));
                 }

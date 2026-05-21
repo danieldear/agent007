@@ -230,6 +230,19 @@ fn toml_top_level_version(path: &FsPath) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn toml_string_array(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn read_existing_persona(path: &FsPath) -> Option<agent007_core::PersonaSpec> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    toml::from_str::<agent007_core::PersonaSpec>(&raw).ok()
+}
+
 impl ProviderReadinessResponse {
     pub fn from_runtime(
         standalone_available: bool,
@@ -2163,6 +2176,11 @@ pub struct PersonaSaveRequest {
     pub preferred_model: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub system_prompt: Option<String>,
+    pub memory_namespace: Option<String>,
+    pub zones: Option<agent007_zones::ZoneConfig>,
+    pub skills: Option<Vec<String>>,
+    pub agent_type: Option<String>,
+    pub allowed_workers: Option<Vec<String>>,
 }
 
 pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
@@ -2197,6 +2215,11 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
                         "preferred_model": p.preferred_model,
                         "allowed_tools": p.allowed_tools,
                         "system_prompt": p.system_prompt,
+                        "memory_namespace": p.memory_namespace,
+                        "zones": p.zones,
+                        "skills": p.skills,
+                        "agent_type": p.agent_type,
+                        "allowed_workers": p.allowed_workers,
                         "source": source_label,
                         "version": version,
                     }));
@@ -2216,6 +2239,11 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
                 "preferred_model": p.preferred_model,
                 "allowed_tools": p.allowed_tools,
                 "system_prompt": p.system_prompt,
+                "memory_namespace": p.memory_namespace,
+                "zones": p.zones,
+                "skills": p.skills,
+                "agent_type": p.agent_type,
+                "allowed_workers": p.allowed_workers,
                 "source": "global",
                 "version": "1.0.0",
             }));
@@ -2252,30 +2280,95 @@ pub async fn persona_save_handler(
         .to_lowercase();
     let path = personas_dir.join(format!("{filename}.toml"));
 
-    let tools = payload.allowed_tools.unwrap_or_default();
-    let tools_str = tools
-        .iter()
-        .map(|t| format!("\"{t}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let model = payload.preferred_model.as_deref().unwrap_or("codex");
-    let prompt = payload.system_prompt.as_deref().unwrap_or("");
+    let existing = read_existing_persona(&path);
+    let tools = payload
+        .allowed_tools
+        .or_else(|| existing.as_ref().map(|p| p.allowed_tools.clone()))
+        .unwrap_or_default();
+    let skills = payload
+        .skills
+        .or_else(|| existing.as_ref().map(|p| p.skills.clone()))
+        .unwrap_or_default();
+    let allowed_workers = payload
+        .allowed_workers
+        .or_else(|| existing.as_ref().and_then(|p| p.allowed_workers.clone()));
+    let memory_namespace = payload
+        .memory_namespace
+        .or_else(|| existing.as_ref().and_then(|p| p.memory_namespace.clone()));
+    let agent_type = payload
+        .agent_type
+        .or_else(|| existing.as_ref().and_then(|p| p.agent_type.clone()));
+    let zones = payload
+        .zones
+        .or_else(|| existing.as_ref().and_then(|p| p.zones.clone()));
+    let tools_str = toml_string_array(&tools);
+    let skills_str = toml_string_array(&skills);
+    let workers_str = allowed_workers
+        .as_ref()
+        .map(|workers| toml_string_array(workers));
+    let model = payload
+        .preferred_model
+        .as_deref()
+        .or_else(|| existing.as_ref().map(|p| p.preferred_model.as_str()))
+        .unwrap_or("codex");
+    let prompt = payload
+        .system_prompt
+        .as_deref()
+        .or_else(|| existing.as_ref().map(|p| p.system_prompt.as_str()))
+        .unwrap_or("");
     let version = initial_or_incremented_version(toml_top_level_version(&path).as_deref(), None);
 
-    let content = format!(
+    let mut content = format!(
         "name            = \"{}\"\n\
          version         = \"{}\"\n\
          description     = \"{}\"\n\
          preferred_model = \"{}\"\n\
-         allowed_tools   = [{}]\n\n\
-         system_prompt   = \"\"\"\n{}\n\"\"\"\n",
+         allowed_tools   = [{}]\n\
+         skills          = [{}]\n",
         payload.name,
         version,
         payload.description.replace('"', "\\\""),
         model,
         tools_str,
-        prompt,
+        skills_str,
     );
+    if let Some(agent_type) = agent_type {
+        content.push_str(&format!(
+            "agent_type      = \"{}\"\n",
+            agent_type.replace('"', "\\\"")
+        ));
+    }
+    if let Some(memory_namespace) = memory_namespace {
+        content.push_str(&format!(
+            "memory_namespace = \"{}\"\n",
+            memory_namespace.replace('"', "\\\"")
+        ));
+    }
+    if let Some(workers_str) = workers_str {
+        content.push_str(&format!("allowed_workers = [{workers_str}]\n"));
+    }
+    if let Some(zones) = zones {
+        content.push_str("\n[zones]\n");
+        if !zones.forbidden.is_empty() {
+            content.push_str(&format!(
+                "forbidden = [{}]\n",
+                toml_string_array(&zones.forbidden)
+            ));
+        }
+        if !zones.readonly.is_empty() {
+            content.push_str(&format!(
+                "readonly = [{}]\n",
+                toml_string_array(&zones.readonly)
+            ));
+        }
+        if !zones.sensitive.is_empty() {
+            content.push_str(&format!(
+                "sensitive = [{}]\n",
+                toml_string_array(&zones.sensitive)
+            ));
+        }
+    }
+    content.push_str(&format!("\nsystem_prompt   = \"\"\"\n{}\n\"\"\"\n", prompt));
 
     match std::fs::write(&path, &content) {
         Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() }))

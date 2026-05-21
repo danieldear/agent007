@@ -30,6 +30,7 @@ use crate::config::Config;
 
 use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::events::AgentEvent;
+use agent007_core::persona::PersonaSpec;
 use agent007_core::types::PromptRef;
 use agent007_hooks::{HookConfig, HookEvent, HookExecutor};
 use agent007_learning::LearningDispatcher;
@@ -729,6 +730,24 @@ impl Agent007Server {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "Tools this agent can use (e.g. bash, file_read, file_write)"
+                        },
+                        "skills": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Default skill triggers injected for this persona"
+                        },
+                        "agent_type": {
+                            "type": "string",
+                            "description": "'worker' or 'orchestrator'"
+                        },
+                        "allowed_workers": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Worker persona names allowed when this persona is an orchestrator"
+                        },
+                        "memory_namespace": {
+                            "type": "string",
+                            "description": "Optional memory namespace for this persona"
                         }
                     },
                     "required": ["action"]
@@ -1311,8 +1330,16 @@ impl ServerHandler for Agent007Server {
                             spec.allowed_tools.join(", ")
                         };
                         let text = format!(
-                            "Name: {}\nModel: {}\nDescription: {}\nAllowed tools: {}\n\nSystem prompt:\n{}",
-                            spec.name, spec.preferred_model, spec.description, tools, spec.system_prompt
+                            "Name: {}\nModel: {}\nDescription: {}\nAgent type: {}\nMemory namespace: {}\nAllowed workers: {}\nSkills: {}\nAllowed tools: {}\n\nSystem prompt:\n{}",
+                            spec.name,
+                            spec.preferred_model,
+                            spec.description,
+                            spec.agent_type.as_deref().unwrap_or("worker"),
+                            spec.memory_namespace.as_deref().unwrap_or(&spec.name),
+                            spec.allowed_workers.clone().unwrap_or_default().join(", "),
+                            spec.skills.join(", "),
+                            tools,
+                            spec.system_prompt
                         );
                         Ok(CallToolResult::success(vec![Content::text(text)]))
                     }
@@ -1739,18 +1766,37 @@ impl ServerHandler for Agent007Server {
                             "preferred_model",
                             default_provider.as_str(),
                         );
-                        let allowed_tools = request
+                        let allowed_tools =
+                            optional_string_array_arg(request.arguments.as_ref(), "allowed_tools");
+                        let skills =
+                            optional_string_array_arg(request.arguments.as_ref(), "skills");
+                        let allowed_workers = optional_string_array_arg(
+                            request.arguments.as_ref(),
+                            "allowed_workers",
+                        );
+                        let agent_type = request
                             .arguments
                             .as_ref()
-                            .and_then(|a| a.get("allowed_tools"))
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        match agent_save(&name, &description, &system_prompt, &preferred_model, &allowed_tools) {
+                            .and_then(|a| a.get("agent_type"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        let memory_namespace = request
+                            .arguments
+                            .as_ref()
+                            .and_then(|a| a.get("memory_namespace"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        match agent_save(
+                            &name,
+                            &description,
+                            &system_prompt,
+                            &preferred_model,
+                            allowed_tools.as_deref(),
+                            skills.as_deref(),
+                            agent_type.as_deref(),
+                            allowed_workers.as_deref(),
+                            memory_namespace.as_deref(),
+                        ) {
                             Ok(path) => Ok(CallToolResult::success(vec![Content::text(
                                 format!("Agent '{}' saved to {}. It is now available for workflows and orchestration.", name, path)
                             )])),
@@ -1967,23 +2013,6 @@ impl ServerHandler for Agent007Server {
                 let name = extract_string(request.arguments.as_ref(), "name")?;
                 let task = extract_string(request.arguments.as_ref(), "task")?;
 
-                let agents_dir = agent007_home().join("agents");
-                let registry = Arc::new(
-                    agent007_custom_agents::AgentRegistry::load(&agents_dir)
-                        .unwrap_or_else(|_| agent007_custom_agents::AgentRegistry::empty()),
-                );
-
-                let def = match registry.get(&name) {
-                    Some(d) => d.clone(),
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Agent '{}' not found. \
-                             Use `agent007 agent list` (CLI) or inspect ~/.agent007/agents/.",
-                            name
-                        ))]));
-                    }
-                };
-
                 let stack = match build_stack(&self.config).await {
                     Ok(s) => s,
                     Err(e) => {
@@ -1992,12 +2021,6 @@ impl ServerHandler for Agent007Server {
                         ))]));
                     }
                 };
-
-                let ns = def
-                    .memory_namespace
-                    .clone()
-                    .unwrap_or_else(|| def.name.clone());
-                let scoped = Arc::new(stack.memory_store.scoped(&ns));
 
                 // Prefer the server's shared dispatcher so worker events
                 // (WorkerResult/WorkerBlocked) reach the same dashboard stream
@@ -2009,15 +2032,72 @@ impl ServerHandler for Agent007Server {
                     .map(|d| d as Arc<dyn Dispatcher>)
                     .unwrap_or_else(|| stack.dispatcher as Arc<dyn Dispatcher>);
 
-                let orch = agent007_custom_agents::SubOrchestrator::new(
-                    def,
-                    scoped,
-                    stack.model_router,
-                    stack.persona_registry as Arc<dyn agent007_core::persona::PersonaProvider>,
-                    run_dispatcher,
-                    0,
-                    3,
-                );
+                let persona_provider =
+                    stack.persona_registry as Arc<dyn agent007_core::persona::PersonaProvider>;
+                let orch = if let Some(persona) = persona_provider.get(&name) {
+                    if !matches!(
+                        persona.agent_type.as_deref(),
+                        Some(kind) if kind.eq_ignore_ascii_case("orchestrator")
+                    ) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Persona '{}' must have agent_type = 'orchestrator' to run as an agent.",
+                            name
+                        ))]));
+                    }
+                    let ns = persona
+                        .memory_namespace
+                        .clone()
+                        .unwrap_or_else(|| persona.name.clone());
+                    let scoped = Arc::new(stack.memory_store.scoped(&ns));
+                    let skills_dir = agent007_home().join("skills");
+                    let skill_provider: Arc<dyn agent007_skills::SkillContentProvider> =
+                        match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                            Ok(skills) => {
+                                Arc::new(agent007_skills::SkillIndex::from_skills(skills))
+                            }
+                            Err(_) => Arc::new(agent007_skills::NoOpSkillContentProvider),
+                        };
+                    agent007_custom_agents::SubOrchestrator::from_persona(
+                        &persona,
+                        Vec::new(),
+                        skill_provider,
+                        scoped,
+                        stack.model_router,
+                        persona_provider,
+                        run_dispatcher,
+                        0,
+                        3,
+                    )
+                } else {
+                    let agents_dir = agent007_home().join("agents");
+                    let registry = Arc::new(
+                        agent007_custom_agents::AgentRegistry::load(&agents_dir)
+                            .unwrap_or_else(|_| agent007_custom_agents::AgentRegistry::empty()),
+                    );
+                    let def = match registry.get(&name) {
+                        Some(d) => d.clone(),
+                        None => {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Agent or orchestrator persona '{}' not found.",
+                                name
+                            ))]));
+                        }
+                    };
+                    let ns = def
+                        .memory_namespace
+                        .clone()
+                        .unwrap_or_else(|| def.name.clone());
+                    let scoped = Arc::new(stack.memory_store.scoped(&ns));
+                    agent007_custom_agents::SubOrchestrator::new(
+                        def,
+                        scoped,
+                        stack.model_router,
+                        persona_provider,
+                        run_dispatcher,
+                        0,
+                        3,
+                    )
+                };
 
                 let aid = agent007_core::types::AgentId::new();
                 let core_task = agent007_core::Task::new(&format!("agent:{name}:{task}"));
@@ -2116,6 +2196,19 @@ fn optional_string(args: Option<&Map<String, serde_json::Value>>, key: &str) -> 
     args.and_then(|a| a.get(key))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+fn optional_string_array_arg(
+    args: Option<&Map<String, serde_json::Value>>,
+    key: &str,
+) -> Option<Vec<String>> {
+    args.and_then(|a| a.get(key))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
 }
 
 fn string_or_default(
@@ -5167,6 +5260,11 @@ fn agent_catalog() -> String {
                 "description": p.description,
                 "preferred_model": p.preferred_model,
                 "allowed_tools": p.allowed_tools,
+                "skills": p.skills,
+                "agent_type": p.agent_type,
+                "allowed_workers": p.allowed_workers,
+                "memory_namespace": p.memory_namespace,
+                "zones": p.zones,
                 "system_prompt": p.system_prompt,
             })
         })
@@ -5190,7 +5288,11 @@ fn agent_save(
     description: &str,
     system_prompt: &str,
     preferred_model: &str,
-    allowed_tools: &[String],
+    allowed_tools: Option<&[String]>,
+    skills: Option<&[String]>,
+    agent_type: Option<&str>,
+    allowed_workers: Option<&[String]>,
+    memory_namespace: Option<&str>,
 ) -> Result<String> {
     let personas_dir = agent007_write_home().join("personas");
     std::fs::create_dir_all(&personas_dir)
@@ -5209,32 +5311,106 @@ fn agent_save(
         .to_lowercase();
     let path = personas_dir.join(format!("{filename}.toml"));
 
-    let tools_str = allowed_tools
-        .iter()
-        .map(|t| format!("\"{}\"", t))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let existing = read_existing_persona_spec(&path);
+    let allowed_tools = allowed_tools
+        .map(|values| values.to_vec())
+        .or_else(|| existing.as_ref().map(|spec| spec.allowed_tools.clone()))
+        .unwrap_or_default();
+    let skills = skills
+        .map(|values| values.to_vec())
+        .or_else(|| existing.as_ref().map(|spec| spec.skills.clone()))
+        .unwrap_or_default();
+    let allowed_workers = allowed_workers
+        .map(|values| values.to_vec())
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|spec| spec.allowed_workers.clone())
+        })
+        .unwrap_or_default();
+    let agent_type = agent_type
+        .map(str::to_string)
+        .or_else(|| existing.as_ref().and_then(|spec| spec.agent_type.clone()));
+    let memory_namespace = memory_namespace.map(str::to_string).or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|spec| spec.memory_namespace.clone())
+    });
+    let zones = existing.as_ref().and_then(|spec| spec.zones.clone());
 
-    let content = format!(
+    let mut content = format!(
         "name            = \"{}\"\n\
          description     = \"{}\"\n\
          preferred_model = \"{}\"\n\
          allowed_tools   = [{}]\n\
-         \n\
-         system_prompt   = \"\"\"\n\
-         {}\n\
-         \"\"\"\n",
+         skills          = [{}]\n",
         name,
         description.replace('"', "\\\""),
         preferred_model,
-        tools_str,
-        system_prompt,
+        toml_string_array(&allowed_tools),
+        toml_string_array(&skills),
     );
+    if let Some(agent_type) = agent_type.filter(|value| !value.trim().is_empty()) {
+        content.push_str(&format!(
+            "agent_type      = \"{}\"\n",
+            agent_type.replace('"', "\\\"")
+        ));
+    }
+    if !allowed_workers.is_empty() {
+        content.push_str(&format!(
+            "allowed_workers = [{}]\n",
+            toml_string_array(&allowed_workers)
+        ));
+    }
+    if let Some(memory_namespace) = memory_namespace.filter(|value| !value.trim().is_empty()) {
+        content.push_str(&format!(
+            "memory_namespace = \"{}\"\n",
+            memory_namespace.replace('"', "\\\"")
+        ));
+    }
+    if let Some(zones) = zones {
+        content.push_str("\n[zones]\n");
+        if !zones.forbidden.is_empty() {
+            content.push_str(&format!(
+                "forbidden = [{}]\n",
+                toml_string_array(&zones.forbidden)
+            ));
+        }
+        if !zones.readonly.is_empty() {
+            content.push_str(&format!(
+                "readonly = [{}]\n",
+                toml_string_array(&zones.readonly)
+            ));
+        }
+        if !zones.sensitive.is_empty() {
+            content.push_str(&format!(
+                "sensitive = [{}]\n",
+                toml_string_array(&zones.sensitive)
+            ));
+        }
+    }
+    content.push_str(&format!(
+        "\nsystem_prompt   = \"\"\"\n{}\n\"\"\"\n",
+        system_prompt
+    ));
 
     std::fs::write(&path, &content)
         .map_err(|e| anyhow::anyhow!("failed to write persona file: {}", e))?;
 
     Ok(path.display().to_string())
+}
+
+fn toml_string_array(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("\"{}\"", value.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn read_existing_persona_spec(path: &std::path::Path) -> Option<PersonaSpec> {
+    let content = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&content).ok()
 }
 
 // ── skill wizard helpers ──────────────────────────────────────────────────

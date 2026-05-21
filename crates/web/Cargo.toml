@@ -17,6 +17,7 @@ agent007-workflows = { path = "../workflows" }
 agent007-etr       = { path = "../etr" }
 agent007-sharing   = { path = "../sharing" }
 agent007-testing   = { path = "../testing" }
+agent007-zones     = { path = "../zones" }
 axum              = { workspace = true }
 tower             = { workspace = true }
 tower-http        = { version = "0.6", features = ["fs"] }
@@ -38,6 +39,7 @@ reqwest           = { version = "0.12", features = ["json", "rustls-tls"], defau
 sha2              = "0.10"
 ts-rs             = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 anyhow            = { workspace = true }
+base64            = "0.22"
 include_dir       = "0.7"
 mime_guess        = "2"
 

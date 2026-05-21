@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::Path as AxumPath,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{Html, IntoResponse},
+    body::Body,
+    extract::{DefaultBodyLimit, Path as AxumPath, State},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
@@ -21,6 +23,10 @@ use crate::extensions_api;
 use crate::metrics::{self, MetricsState};
 use crate::ws;
 
+const DEFAULT_DASHBOARD_BIND_HOST: &str = "127.0.0.1";
+const DEFAULT_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+const AUTH_REALM: &str = r#"Basic realm="agent007 dashboard""#;
+
 /// Shared application state passed to every axum handler via `axum::extract::State`.
 #[derive(Clone)]
 pub struct AppState {
@@ -37,10 +43,13 @@ pub struct AppState {
     pub project_name: String,
     /// Full path to the project root (parent of .agent007/).
     pub project_path: String,
+    /// Optional dashboard/API auth token. When present, all non-health routes require auth.
+    pub dashboard_auth_token: Option<String>,
 }
 
 pub struct WebServer {
     state: AppState,
+    max_body_bytes: usize,
 }
 
 impl WebServer {
@@ -124,7 +133,9 @@ impl WebServer {
                 provider_readiness,
                 project_name,
                 project_path,
+                dashboard_auth_token: dashboard_auth_token_from_env(),
             },
+            max_body_bytes: dashboard_max_body_bytes_from_env(),
         }
     }
 
@@ -159,8 +170,19 @@ impl WebServer {
         // project_name/project_path are derived inside new() from agent007_write_home()
     }
 
+    #[cfg(test)]
+    pub fn new_test_with_auth_token(token: impl Into<String>) -> Self {
+        let mut server = Self::new_test();
+        server.state.dashboard_auth_token = Some(token.into());
+        server
+    }
+
     /// Build the axum `Router`.
     pub fn into_router(self) -> Router {
+        let state = self.state;
+        let max_body_bytes = self.max_body_bytes;
+        let auth_state = state.clone();
+
         Router::new()
             .route("/", get(dashboard_handler))
             .route("/health", get(health_handler))
@@ -324,12 +346,20 @@ impl WebServer {
             .route("/api/etr/cache/stats", get(api::etr_cache_stats_handler))
             .route("/api/etr/cache/clear", post(api::etr_cache_clear_handler))
             .route("/assets/{*path}", get(asset_handler))
-            .with_state(self.state)
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .layer(middleware::from_fn_with_state(
+                auth_state,
+                require_dashboard_auth,
+            ))
+            .with_state(state)
     }
 
-    /// Bind to `0.0.0.0:<port>` and serve forever (or until `cancel` fires).
+    /// Bind to the configured dashboard host and serve forever (or until `cancel` fires).
+    ///
+    /// Defaults to `127.0.0.1:<port>` so the dashboard is not exposed on the LAN
+    /// unless the operator explicitly sets `AGENT007_DASHBOARD_HOST`.
     pub async fn run(self, port: u16) -> Result<(), WebError> {
-        let addr = format!("0.0.0.0:{port}");
+        let addr = dashboard_bind_addr(port);
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| WebError::Bind {
@@ -374,7 +404,7 @@ impl WebServer {
 
         for offset in 0..max_attempts {
             let port = preferred_port.wrapping_add(offset);
-            let addr = format!("0.0.0.0:{port}");
+            let addr = dashboard_bind_addr(port);
             match tokio::net::TcpListener::bind(&addr).await {
                 Ok(listener) => {
                     tracing::info!("agent007 web server listening on http://{addr}");
@@ -393,6 +423,116 @@ impl WebServer {
         }
         unreachable!()
     }
+}
+
+/// Dashboard bind host. Defaults to localhost for safety.
+pub fn dashboard_bind_host() -> String {
+    std::env::var("AGENT007_DASHBOARD_HOST")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_DASHBOARD_BIND_HOST.to_string())
+}
+
+/// Dashboard bind address for a port.
+pub fn dashboard_bind_addr(port: u16) -> String {
+    format!("{}:{port}", dashboard_bind_host())
+}
+
+fn dashboard_auth_token_from_env() -> Option<String> {
+    std::env::var("AGENT007_DASHBOARD_AUTH_TOKEN")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn dashboard_max_body_bytes_from_env() -> usize {
+    std::env::var("AGENT007_DASHBOARD_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
+}
+
+async fn require_dashboard_auth(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(expected) = state.dashboard_auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+
+    let path = request.uri().path();
+    if path == "/health" || path == "/api/health" {
+        return next.run(request).await;
+    }
+
+    if request_is_authorized(request.headers(), expected) {
+        return next.run(request).await;
+    }
+
+    let mut response = StatusCode::UNAUTHORIZED.into_response();
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static(AUTH_REALM),
+    );
+    response
+}
+
+fn request_is_authorized(headers: &HeaderMap, expected: &str) -> bool {
+    if let Some(value) = headers
+        .get("x-agent007-token")
+        .and_then(|v| v.to_str().ok())
+    {
+        if constant_time_eq(value.as_bytes(), expected.as_bytes()) {
+            return true;
+        }
+    }
+
+    let Some(auth) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+
+    if let Some(token) = auth.strip_prefix("Bearer ") {
+        return constant_time_eq(token.trim().as_bytes(), expected.as_bytes());
+    }
+
+    if let Some(encoded) = auth.strip_prefix("Basic ") {
+        return basic_auth_password_matches(encoded.trim(), expected);
+    }
+
+    false
+}
+
+fn basic_auth_password_matches(encoded: &str, expected: &str) -> bool {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let Ok(decoded) = STANDARD.decode(encoded) else {
+        return false;
+    };
+    let Ok(decoded) = String::from_utf8(decoded) else {
+        return false;
+    };
+    let Some((_, password)) = decoded.split_once(':') else {
+        return false;
+    };
+    constant_time_eq(password.as_bytes(), expected.as_bytes())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    let max_len = a.len().max(b.len());
+    for i in 0..max_len {
+        let av = a.get(i).copied().unwrap_or(0);
+        let bv = b.get(i).copied().unwrap_or(0);
+        diff |= (av ^ bv) as usize;
+    }
+    diff == 0
 }
 
 async fn dashboard_handler() -> impl IntoResponse {
@@ -453,5 +593,53 @@ mod tests {
         let body = response.text();
         assert!(body.contains("agent007"), "dashboard must mention agent007");
         assert!(body.contains("<html"), "response must be HTML");
+    }
+
+    #[tokio::test]
+    async fn health_check_bypasses_dashboard_auth() {
+        let server = WebServer::new_test_with_auth_token("secret");
+        let app = server.into_router();
+        let test_server = TestServer::new(app).unwrap();
+        let response = test_server.get("/health").await;
+        response.assert_status_ok();
+    }
+
+    #[tokio::test]
+    async fn dashboard_auth_rejects_missing_token() {
+        let server = WebServer::new_test_with_auth_token("secret");
+        let app = server.into_router();
+        let test_server = TestServer::new(app).unwrap();
+        let response = test_server.get("/").await;
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn dashboard_auth_accepts_bearer_token() {
+        let server = WebServer::new_test_with_auth_token("secret");
+        let app = server.into_router();
+        let test_server = TestServer::new(app).unwrap();
+        let response = test_server
+            .get("/")
+            .add_header(header::AUTHORIZATION, "Bearer secret")
+            .await;
+        response.assert_status_ok();
+    }
+
+    #[tokio::test]
+    async fn dashboard_auth_accepts_basic_password() {
+        let server = WebServer::new_test_with_auth_token("secret");
+        let app = server.into_router();
+        let test_server = TestServer::new(app).unwrap();
+        let response = test_server
+            .get("/")
+            .add_header(header::AUTHORIZATION, "Basic YWdlbnQwMDc6c2VjcmV0")
+            .await;
+        response.assert_status_ok();
+    }
+
+    #[test]
+    fn default_dashboard_bind_addr_is_localhost() {
+        std::env::remove_var("AGENT007_DASHBOARD_HOST");
+        assert_eq!(dashboard_bind_addr(8007), "127.0.0.1:8007");
     }
 }

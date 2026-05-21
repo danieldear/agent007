@@ -410,6 +410,17 @@ impl WorkflowRunner {
                                     ),
                                     }
                                 })?;
+                            if !matches!(
+                                persona_spec.agent_type.as_deref(),
+                                Some(kind) if kind.eq_ignore_ascii_case("orchestrator")
+                            ) {
+                                return Err(WorkflowError::StepFailed {
+                                    id: step.id.clone(),
+                                    reason: format!(
+                                        "persona '{persona_name}' must have agent_type = 'orchestrator' for multi-agent step"
+                                    ),
+                                });
+                            }
 
                             // Map WorkerConfig → WorkerSpec to avoid a circular dep between
                             // workflows ← custom-agents.
@@ -427,6 +438,30 @@ impl WorkflowRunner {
                                         .collect()
                                 })
                                 .unwrap_or_default();
+                            for worker in &worker_specs {
+                                let worker_persona =
+                                    persona_provider.get(&worker.name).ok_or_else(|| {
+                                        WorkflowError::StepFailed {
+                                            id: step.id.clone(),
+                                            reason: format!(
+                                                "worker persona '{}' not found for multi-agent step",
+                                                worker.name
+                                            ),
+                                        }
+                                    })?;
+                                if matches!(
+                                    worker_persona.agent_type.as_deref(),
+                                    Some(kind) if !kind.eq_ignore_ascii_case("worker")
+                                ) {
+                                    return Err(WorkflowError::StepFailed {
+                                        id: step.id.clone(),
+                                        reason: format!(
+                                            "worker persona '{}' must have agent_type = 'worker'",
+                                            worker.name
+                                        ),
+                                    });
+                                }
+                            }
 
                             // Construct a memory store keyed by persona namespace.
                             let memory_dir = agent007_core::paths::agent007_home().join("memory");
@@ -466,12 +501,12 @@ impl WorkflowRunner {
                                 }
                             })?;
 
-                            // Tokens are not tracked by SubOrchestrator today.
+                            // SubOrchestrator returns a conservative worker-call token estimate.
                             Ok((
                                 step,
                                 result.output,
                                 format!("multi-agent/{persona_name}"),
-                                0usize,
+                                result.token_estimate,
                             ))
                         }
                         .await;

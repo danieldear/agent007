@@ -12,6 +12,10 @@ pub enum CustomAgentError {
     MaxDepthExceeded { max: usize },
     #[error("worker '{name}' not in allowed_workers for this sub-orchestrator")]
     WorkerNotAllowed { name: String },
+    #[error("worker persona '{name}' not found")]
+    WorkerPersonaNotFound { name: String },
+    #[error("persona '{name}' must have agent_type = '{expected}' for this use")]
+    InvalidPersonaType { name: String, expected: String },
 }
 
 #[cfg(test)]
@@ -47,5 +51,23 @@ mod tests {
             name: "Hacker".into(),
         };
         assert!(e.to_string().contains("Hacker"));
+    }
+
+    #[test]
+    fn worker_persona_not_found_message() {
+        let e = CustomAgentError::WorkerPersonaNotFound {
+            name: "Missing".into(),
+        };
+        assert!(e.to_string().contains("Missing"));
+    }
+
+    #[test]
+    fn invalid_persona_type_message() {
+        let e = CustomAgentError::InvalidPersonaType {
+            name: "Coder".into(),
+            expected: "orchestrator".into(),
+        };
+        assert!(e.to_string().contains("Coder"));
+        assert!(e.to_string().contains("orchestrator"));
     }
 }

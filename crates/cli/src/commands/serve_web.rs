@@ -9,7 +9,7 @@ use crate::commands::run::{
     selected_runtime_model, selected_runtime_provider, standalone_mode_available,
 };
 use crate::config::Config;
-use agent007_web::WebServer;
+use agent007_web::{dashboard_bind_addr, WebServer};
 
 pub const DEFAULT_PORT: u16 = 8007;
 
@@ -31,7 +31,10 @@ pub async fn execute(config: Arc<Config>, port: u16) -> Result<()> {
     let actual_port = registry.resolve_port(&cwd, port).await;
     PortRegistry::register(&cwd, actual_port);
 
-    tracing::info!("agent007 web dashboard starting on http://0.0.0.0:{actual_port}");
+    tracing::info!(
+        "agent007 web dashboard starting on http://{}",
+        dashboard_bind_addr(actual_port)
+    );
     let standalone_mode = standalone_mode_available(&config);
     let runtime_mode = runtime_mode_label(&config).to_string();
     let provider_label = match (
@@ -131,7 +134,7 @@ impl PortRegistry {
             if used_ports.contains(&port) {
                 continue;
             }
-            let addr = format!("0.0.0.0:{port}");
+            let addr = dashboard_bind_addr(port);
             if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
                 drop(listener);
                 return port;
@@ -213,8 +216,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_port_skips_ports_used_by_other_projects() {
         let dir = tempfile::tempdir().unwrap();
-        // Bind 8007 so it's occupied
-        let _listener = tokio::net::TcpListener::bind("0.0.0.0:19999")
+        // Bind the preferred dashboard address so it's occupied.
+        let _listener = tokio::net::TcpListener::bind(dashboard_bind_addr(19999))
             .await
             .unwrap();
         let mut registry = PortRegistry {
