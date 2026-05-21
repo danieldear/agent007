@@ -5339,22 +5339,19 @@ fn agent_save(
     let zones = existing.as_ref().and_then(|spec| spec.zones.clone());
 
     let mut content = format!(
-        "name            = \"{}\"\n\
-         description     = \"{}\"\n\
-         preferred_model = \"{}\"\n\
+        "name            = {}\n\
+         description     = {}\n\
+         preferred_model = {}\n\
          allowed_tools   = [{}]\n\
          skills          = [{}]\n",
-        name,
-        description.replace('"', "\\\""),
-        preferred_model,
+        toml_string(name),
+        toml_string(description),
+        toml_string(preferred_model),
         toml_string_array(&allowed_tools),
         toml_string_array(&skills),
     );
     if let Some(agent_type) = agent_type.filter(|value| !value.trim().is_empty()) {
-        content.push_str(&format!(
-            "agent_type      = \"{}\"\n",
-            agent_type.replace('"', "\\\"")
-        ));
+        content.push_str(&format!("agent_type      = {}\n", toml_string(&agent_type)));
     }
     if !allowed_workers.is_empty() {
         content.push_str(&format!(
@@ -5364,8 +5361,8 @@ fn agent_save(
     }
     if let Some(memory_namespace) = memory_namespace.filter(|value| !value.trim().is_empty()) {
         content.push_str(&format!(
-            "memory_namespace = \"{}\"\n",
-            memory_namespace.replace('"', "\\\"")
+            "memory_namespace = {}\n",
+            toml_string(&memory_namespace)
         ));
     }
     if let Some(zones) = zones {
@@ -5390,8 +5387,8 @@ fn agent_save(
         }
     }
     content.push_str(&format!(
-        "\nsystem_prompt   = \"\"\"\n{}\n\"\"\"\n",
-        system_prompt
+        "\nsystem_prompt   = {}\n",
+        toml_string(system_prompt)
     ));
 
     std::fs::write(&path, &content)
@@ -5403,9 +5400,13 @@ fn agent_save(
 fn toml_string_array(values: &[String]) -> String {
     values
         .iter()
-        .map(|value| format!("\"{}\"", value.replace('"', "\\\"")))
+        .map(|value| toml_string(value))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn read_existing_persona_spec(path: &std::path::Path) -> Option<PersonaSpec> {

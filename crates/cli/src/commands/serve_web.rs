@@ -181,6 +181,38 @@ fn discover_project_root(from: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarRestore {
+        key: &'static str,
+        value: Option<String>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let restore = Self {
+                key,
+                value: std::env::var(key).ok(),
+            };
+            std::env::set_var(key, value);
+            restore
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn default_port_is_8007() {
@@ -215,6 +247,9 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_port_skips_ports_used_by_other_projects() {
+        let _guard = env_lock().lock().unwrap();
+        let _env_restore = EnvVarRestore::set("AGENT007_DASHBOARD_HOST", "127.0.0.1");
+
         let dir = tempfile::tempdir().unwrap();
         // Bind the preferred dashboard address so it's occupied.
         let _listener = tokio::net::TcpListener::bind(dashboard_bind_addr(19999))

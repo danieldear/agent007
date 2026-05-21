@@ -623,10 +623,17 @@ impl HostedWorkflowEngine {
             })?;
         let persona = self.persona_provider.get(&step.agent);
         if step.r#type == StepType::MultiAgent {
-            if !matches!(
-                persona.as_ref().and_then(|persona| persona.agent_type.as_deref()),
-                Some(kind) if kind.eq_ignore_ascii_case("orchestrator")
-            ) {
+            let Some(persona_spec) = persona.as_ref() else {
+                return Err(WorkflowError::StepFailed {
+                    id: step.id.clone(),
+                    reason: format!(
+                        "persona '{}' was not found for hosted multi-agent step",
+                        step.agent
+                    ),
+                });
+            };
+            if !matches!(persona_spec.agent_type.as_deref(), Some(kind) if kind.eq_ignore_ascii_case("orchestrator"))
+            {
                 return Err(WorkflowError::StepFailed {
                     id: step.id.clone(),
                     reason: format!(

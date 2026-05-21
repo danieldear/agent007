@@ -1,6 +1,6 @@
 // crates/personas/src/registry.rs
 use crate::error::PersonaError;
-use crate::loader::load_user_overrides;
+use crate::loader::load_user_overrides_with_metadata;
 use agent007_core::{PersonaProvider, PersonaSpec};
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,10 +25,11 @@ impl PersonaRegistry {
         let mut registry = Self::built_in();
         for dir in dirs {
             if dir.exists() {
-                let overrides = load_user_overrides(dir)?;
-                for mut spec in overrides {
+                let overrides = load_user_overrides_with_metadata(dir)?;
+                for loaded in overrides {
+                    let mut spec = loaded.spec;
                     if let Some(base) = registry.personas.get(&spec.name) {
-                        inherit_missing_runtime_metadata(&mut spec, base);
+                        inherit_missing_runtime_metadata(&mut spec, base, loaded.has_skills_field);
                     }
                     registry.personas.insert(spec.name.clone(), spec);
                 }
@@ -47,11 +48,15 @@ impl PersonaRegistry {
     }
 }
 
-fn inherit_missing_runtime_metadata(spec: &mut PersonaSpec, base: &PersonaSpec) {
+fn inherit_missing_runtime_metadata(
+    spec: &mut PersonaSpec,
+    base: &PersonaSpec,
+    has_skills_field: bool,
+) {
     // Existing user persona overrides created before multi-agent runtime fields
     // should not accidentally erase built-in topology. Keep human-authored
     // prompt/model/tool overrides, but inherit missing orchestration metadata.
-    if spec.skills.is_empty() {
+    if !has_skills_field {
         spec.skills = base.skills.clone();
     }
     if spec.agent_type.is_none() {
@@ -581,6 +586,28 @@ allowed_tools = ["file_read"]
             .allowed_workers
             .as_ref()
             .is_some_and(|workers| workers.contains(&"Coder".to_string())));
+    }
+
+    #[test]
+    fn builtin_override_can_clear_skills_explicitly() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("coder-clear-skills.toml"),
+            r#"
+name = "Coder"
+description = "Coder without default skills"
+system_prompt = "Custom coder prompt."
+preferred_model = "claude"
+allowed_tools = ["bash"]
+skills = []
+"#,
+        )
+        .unwrap();
+
+        let registry = PersonaRegistry::load(dir.path()).unwrap();
+        let coder = registry.get("Coder").unwrap();
+        assert!(coder.skills.is_empty());
+        assert_eq!(coder.agent_type.as_deref(), Some("worker"));
     }
 
     #[test]

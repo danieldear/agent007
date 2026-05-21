@@ -3,6 +3,11 @@ use crate::error::PersonaError;
 use agent007_core::PersonaSpec;
 use std::path::Path;
 
+pub struct LoadedPersonaOverride {
+    pub spec: PersonaSpec,
+    pub has_skills_field: bool,
+}
+
 /// Load all PersonaSpec overrides from *.toml files in user_dir.
 /// Files that fail to parse return PersonaError::ParseError.
 /// Non-.toml files are silently ignored.
@@ -12,6 +17,15 @@ use std::path::Path;
 /// default to None/empty when absent from the TOML file, preserving full
 /// backward compatibility with existing persona TOML files.
 pub fn load_user_overrides(user_dir: &Path) -> Result<Vec<PersonaSpec>, PersonaError> {
+    Ok(load_user_overrides_with_metadata(user_dir)?
+        .into_iter()
+        .map(|loaded| loaded.spec)
+        .collect())
+}
+
+pub fn load_user_overrides_with_metadata(
+    user_dir: &Path,
+) -> Result<Vec<LoadedPersonaOverride>, PersonaError> {
     let mut specs = Vec::new();
 
     let entries = std::fs::read_dir(user_dir)?;
@@ -24,12 +38,21 @@ pub fn load_user_overrides(user_dir: &Path) -> Result<Vec<PersonaSpec>, PersonaE
         }
 
         let content = std::fs::read_to_string(&path)?;
+        let value: toml::Value =
+            toml::from_str(&content).map_err(|e| PersonaError::ParseError {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?;
+        let has_skills_field = value.get("skills").is_some();
         let spec: PersonaSpec = toml::from_str(&content).map_err(|e| PersonaError::ParseError {
             path: path.clone(),
             reason: e.to_string(),
         })?;
 
-        specs.push(spec);
+        specs.push(LoadedPersonaOverride {
+            spec,
+            has_skills_field,
+        });
     }
 
     Ok(specs)

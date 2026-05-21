@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -436,7 +436,35 @@ pub fn dashboard_bind_host() -> String {
 
 /// Dashboard bind address for a port.
 pub fn dashboard_bind_addr(port: u16) -> String {
-    format!("{}:{port}", dashboard_bind_host())
+    dashboard_bind_addr_for_host(&dashboard_bind_host(), port)
+}
+
+fn dashboard_bind_addr_for_host(host: &str, port: u16) -> String {
+    let host = host.trim();
+    if host.is_empty() {
+        return format!("{DEFAULT_DASHBOARD_BIND_HOST}:{port}");
+    }
+
+    if host.parse::<std::net::SocketAddr>().is_ok() {
+        return host.to_string();
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return std::net::SocketAddr::new(ip, port).to_string();
+    }
+
+    if host.starts_with('[') {
+        if host.ends_with(']') {
+            return format!("{host}:{port}");
+        }
+        return host.to_string();
+    }
+
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 fn dashboard_auth_token_from_env() -> Option<String> {
@@ -485,7 +513,7 @@ fn request_is_authorized(headers: &HeaderMap, expected: &str) -> bool {
         .get("x-agent007-token")
         .and_then(|v| v.to_str().ok())
     {
-        if constant_time_eq(value.as_bytes(), expected.as_bytes()) {
+        if constant_time_eq(value.trim().as_bytes(), expected.as_bytes()) {
             return true;
         }
     }
@@ -638,8 +666,32 @@ mod tests {
     }
 
     #[test]
-    fn default_dashboard_bind_addr_is_localhost() {
-        std::env::remove_var("AGENT007_DASHBOARD_HOST");
-        assert_eq!(dashboard_bind_addr(8007), "127.0.0.1:8007");
+    fn dashboard_bind_addr_formats_hosts() {
+        assert_eq!(
+            dashboard_bind_addr_for_host(DEFAULT_DASHBOARD_BIND_HOST, 8007),
+            "127.0.0.1:8007"
+        );
+        assert_eq!(dashboard_bind_addr_for_host("::1", 8007), "[::1]:8007");
+        assert_eq!(dashboard_bind_addr_for_host("[::1]", 8007), "[::1]:8007");
+        assert_eq!(
+            dashboard_bind_addr_for_host("127.0.0.1:9000", 8007),
+            "127.0.0.1:9000"
+        );
+        assert_eq!(
+            dashboard_bind_addr_for_host("localhost", 8007),
+            "localhost:8007"
+        );
+    }
+
+    #[tokio::test]
+    async fn dashboard_auth_trims_header_token() {
+        let server = WebServer::new_test_with_auth_token("secret");
+        let app = server.into_router();
+        let test_server = TestServer::new(app).unwrap();
+        let response = test_server
+            .get("/")
+            .add_header("x-agent007-token", " secret ")
+            .await;
+        response.assert_status_ok();
     }
 }

@@ -233,9 +233,13 @@ fn toml_top_level_version(path: &FsPath) -> Option<String> {
 fn toml_string_array(values: &[String]) -> String {
     values
         .iter()
-        .map(|value| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")))
+        .map(|value| toml_string(value))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn read_existing_persona(path: &FsPath) -> Option<agent007_core::PersonaSpec> {
@@ -2319,29 +2323,26 @@ pub async fn persona_save_handler(
     let version = initial_or_incremented_version(toml_top_level_version(&path).as_deref(), None);
 
     let mut content = format!(
-        "name            = \"{}\"\n\
-         version         = \"{}\"\n\
-         description     = \"{}\"\n\
-         preferred_model = \"{}\"\n\
+        "name            = {}\n\
+         version         = {}\n\
+         description     = {}\n\
+         preferred_model = {}\n\
          allowed_tools   = [{}]\n\
          skills          = [{}]\n",
-        payload.name,
-        version,
-        payload.description.replace('"', "\\\""),
-        model,
+        toml_string(&payload.name),
+        toml_string(&version),
+        toml_string(&payload.description),
+        toml_string(model),
         tools_str,
         skills_str,
     );
     if let Some(agent_type) = agent_type {
-        content.push_str(&format!(
-            "agent_type      = \"{}\"\n",
-            agent_type.replace('"', "\\\"")
-        ));
+        content.push_str(&format!("agent_type      = {}\n", toml_string(&agent_type)));
     }
     if let Some(memory_namespace) = memory_namespace {
         content.push_str(&format!(
-            "memory_namespace = \"{}\"\n",
-            memory_namespace.replace('"', "\\\"")
+            "memory_namespace = {}\n",
+            toml_string(&memory_namespace)
         ));
     }
     if let Some(workers_str) = workers_str {
@@ -2368,7 +2369,7 @@ pub async fn persona_save_handler(
             ));
         }
     }
-    content.push_str(&format!("\nsystem_prompt   = \"\"\"\n{}\n\"\"\"\n", prompt));
+    content.push_str(&format!("\nsystem_prompt   = {}\n", toml_string(prompt)));
 
     match std::fs::write(&path, &content) {
         Ok(()) => Json(serde_json::json!({ "ok": true, "path": path.display().to_string() }))

@@ -240,18 +240,23 @@ Longer-term:
 **Severity: Medium**
 
 **What the problem is:**
-The Axum router has no `DefaultBodyLimit` layer. Endpoints that accept JSON bodies (`RuntimeMessageRequest`, skill save, workflow save, persona save, skill import) will read an unbounded amount of data from the connection before deserializing. An unauthenticated caller (Gap 1) can send a multi-gigabyte body and exhaust memory or disk.
+Historically, the Axum router had no `DefaultBodyLimit` layer. Endpoints that accept JSON bodies (`RuntimeMessageRequest`, skill save, workflow save, persona save, skill import) could read an unbounded amount of data from the connection before deserializing. An unauthenticated caller (Gap 1) could send a multi-gigabyte body and exhaust memory or disk.
+
+This is now mitigated by a router-level `DefaultBodyLimit` with a 32 MiB default.
 
 **Where it is in the code:**
-`crates/web/src/server.rs` — `into_router()`. No body limit layer is applied.
+`crates/web/src/server.rs` — `into_router()` applies:
 
-**Work needed to close this gap:**
 ```rust
-// Add to router construction in server.rs
-use axum::extract::DefaultBodyLimit;
-let router = router.layer(DefaultBodyLimit::max(4 * 1024 * 1024)); // 4 MB
+.layer(DefaultBodyLimit::max(max_body_bytes))
 ```
-Individual endpoints that legitimately need larger bodies (e.g., bundle import) can override with `axum::extract::RequestBodyLimitLayer`.
+
+The default is `32 * 1024 * 1024` bytes. Operators can override it with `AGENT007_DASHBOARD_MAX_BODY_BYTES`.
+
+**Work needed to keep this gap closed:**
+- Keep the router-level body limit in place for all dashboard/API routes.
+- Add end-to-end oversized request regression tests.
+- If a future endpoint needs larger bodies, add a narrow per-route override rather than removing the global limit.
 
 **Progress as of 2026-05-21:**
 - Added an Axum `DefaultBodyLimit` to the dashboard router.
