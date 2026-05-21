@@ -1712,6 +1712,13 @@ steps:
   - id: find-errors
     agent: DebugAgent
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a log error specialist. Analyze the following logs and extract ALL
       errors, exceptions, stack traces, and warnings. For each one provide:
       - Error type and message
@@ -1725,6 +1732,13 @@ steps:
   - id: find-patterns
     agent: Researcher
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a log pattern analyst. Analyze the following logs and identify:
       - Recurring patterns and sequences
       - Anomalous spikes or gaps
@@ -1738,6 +1752,13 @@ steps:
   - id: security-check
     agent: SecurityReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a security log analyst. Scan the following logs for:
       - Authentication failures or brute-force patterns
       - Unauthorized access attempts
@@ -1752,6 +1773,13 @@ steps:
     agent: Researcher
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are the lead analyst. Synthesize the specialist reports below into a
       single executive report with:
       1. Summary (3-5 bullet points)
@@ -1807,6 +1835,13 @@ steps:
   - id: security-review
     agent: SecurityReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a security code reviewer. Review the following code for:
       - Injection vulnerabilities (SQL, command, XSS)
       - Authentication/authorization flaws
@@ -1827,6 +1862,13 @@ steps:
   - id: performance-review
     agent: PerformanceEngineer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a performance code reviewer. Review the following code for:
       - Algorithmic complexity issues (O(n²), N+1 queries)
       - Memory leaks or excessive allocations
@@ -1847,6 +1889,13 @@ steps:
   - id: quality-review
     agent: CodeReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a code quality reviewer. Review for:
       - Code smells and anti-patterns
       - Missing error handling
@@ -1868,6 +1917,13 @@ steps:
     agent: CodeReviewer
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Synthesize the three specialist reviews into a final code review report:
 
       SECURITY:
@@ -1920,6 +1976,13 @@ steps:
   - id: owasp-scan
     agent: SecurityReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are an application security expert. Perform an OWASP Top 10 audit.
 
       Target: {{task}}
@@ -1949,6 +2012,13 @@ steps:
   - id: secrets-scan
     agent: SecurityReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a secrets detection specialist. Scan the following for credential leaks.
 
       Target: {{task}}
@@ -1971,6 +2041,13 @@ steps:
   - id: threat-model
     agent: Architect
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a threat modeling expert using the STRIDE framework.
 
       Target: {{task}}
@@ -1996,6 +2073,13 @@ steps:
   - id: dep-scan
     agent: SecurityReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a supply chain security expert. Analyze dependencies for risk.
 
       Target: {{task}}
@@ -2019,6 +2103,13 @@ steps:
     agent: SecurityReviewer
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Synthesize all security audit findings into a final executive report.
 
       OWASP FINDINGS:
@@ -2079,6 +2170,13 @@ steps:
   - id: spec
     agent: Researcher
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       SPARC Phase 1 — Specification.
       Write a detailed specification for: {{task}}
       Include: goals, constraints, user stories, acceptance criteria, edge cases.
@@ -2095,6 +2193,13 @@ steps:
   - id: pseudocode
     agent: Coder
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       SPARC Phase 2 — Pseudocode.
       Based on this specification:
       {{specification}}
@@ -2106,6 +2211,13 @@ steps:
   - id: architecture
     agent: Architect
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       SPARC Phase 3 — Architecture.
       Spec: {{specification}}
       Pseudocode: {{pseudocode}}
@@ -2121,6 +2233,13 @@ steps:
   - id: refinement
     agent: CodeReviewer
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       SPARC Phase 4 — Refinement.
       Review the architecture for correctness, security, performance, and scalability.
       Architecture: {{architecture}}
@@ -2132,6 +2251,13 @@ steps:
     agent: ExpertCoder
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       SPARC Phase 5 — Completion.
       Produce the final deliverable based on:
       Spec: {{specification}}
@@ -2177,6 +2303,13 @@ steps:
   - id: red
     agent: TestDesigner
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       TDD Red Phase — write a failing test for: {{task}}
       Produce: test file with failing test cases covering the requirement.
       Tests must fail because the implementation doesn't exist yet.
@@ -2190,6 +2323,13 @@ steps:
   - id: green
     agent: Coder
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       TDD Green Phase — write minimal code to make these tests pass:
       {{failing_tests}}
 
@@ -2202,6 +2342,13 @@ steps:
     agent: ExpertCoder
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       TDD Blue/Refactor Phase — refactor this implementation for quality:
       {{implementation}}
 
@@ -2249,6 +2396,13 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a research specialist. Gather comprehensive context for:
 
       {{task}}
@@ -2276,6 +2430,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Research is complete. Human: please review the findings and confirm
       the direction before architecture begins.
 
@@ -2290,6 +2451,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a documentation specialist. Capture the ideation phase output
       as a structured document.
 
@@ -2311,6 +2479,13 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a product manager. Write a Product Requirements Document for:
 
       {{task}}
@@ -2332,6 +2507,13 @@ steps:
     agent: Architect
     model: claude-opus-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a system architect. Design the technical architecture for:
 
       {{task}}
@@ -2355,6 +2537,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Capture the architecture and PRD into a unified Design Document.
 
       ARCHITECTURE:
@@ -2372,6 +2561,13 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a project planner. Break the work into milestones and features.
 
       TASK: {{task}}
@@ -2389,6 +2585,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Write the final Milestones & Features Document.
 
       PROJECT PLAN:
@@ -2404,6 +2607,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       The ideation phase is complete. Write the key outputs as real project
       documentation files so feature teams and future agents can reference them.
 
@@ -2432,6 +2642,13 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       The project documentation has been written to docs/. Index the repository
       so that all future agents can use semantic search to find relevant context.
 
@@ -2449,6 +2666,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       The ideation phase is complete. Present a full summary to the human
       for final approval before feature work begins.
 
@@ -2526,6 +2750,13 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Load project context for this feature using semantic search across the
       indexed repository, then supplement with any directly provided context.
 
@@ -2563,6 +2794,13 @@ steps:
     agent: Researcher
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Research context for this feature:
 
       PROJECT CONTEXT:
@@ -2579,6 +2817,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Write a Feature Brief document.
 
       PROJECT CONTEXT: {{project_context}}
@@ -2594,6 +2839,13 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a product manager. Write a Feature Specification for:
 
       {{task}}
@@ -2618,6 +2870,13 @@ steps:
     agent: Architect
     model: claude-opus-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Design the technical approach for this feature.
 
       FEATURE: {{task}}
@@ -2638,6 +2897,13 @@ steps:
     agent: ExpertCoder
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Implement the feature following the architecture and spec.
 
       FEATURE: {{task}}
@@ -2656,6 +2922,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Implementation is complete. Human: please review the implementation
       against the spec before running the full review pipeline.
 
@@ -2673,6 +2946,13 @@ steps:
     agent: CodeReviewer
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Review the implementation for code quality.
 
       FEATURE: {{task}}
@@ -2688,6 +2968,13 @@ steps:
     agent: SecurityReviewer
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Security review of the implementation.
 
       FEATURE: {{task}}
@@ -2703,6 +2990,13 @@ steps:
     agent: PerformanceEngineer
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Performance review of the implementation.
 
       FEATURE: {{task}}
@@ -2718,6 +3012,13 @@ steps:
     agent: CodeReviewer
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Gap analysis: compare implementation against the feature spec and architecture.
 
       FEATURE: {{task}}
@@ -2734,6 +3035,13 @@ steps:
     agent: DebugAgent
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Issue analysis: identify potential bugs and failure modes.
 
       FEATURE: {{task}}
@@ -2749,6 +3057,13 @@ steps:
     agent: ExpertCoder
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Rework the implementation based on all review findings.
 
       SPEC: {{feature_spec}}
@@ -2770,6 +3085,13 @@ steps:
     agent: TestDesigner
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Design a comprehensive test suite for the feature.
 
       FEATURE: {{task}}
@@ -2786,6 +3108,13 @@ steps:
     agent: TestDesigner
     model: gpt-5.3-codex
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Review the test suite for completeness and quality.
 
       SPEC: {{feature_spec}}
@@ -2803,6 +3132,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Write the final feature documentation.
 
       FEATURE: {{task}}
@@ -2821,6 +3157,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Feature delivery is complete. Prepare release sign-off summary.
 
       FEATURE: {{task}}
@@ -2880,6 +3223,13 @@ steps:
     agent: Researcher
     model: claude-sonnet-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a brainstorming specialist using the Double Diamond design-thinking methodology.
       Explore the problem space for:
 
@@ -2918,6 +3268,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Brainstorm complete. Human: please review the approaches and select a direction.
 
       BRAINSTORM OUTPUT:
@@ -2933,6 +3290,13 @@ steps:
     agent: Planner
     model: claude-sonnet-4-6
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       You are a product manager. Write a Product Requirements Document (PRD) for:
 
       {{task}}
@@ -2956,6 +3320,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Capture the brainstorm and approved direction as a structured Ideation Document.
 
       TASK: {{task}}
@@ -2977,6 +3348,13 @@ steps:
     agent: DocumentationWriter
     model: claude-haiku-4-5-20251001
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       Write the brainstorm outputs as project documentation files.
 
       Use the file_write tool to create the following files
@@ -2999,6 +3377,13 @@ steps:
     model: claude-sonnet-4-6
     requires_approval: true
     prompt: |
+      Operating protocol:
+      - Use repository, memory, and prior-step context before making broad claims.
+      - Prefer agent007 ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing when available.
+      - Separate evidence from inference; cite files, commands, outputs, sources, or upstream step IDs.
+      - Return concrete findings, decisions, risks, validation, and next actions; avoid generic checklist filler.
+      - Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
+
       The brainstorm phase is complete. Present the results for final review.
 
       ## Brainstorm Summary

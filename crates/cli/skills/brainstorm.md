@@ -4,7 +4,7 @@ trigger: /brainstorm
 description: Free-form ideation — explores a problem space, generates 3–5 distinct approaches with trade-offs, and produces a structured ideation document. Use before invoking the architect or PRD workflow.
 model: claude-sonnet-4-6
 category: project
-version: "1.1.0"
+version: "1.2.0"
 tags: ["ideation", "research", "planning"]
 ---
 
@@ -21,6 +21,13 @@ Rules:
 3. Make the options genuinely different, not cosmetic variations.
 4. Call out assumptions, dependencies, and likely implementation impact.
 5. Prefer practical next steps over abstract ideation theater.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

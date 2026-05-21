@@ -38,10 +38,13 @@ impl PersonaRegistry {
         Ok(registry)
     }
 
-    /// Return a registry containing only the 10 built-in personas.
+    /// Return a registry containing only the built-in personas.
     pub fn built_in() -> Self {
         let mut personas = HashMap::new();
-        for spec in builtin_personas() {
+        for spec in builtin_personas()
+            .into_iter()
+            .map(with_persona_operating_protocol)
+        {
             personas.insert(spec.name.clone(), spec);
         }
         Self { personas }
@@ -88,6 +91,18 @@ impl PersonaProvider for PersonaRegistry {
 
 // ── Built-in persona definitions ─────────────────────────────────────────────
 
+fn with_persona_operating_protocol(mut spec: PersonaSpec) -> PersonaSpec {
+    spec.system_prompt.push_str(
+        "\n\nOperating protocol:\n\
+         - Ground conclusions in repository, memory, task, and LSP context when available.\n\
+         - Prefer deterministic tools first for extraction and inspection: ETR for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.\n\
+         - Separate evidence from inference; cite files, commands, outputs, sources, or prior step IDs when available.\n\
+         - Produce concrete actions, risks, validation steps, and owner handoffs instead of generic advice.\n\
+         - Do not claim validation, tests, builds, or web facts were checked unless they actually were.",
+    );
+    spec
+}
+
 fn builtin_personas() -> Vec<PersonaSpec> {
     vec![
         PersonaSpec {
@@ -107,7 +122,10 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec![
+                "brainstorm".to_string(),
+                "meta-analyze-codebase".to_string(),
+            ],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -129,7 +147,42 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             zones: None,
             skills: vec!["dev-architect".to_string()],
             agent_type: Some("orchestrator".to_string()),
-            allowed_workers: Some(vec!["Coder".to_string(), "CodeReviewer".to_string(), "TestDesigner".to_string(), "SecurityReviewer".to_string(), "PerformanceEngineer".to_string(), "DocumentationWriter".to_string()]),
+            allowed_workers: Some(vec![
+                "Planner".to_string(),
+                "Coder".to_string(),
+                "CodeReviewer".to_string(),
+                "TestDesigner".to_string(),
+                "SecurityReviewer".to_string(),
+                "PerformanceEngineer".to_string(),
+                "DocumentationWriter".to_string(),
+            ]),
+        },
+        PersonaSpec {
+            name: "Planner".to_string(),
+            description: "Implementation planning, milestones, dependencies, and delivery sequencing"
+                .to_string(),
+            system_prompt: "You are a Planner agent. Your role is to turn product or engineering \
+                goals into concrete, repo-aware execution plans. Identify existing assets, split \
+                work into testable slices, expose dependencies and parallel work, and define \
+                acceptance criteria that can be validated. Avoid process theater and generic \
+                lifecycle steps; every task should name a real deliverable, likely files or \
+                modules, risks, and validation."
+                .to_string(),
+            preferred_model: "claude".to_string(),
+            allowed_tools: vec![
+                "file_read".to_string(),
+                "file_write".to_string(),
+                "file_edit".to_string(),
+            ],
+            memory_namespace: None,
+            zones: None,
+            skills: vec![
+                "project-plan".to_string(),
+                "project-prd".to_string(),
+                "project-release".to_string(),
+            ],
+            agent_type: Some("worker".to_string()),
+            allowed_workers: None,
         },
         PersonaSpec {
             name: "Coder".to_string(),
@@ -257,7 +310,10 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec![
+                "code-security-audit".to_string(),
+                "project-release".to_string(),
+            ],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -326,7 +382,7 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec!["code-refactor".to_string(), "dev-tdd".to_string()],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -377,7 +433,10 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec![
+                "code-document".to_string(),
+                "project-changelog".to_string(),
+            ],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -403,7 +462,10 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec![
+                "project-release".to_string(),
+                "code-optimize".to_string(),
+            ],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -426,7 +488,10 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ],
             memory_namespace: None,
             zones: None,
-            skills: vec![],
+            skills: vec![
+                "meta-analyze-codebase".to_string(),
+                "code-optimize".to_string(),
+            ],
             agent_type: Some("worker".to_string()),
             allowed_workers: None,
         },
@@ -439,9 +504,9 @@ mod tests {
     use agent007_core::PersonaProvider;
 
     #[test]
-    fn built_in_has_exactly_fifteen_personas() {
+    fn built_in_has_exactly_sixteen_personas() {
         let registry = PersonaRegistry::built_in();
-        assert_eq!(registry.list().len(), 15);
+        assert_eq!(registry.list().len(), 16);
     }
 
     #[test]
@@ -498,6 +563,7 @@ mod tests {
         for expected in &[
             "Researcher",
             "Architect",
+            "Planner",
             "Coder",
             "TestDesigner",
             "SecurityReviewer",
@@ -521,6 +587,23 @@ mod tests {
     }
 
     #[test]
+    fn built_in_personas_include_operating_protocol() {
+        let registry = PersonaRegistry::built_in();
+        for spec in registry.list() {
+            assert!(
+                spec.system_prompt.contains("Operating protocol"),
+                "missing operating protocol for {}",
+                spec.name
+            );
+            assert!(
+                spec.system_prompt.contains("Prefer deterministic tools"),
+                "missing deterministic-tool guidance for {}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
     fn list_is_sorted_by_name() {
         let registry = PersonaRegistry::built_in();
         let names: Vec<String> = registry.list().into_iter().map(|p| p.name).collect();
@@ -533,7 +616,7 @@ mod tests {
     fn load_from_nonexistent_dir_returns_only_builtins() {
         let path = std::path::PathBuf::from("/tmp/does_not_exist_agent007_personas_test");
         let registry = PersonaRegistry::load(&path).unwrap();
-        assert_eq!(registry.list().len(), 15);
+        assert_eq!(registry.list().len(), 16);
     }
 
     #[test]
@@ -553,8 +636,8 @@ allowed_tools = ["bash"]
         .unwrap();
 
         let registry = PersonaRegistry::load(dir.path()).unwrap();
-        // Still 15 because an override replaces, not adds
-        assert_eq!(registry.list().len(), 15);
+        // Still 16 because an override replaces, not adds.
+        assert_eq!(registry.list().len(), 16);
         let coder = registry.get("Coder").unwrap();
         assert_eq!(coder.preferred_model, "claude"); // overridden
         assert_eq!(coder.description, "Overridden coder");
@@ -626,7 +709,7 @@ allowed_tools = []
         .unwrap();
 
         let registry = PersonaRegistry::load(dir.path()).unwrap();
-        assert_eq!(registry.list().len(), 16); // 15 built-in + 1 custom
+        assert_eq!(registry.list().len(), 17); // 16 built-in + 1 custom
         assert!(registry.get("CustomSpecialist").is_some());
     }
 

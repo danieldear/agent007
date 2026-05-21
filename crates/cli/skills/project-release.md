@@ -4,7 +4,7 @@ trigger: /project-release
 description: Version strategy, release notes, and rollback planning
 model: claude-sonnet-4-6
 category: project
-version: "1.1.0"
+version: "1.2.0"
 tags: ["release", "strategy", "operations"]
 ---
 
@@ -22,6 +22,13 @@ Rules:
    - user-facing release recommendation
 4. If something is not ready for release, say so directly and explain why.
 5. Keep rollback and validation steps concrete.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

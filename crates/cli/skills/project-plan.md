@@ -4,7 +4,7 @@ trigger: /project-plan
 description: Break features into tasks with estimates and dependencies
 model: claude-sonnet-4-6
 category: project
-version: "1.1.0"
+version: "1.2.0"
 tags: ["planning", "milestones", "estimation"]
 ---
 
@@ -26,6 +26,13 @@ Planning rules:
 5. Prefer additive, testable slices with explicit validation steps.
 6. Call out what can run in parallel and what is on the critical path.
 7. Keep the plan grounded in implementation, not process theater.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

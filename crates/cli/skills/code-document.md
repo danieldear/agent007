@@ -4,7 +4,7 @@ trigger: /code-document
 description: Generate API docs, architecture docs, and inline documentation
 model: claude-sonnet-4-6
 category: code
-version: "1.1.0"
+version: "1.2.0"
 tags: ["documentation", "api", "maintenance"]
 ---
 
@@ -24,6 +24,13 @@ Rules:
    integration points, and examples.
 5. If inline-doc suggestions are helpful, call them out explicitly rather than
    pretending they already exist.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

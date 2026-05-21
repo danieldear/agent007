@@ -4,7 +4,7 @@ trigger: /project-changelog
 description: Generate changelogs grouped by type from git history
 model: claude-sonnet-4-6
 category: project
-version: "1.1.0"
+version: "1.2.0"
 tags: ["release", "changelog", "documentation"]
 ---
 
@@ -20,6 +20,13 @@ Rules:
 4. Keep internal-only or unclear changes out of the headline sections unless
    they materially affect operators or contributors.
 5. Call out uncertainty if the input is too incomplete to classify some entries.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

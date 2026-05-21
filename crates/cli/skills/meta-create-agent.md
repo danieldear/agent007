@@ -4,7 +4,7 @@ trigger: /meta-create-agent
 description: Guided wizard to create a custom agent persona
 model: claude-sonnet-4-6
 category: meta
-version: "1.1.0"
+version: "1.2.0"
 tags: ["meta", "persona", "generation"]
 ---
 
@@ -19,6 +19,13 @@ Rules:
 4. Make the system prompt concrete enough to drive consistent behavior.
 5. If the requested persona overlaps with an existing likely role, say how it is
    distinct.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

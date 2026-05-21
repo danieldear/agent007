@@ -4,7 +4,7 @@ trigger: /dev-tdd
 description: Test-driven development cycle (red-green-refactor)
 model: claude-sonnet-4-6
 category: dev
-version: "1.1.0"
+version: "1.2.0"
 tags: ["tdd", "testing", "implementation"]
 ---
 
@@ -21,6 +21,13 @@ Rules:
 4. Keep Green minimal and Refactor behavior-preserving.
 5. If there is not enough context to write exact code, describe the precise next
    change set instead of inventing files blindly.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

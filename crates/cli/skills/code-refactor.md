@@ -4,7 +4,7 @@ trigger: /code-refactor
 description: Identify code smells and propose targeted improvements
 model: claude-sonnet-4-6
 category: code
-version: "1.1.0"
+version: "1.2.0"
 tags: ["refactor", "code-quality", "maintainability"]
 ---
 
@@ -20,6 +20,13 @@ Rules:
    demands replacement.
 4. Call out what must stay behavior-compatible.
 5. If an issue is architectural rather than local, say so explicitly.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

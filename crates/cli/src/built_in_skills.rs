@@ -14,6 +14,7 @@ pub const SKILL_PROJECT_RELEASE: &str = include_str!("../skills/project-release.
 pub const SKILL_META_CREATE_AGENT: &str = include_str!("../skills/meta-create-agent.md");
 pub const SKILL_META_ANALYZE_CODEBASE: &str = include_str!("../skills/meta-analyze-codebase.md");
 pub const SKILL_BRAINSTORM: &str = include_str!("../skills/brainstorm.md");
+pub const SKILL_FRONTEND_DESIGNER: &str = include_str!("../skills/frontend-designer.md");
 
 pub const ALL_SKILLS: &[(&str, &str)] = &[
     ("dev-architect.md", SKILL_DEV_ARCHITECT),
@@ -32,4 +33,5 @@ pub const ALL_SKILLS: &[(&str, &str)] = &[
     ("meta-create-agent.md", SKILL_META_CREATE_AGENT),
     ("meta-analyze-codebase.md", SKILL_META_ANALYZE_CODEBASE),
     ("brainstorm.md", SKILL_BRAINSTORM),
+    ("frontend-designer.md", SKILL_FRONTEND_DESIGNER),
 ];

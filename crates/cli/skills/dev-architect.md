@@ -4,7 +4,7 @@ trigger: /dev-architect
 description: Design system architecture from requirements
 model: claude-sonnet-4-6
 category: dev
-version: "1.1.0"
+version: "1.2.0"
 tags: ["architecture", "design", "system"]
 ---
 
@@ -21,6 +21,13 @@ Rules:
    them.
 4. Prefer incremental architecture that can actually be implemented in slices.
 5. Call out trade-offs, migration risks, and operational/runtime implications.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 

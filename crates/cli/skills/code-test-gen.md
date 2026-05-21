@@ -4,7 +4,7 @@ trigger: /code-test-gen
 description: Generate comprehensive test suites with edge cases
 model: claude-sonnet-4-6
 category: code
-version: "1.1.0"
+version: "1.2.0"
 tags: ["testing", "coverage", "qa"]
 ---
 
@@ -20,6 +20,13 @@ Rules:
 4. Distinguish between tests that should be written now and broader coverage
    ideas that can wait.
 5. If code generation is appropriate, keep it scoped and explain placement.
+
+Operational discipline:
+- Use repo, memory, task, and LSP context before making broad claims.
+- Prefer deterministic extraction first: ETR tools for grep/glob/file stats, JSON/table/log queries, metrics, diffs, and workflow status before ad-hoc shell parsing.
+- Separate evidence from inference; cite files, commands, outputs, or prior step IDs when available.
+- Produce decisions, risks, and next actions; avoid generic checklist filler.
+- Do not claim validation ran unless it actually ran; otherwise name the exact validation to run.
 
 Return exactly these sections:
 
