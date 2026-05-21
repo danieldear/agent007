@@ -92,6 +92,7 @@ mod tests {
         let names: Vec<&str> = personas.iter().map(|p| p.name.as_str()).collect();
         for expected in &[
             "Researcher",
+            "Planner",
             "Architect",
             "Coder",
             "TestDesigner",
