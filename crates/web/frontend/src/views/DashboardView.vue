@@ -783,67 +783,69 @@ async function submitTask() {
     </div>
 
     <!-- ── Stats bento strip ──────────────────────────────────────────── -->
-    <div class="shrink-0 grid grid-cols-6 border-b border-base-content/10 bg-base-300">
+    <div class="shrink-0 px-4 py-3 border-b border-base-content/8 bg-base-200">
+      <div class="grid grid-cols-6 rounded-xl border border-base-content/10 bg-base-300 overflow-hidden">
 
-      <!-- Running -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
-        <div v-if="m.running_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-info/10 to-transparent pointer-events-none"></div>
-        <div v-if="m.running_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-info/60"></div>
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Running</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.running_tasks > 0 ? 'text-info' : 'text-base-content/25'">
-          {{ m.running_tasks }}
+        <!-- Running -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="m.running_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-info/10 to-transparent pointer-events-none"></div>
+          <div v-if="m.running_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-info/60"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Running</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.running_tasks > 0 ? 'text-info' : 'text-base-content/25'">
+            {{ m.running_tasks }}
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1 flex items-center gap-1">
+            <span v-if="m.running_tasks > 0" class="w-1 h-1 rounded-full bg-info animate-pulse shrink-0"></span>
+            <span>{{ m.session_requests }} req</span>
+          </div>
         </div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1 flex items-center gap-1">
-          <span v-if="m.running_tasks > 0" class="w-1 h-1 rounded-full bg-info animate-pulse shrink-0"></span>
-          <span>{{ m.session_requests }} req</span>
+
+        <!-- Awaiting Approval -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute inset-0 bg-gradient-to-br from-warning/12 to-transparent pointer-events-none"></div>
+          <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-warning/70"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Approvals</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="(m.awaiting_approvals || 0) > 0 ? 'text-warning' : 'text-base-content/25'">
+            {{ m.awaiting_approvals || 0 }}
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">pending</div>
         </div>
-      </div>
 
-      <!-- Awaiting Approval -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
-        <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute inset-0 bg-gradient-to-br from-warning/12 to-transparent pointer-events-none"></div>
-        <div v-if="(m.awaiting_approvals || 0) > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-warning/70"></div>
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Approvals</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="(m.awaiting_approvals || 0) > 0 ? 'text-warning' : 'text-base-content/25'">
-          {{ m.awaiting_approvals || 0 }}
+        <!-- Completed -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Completed</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-success">{{ m.completed_tasks }}</div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ ((m.success_rate || 0) * 100).toFixed(0) }}% rate</div>
         </div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1">pending</div>
-      </div>
 
-      <!-- Completed -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Completed</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none text-success">{{ m.completed_tasks }}</div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ ((m.success_rate || 0) * 100).toFixed(0) }}% rate</div>
-      </div>
-
-      <!-- Failed -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
-        <div v-if="m.failed_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
-        <div v-if="m.failed_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-error/60"></div>
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Failed</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.failed_tasks > 0 ? 'text-error' : 'text-base-content/25'">
-          {{ m.failed_tasks }}
+        <!-- Failed -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div v-if="m.failed_tasks > 0" class="absolute inset-0 bg-gradient-to-br from-error/8 to-transparent pointer-events-none"></div>
+          <div v-if="m.failed_tasks > 0" class="absolute bottom-0 inset-x-0 h-[2px] bg-error/60"></div>
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Failed</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none" :class="m.failed_tasks > 0 ? 'text-error' : 'text-base-content/25'">
+            {{ m.failed_tasks }}
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ m.total_retries || 0 }} retries</div>
         </div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ m.total_retries || 0 }} retries</div>
-      </div>
 
-      <!-- Tokens + Cost -->
-      <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Tokens</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none text-primary">
-          {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] text-base-content/25 ml-0.5">~</span>
+        <!-- Tokens + Cost -->
+        <div class="relative px-4 py-3 overflow-hidden border-r border-base-content/8">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Tokens</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-primary">
+            {{ fmtTokens(m.total_tokens) }}<span v-if="m.runtime_mode === 'hosted-mcp' && m.total_tokens > 0" class="text-[10px] text-base-content/25 ml-0.5">~</span>
+          </div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
         </div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1">${{ (m.estimated_usd || 0).toFixed(4) }}</div>
-      </div>
 
-      <!-- Latency + Reward -->
-      <div class="relative px-4 py-3 overflow-hidden">
-        <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Latency</div>
-        <div class="text-2xl font-bold font-mono tabular-nums leading-none text-accent">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
-        <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ (m.avg_reward || 0).toFixed(2) }} reward</div>
-      </div>
+        <!-- Latency + Reward -->
+        <div class="relative px-4 py-3 overflow-hidden">
+          <div class="text-[9px] font-mono text-base-content/35 uppercase tracking-widest mb-1">Latency</div>
+          <div class="text-2xl font-bold font-mono tabular-nums leading-none text-accent">{{ fmtMs(m.avg_latency_ms || 0) }}</div>
+          <div class="text-[9px] font-mono text-base-content/25 mt-1">{{ (m.avg_reward || 0).toFixed(2) }} reward</div>
+        </div>
 
+      </div>
     </div>
 
     <!-- ── Master-detail body ─────────────────────────────────────────── -->
