@@ -661,7 +661,7 @@ async fn build_stack_inner(config: &Config, skip_rag_warmup: bool) -> Result<Sta
         .lsp
         .as_ref()
         .map(|l| l.inject_for_categories.clone())
-        .unwrap_or_else(|| vec!["code_completion".to_string(), "reasoning".to_string()]);
+        .unwrap_or_else(crate::config::default_lsp_inject_categories);
     let (skill_executor, rag_warmup_indexed_docs) = build_skill_executor(
         model_router.clone() as Arc<dyn ModelProvider>,
         config,

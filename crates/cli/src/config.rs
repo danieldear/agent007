@@ -339,8 +339,11 @@ pub struct ZonesConfig {
 fn default_lsp_enabled() -> bool {
     true
 }
-fn default_lsp_inject_categories() -> Vec<String> {
-    vec!["code_completion".to_string(), "reasoning".to_string()]
+pub fn default_lsp_inject_categories() -> Vec<String> {
+    ["code_completion", "reasoning", "code", "dev", "frontend"]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

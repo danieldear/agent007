@@ -159,7 +159,7 @@ LSP context injection can be configured in `config.toml`:
 ```toml
 [lsp]
 enabled = true
-inject_for_categories = ["code_completion", "reasoning"]
+inject_for_categories = ["code_completion", "reasoning", "code", "dev", "frontend"]
 
 [lsp.servers.rust_analyzer]
 command = "rust-analyzer"
@@ -168,7 +168,7 @@ args = []
 
 Behavior:
 - `enabled=false` disables LSP context injection entirely.
-- `inject_for_categories` controls which task categories receive LSP context.
+- `inject_for_categories` controls which task and skill categories receive LSP context. Defaults cover routing categories plus built-in code, dev, and frontend skills.
 - `servers` is a map keyed by server name.
 
 You can also manage this from the dashboard:
