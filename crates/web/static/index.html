@@ -390,7 +390,7 @@
 <!-- ── Top Bar ──────────────────────────────────────────────────────────────── -->
 <div id="topbar">
   <div class="logo">agent007 <span>// dashboard</span></div>
-  <div class="version">v0.1.0</div>
+  <div id="topbar-version" class="version">v?</div>
   <div class="spacer"></div>
   <div id="ws-badge">
     <div id="ws-dot" class="connecting"></div>
@@ -726,9 +726,12 @@
   // ── Config Tab ────────────────────────────────────────────────────────────
 
   function renderConfig(health) {
+    var resolvedVersion = health.version || '?';
+    var topbarVersion = document.getElementById('topbar-version');
+    if (topbarVersion) topbarVersion.textContent = 'v' + resolvedVersion;
     var kv = document.getElementById('config-kv');
     var cfg = {
-      'version':    health.version || '0.1.0',
+      'version':    resolvedVersion,
       'ws_url':     'ws://' + location.host + '/ws',
       'api_base':   location.origin,
       'dashboard':  location.href,

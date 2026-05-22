@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 
 const BASE = ''
+let healthCache = null
 
 async function fetchJson(url, opts = {}) {
   const res = await fetch(BASE + url, {
@@ -16,6 +17,16 @@ async function fetchJson(url, opts = {}) {
     throw new Error(message)
   }
   return res.json()
+}
+
+async function fetchHealth() {
+  if (!healthCache) {
+    healthCache = fetchJson('/api/health').catch((err) => {
+      healthCache = null
+      throw err
+    })
+  }
+  return healthCache
 }
 
 export function useApi() {
@@ -37,7 +48,7 @@ export function useApi() {
 
   const api = {
     // Health
-    health: () => fetchJson('/api/health'),
+    health: () => fetchHealth(),
 
     // Personas
     listPersonas: () => fetchJson('/api/personas'),
