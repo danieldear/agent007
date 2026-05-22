@@ -1555,13 +1555,14 @@ footer {
       </h1>
 
       <p class="hero-sub">
-        agent007 is the operations layer for AI coding environments — adding workflows, skills, memory, ETR tools, live observability, and a local dashboard without changing how your editor works.
+        agent007 is the operations layer for AI coding environments — adding multi-agent workflows, personas, memory, ETR tools, sharing, extensions, live observability, and a local dashboard without changing how your editor works.
       </p>
 
       <div class="hero-new-pills">
         <span class="new-pill green">⚡ 26 ETR built-ins · native Rust</span>
-        <span class="new-pill blue">🧩 LSP config + dashboard controls</span>
-        <span class="new-pill amber">🚀 Linux · Apple Silicon · Windows release path</span>
+        <span class="new-pill blue">🧩 LSP + MCP controls in the dashboard</span>
+        <span class="new-pill amber">🎭 multi-agent personas + approval-gated workflows</span>
+        <span class="new-pill green">🚀 Linux · Apple Silicon · Windows release path</span>
       </div>
 
       <div class="hero-actions">
@@ -1624,16 +1625,16 @@ footer {
             <span>Search, JSON query, table select, joins, metrics, workflow inspection, log slicing, policy check, and more.</span>
           </div>
           <div class="hero-surface-card">
-            <strong>20 built-in skills</strong>
-            <span>Development, code quality, planning, UI design, analysis, and project release workflows.</span>
+            <strong>17 built-in skills</strong>
+            <span>Development, code quality, planning, UI design, analysis, release engineering, and custom-agent creation.</span>
           </div>
           <div class="hero-surface-card">
-            <strong>9 workflows</strong>
-            <span>From TDD and code review to feature delivery, ideation, security audits, and log analysis.</span>
+            <strong>8 core workflows</strong>
+            <span>From TDD and code review to feature delivery, ideation, security audits, log analysis, and hosted approval flows.</span>
           </div>
           <div class="hero-surface-card">
             <strong>Dashboard-first ops</strong>
-            <span>Run state, tokens, liveness, LSP config, MCP registry, memory, tools, and workflow visibility in one place.</span>
+            <span>Run state, tokens, liveness, LSP config, MCP registry, memory, sharing, extensions, and workflow visibility in one place.</span>
           </div>
         </div>
       </div>
@@ -1705,11 +1706,11 @@ footer {
         <span class="stat-new">▲ NEW</span>
       </div>
       <div class="stat-box">
-        <div class="stat-num">20</div>
+        <div class="stat-num">17</div>
         <div class="stat-label">Built-in Skills</div>
       </div>
       <div class="stat-box">
-        <div class="stat-num">9</div>
+        <div class="stat-num">8</div>
         <div class="stat-label">Workflows</div>
       </div>
       <div class="stat-box">
@@ -1717,7 +1718,7 @@ footer {
         <div class="stat-label">IDE Integrations</div>
       </div>
       <div class="stat-box">
-        <div class="stat-num">21</div>
+        <div class="stat-num">23</div>
         <div class="stat-label">Rust Crates</div>
       </div>
     </div>
@@ -1748,8 +1749,8 @@ footer {
         <div class="feature-card">
           <div class="feature-icon">🔁</div>
           <div class="feature-title">Workflows</div>
-          <div class="feature-desc">Multi-step YAML pipelines with parallel execution, approval gates, and step dependencies. TDD, code review, full feature delivery — all orchestrated.</div>
-          <span class="feature-tag">9 built-in</span>
+          <div class="feature-desc">Multi-step YAML pipelines with parallel execution, approval gates, step dependencies, and <code>multi-agent</code> execution. TDD, code review, ideation, and full feature delivery all run through the same runtime model.</div>
+          <span class="feature-tag">8 built-in</span>
         </div>
         <div class="feature-card">
           <div class="feature-icon">🧠</div>
@@ -1760,7 +1761,7 @@ footer {
         <div class="feature-card">
           <div class="feature-icon">🎭</div>
           <div class="feature-title">Personas</div>
-          <div class="feature-desc">Swap agent identities on the fly. Each persona has its own system prompt, preferred model, and allowed-tools list with MCP tool-policy enforcement.</div>
+          <div class="feature-desc">A persona <em>is</em> the agent. Use personas as direct specialists or as orchestrators with allowed workers, preferred models, memory namespaces, zones, and skill injection.</div>
           <span class="feature-tag">Unlimited</span>
         </div>
         <div class="feature-card">
@@ -1789,7 +1790,7 @@ footer {
         <div class="feature-card">
           <div class="feature-icon">🖥️</div>
           <div class="feature-title">Web Dashboard</div>
-          <div class="feature-desc">Live operations console at <code>localhost:8007</code> with run history, workflow state, tool registry, MCP server management, RAG source controls, extensions, and memory diagnostics. Step output renders as <strong style="color:var(--amber)">Markdown</strong>. Real-time WebSocket updates. <strong style="color:var(--amber)">6 themes</strong> built in.</div>
+          <div class="feature-desc">Live operations console at <code>localhost:8007</code> with run history, workflow state, tool registry, MCP server management, LSP controls, sharing/import-export, extensions, and memory diagnostics. Step output renders as <strong style="color:var(--amber)">Markdown</strong>. Real-time WebSocket updates. <strong style="color:var(--amber)">6 themes</strong> built in.</div>
           <span class="feature-tag">localhost:8007</span>
           <span class="feature-tag green-tag">NEW: Markdown rendering</span>
         </div>
@@ -1854,13 +1855,13 @@ footer {
         <div class="feature-card">
           <div class="feature-icon">📦</div>
           <div class="feature-title">Bundles</div>
-          <div class="feature-desc">Pack skills, workflows, personas, and tools into SHA-256-verified bundles. Transitive dependency detection automatically bundles tool chains. No asset silently dropped.</div>
+          <div class="feature-desc">Pack skills, workflows, personas, and tools into SHA-256-verified bundles with version-aware metadata. Transitive dependency detection automatically bundles tool chains so linked assets are not silently dropped.</div>
           <span class="feature-tag">SHA-256 verified</span>
         </div>
         <div class="feature-card">
           <div class="feature-icon">⊞</div>
           <div class="feature-title">Extensions</div>
-          <div class="feature-desc">Import capabilities from local bundles, GitHub, npm MCP packages, OpenAPI specs, and marketplace-style sources through adapter-based normalization, preview, and install flows.</div>
+          <div class="feature-desc">Import capabilities from local bundles, GitHub sources, npm MCP packages, OpenAPI specs, and marketplace-style sources through adapter-based normalization, preview, conflict handling, and install flows.</div>
           <span class="feature-tag">A/B/C compat</span>
         </div>
         <div class="feature-card">
@@ -1878,7 +1879,7 @@ footer {
         <div class="feature-card">
           <div class="feature-icon">🧾</div>
           <div class="feature-title">Release Engineering</div>
-          <div class="feature-desc">Tagged GitHub releases now package Linux, Apple Silicon macOS, and Windows artifacts with checksums, installer handoff, and manual release-workflow dispatch for safe testing.</div>
+          <div class="feature-desc">Tagged GitHub releases package Linux, Apple Silicon macOS, and Windows artifacts with checksums, installer handoff, and release-workflow dispatch for safer distribution and validation.</div>
           <span class="feature-tag">Release-ready</span>
         </div>
       </div>
@@ -2146,7 +2147,7 @@ footer {
   <div class="section-inner">
     <p class="section-tag reveal">Pipelines</p>
     <h2 class="section-title reveal">Workflows that ship.</h2>
-    <p class="section-sub reveal">YAML pipelines with parallel step execution, approval gates, and full run history. Run from your editor or the CLI.</p>
+    <p class="section-sub reveal">YAML pipelines with parallel step execution, approval gates, multi-agent steps, and full run history. Run from your editor, the CLI, or hosted workflow sessions.</p>
 
     <div class="code-block reveal" style="margin-bottom: 2.5rem;">
       <div class="code-header"><span class="code-lang">Running a workflow</span></div>
@@ -2190,7 +2191,7 @@ footer {
       </div>
       <div class="workflow-card">
         <div class="wf-card-name">feature</div>
-        <div class="wf-card-desc">Full delivery pipeline: spec → arch → implement → approval gate → parallel review → rework → tests → release sign-off.</div>
+        <div class="wf-card-desc">Full delivery pipeline: spec → architecture → implementation → approval gate → parallel review → rework → tests → release sign-off, with stronger built-in planner/reviewer assets.</div>
         <div class="wf-card-footer">
           <span class="wf-card-steps">17 steps</span>
           <span class="wf-card-badge badge-parallel">parallel review</span>
@@ -2220,14 +2221,6 @@ footer {
           <span class="wf-card-badge badge-sequential">sequential</span>
         </div>
       </div>
-      <div class="workflow-card">
-        <div class="wf-card-name">brainstorm</div>
-        <div class="wf-card-desc">Lightweight brainstorm pipeline: ideation → PRD. Stops before architecture. Direct input for ideation workflow.</div>
-        <div class="wf-card-footer">
-          <span class="wf-card-steps">lightweight</span>
-          <span class="wf-card-badge badge-sequential">sequential</span>
-        </div>
-      </div>
     </div>
   </div>
 </section>
@@ -2237,7 +2230,7 @@ footer {
   <div class="section-inner">
     <p class="section-tag reveal">How it works</p>
     <h2 class="section-title reveal">One server.<br/>Your whole stack.</h2>
-    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects and gets 50+ tools — backed by a 21-crate Rust core with ETR, token optimization, dashboard controls, and release-ready install paths.</p>
+    <p class="section-sub reveal">agent007 runs as an MCP stdio server. Your editor connects and gets 50+ tools — backed by a 23-crate Rust core with ETR, multi-agent orchestration, token optimization, dashboard controls, and release-ready install paths.</p>
 
     <div class="arch-diagram reveal">
       <div class="arch-label">Your AI Editor</div>
@@ -2251,7 +2244,7 @@ footer {
 
       <div class="arch-arrow">↕ MCP stdio · 50+ tools</div>
 
-      <div class="arch-label">agent007 MCP Server (Rust · 21 crates)</div>
+      <div class="arch-label">agent007 MCP Server (Rust · 23 crates)</div>
       <div class="arch-row">
         <div class="arch-box">Skill Engine</div>
         <div class="arch-box">Workflow Engine</div>
@@ -2263,8 +2256,8 @@ footer {
         <div class="arch-box">Eval Gates</div>
         <div class="arch-box">Reliability Engine</div>
         <div class="arch-box">Adaptive Shadow</div>
-        <div class="arch-box">Hosted Engine</div>
-        <div class="arch-box">Persona Manager</div>
+        <div class="arch-box">Hosted Workflow Engine</div>
+        <div class="arch-box">Persona / Agent Runtime</div>
       </div>
       <div class="arch-row">
         <div class="arch-box">Memory / RAG</div>
@@ -2285,13 +2278,13 @@ footer {
       </div>
 
       <div class="arch-divider"></div>
-      <div class="arch-label">Token Optimization (New)</div>
+      <div class="arch-label">Runtime controls + distribution</div>
       <div class="arch-row">
         <div class="arch-box hi-blue">Prompt Cache</div>
         <div class="arch-box hi-blue">Minification</div>
         <div class="arch-box hi-blue">Lazy Inject</div>
         <div class="arch-box">Zones / ACL</div>
-        <div class="arch-box">Bundles · Extensions</div>
+        <div class="arch-box">Bundles · Sharing · Extensions</div>
       </div>
 
       <div class="arch-arrow">↕</div>
@@ -2312,8 +2305,8 @@ footer {
 <section id="skills">
   <div class="section-inner">
     <p class="section-tag reveal">Skills library</p>
-    <h2 class="section-title reveal">Core skills from a 20-skill library.<br/>Infinitely extensible.</h2>
-    <p class="section-sub reveal">Every skill is a Markdown file. Write your own, install from GitHub, or share as a bundle. The grid below highlights the core, domain-agnostic surface area available from any editor.</p>
+    <h2 class="section-title reveal">Core skills from a 17-skill built-in library.<br/>Infinitely extensible.</h2>
+    <p class="section-sub reveal">Every skill is a Markdown file or packaged skill directory. Write your own, install from GitHub, or share as a versioned bundle. The grid below highlights the core, domain-agnostic surface area available from any editor.</p>
 
     <div class="reveal">
       <div class="skills-category">
