@@ -594,7 +594,10 @@ async fn asset_handler(AxumPath(path): AxumPath<String>) -> impl IntoResponse {
 }
 
 async fn health_handler() -> impl IntoResponse {
-    axum::Json(serde_json::json!({ "status": "ok", "version": "0.1.0" }))
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
 #[cfg(test)]

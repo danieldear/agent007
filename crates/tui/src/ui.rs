@@ -61,7 +61,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let pause_hint = if app.paused { " [PAUSED]" } else { "" };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("agent007 v0.1.0");
+        .title(format!("agent007 v{}", env!("CARGO_PKG_VERSION")));
     let paragraph =
         Paragraph::new(format!("[q]uit [p]ause [?]help ↑↓ scroll logs{pause_hint}")).block(block);
     frame.render_widget(paragraph, area);

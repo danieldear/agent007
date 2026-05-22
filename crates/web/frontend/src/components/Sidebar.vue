@@ -8,6 +8,7 @@ defineEmits(['navigate'])
 const { api } = useApi()
 const projectName = ref('')
 const projectPath = ref('')
+const appVersion = ref('')
 
 // 'night' is our custom amber dark theme; 'day' is the warm light theme
 const DARK_THEME = 'night'
@@ -68,6 +69,13 @@ onMounted(async () => {
   } catch {}
 })
 
+onMounted(async () => {
+  try {
+    const health = await api.health()
+    if (health?.version) appVersion.value = health.version
+  } catch {}
+})
+
 const primaryNav = [
   { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
   { id: 'agents',    label: 'Personas',  symbol: '◉' },
@@ -93,7 +101,7 @@ const configNav = [
     <div class="px-4 pt-5 pb-4 border-b border-base-300/80">
       <div class="flex items-baseline gap-2">
         <h1 class="text-base font-bold font-mono text-primary tracking-widest uppercase">agent007</h1>
-        <span class="text-[10px] font-mono text-base-content/30 tracking-wider">v0.1</span>
+        <span v-if="appVersion" class="text-[10px] font-mono text-base-content/30 tracking-wider">v{{ appVersion }}</span>
       </div>
       <p class="text-[11px] text-base-content/40 mt-0.5 tracking-wide">AI Orchestration</p>
       <div v-if="projectName"

@@ -15,7 +15,7 @@ pub use commands::workflow::WorkflowAction;
 #[derive(Parser, Debug)]
 #[command(
     name = "agent007",
-    version = "0.1.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Multi-agent AI orchestration"
 )]
 pub struct Cli {
