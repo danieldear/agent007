@@ -4,6 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+const APP_TITLE: &str = concat!("agent007 v", env!("CARGO_PKG_VERSION"));
+
 /// Entry point called from EventLoop's terminal.draw() closure.
 pub fn render(frame: &mut Frame, app: &App) {
     let size = frame.area();
@@ -59,9 +61,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let pause_hint = if app.paused { " [PAUSED]" } else { "" };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!("agent007 v{}", env!("CARGO_PKG_VERSION")));
+    let block = Block::default().borders(Borders::ALL).title(APP_TITLE);
     let paragraph =
         Paragraph::new(format!("[q]uit [p]ause [?]help ↑↓ scroll logs{pause_hint}")).block(block);
     frame.render_widget(paragraph, area);
