@@ -869,9 +869,15 @@ async fn build_skill_executor(
         agent007_global_home().join("memory"),
     ));
     let global_memory = global_store.scoped("global");
+    let repo_graph_root = agent007_project_home()
+        .and_then(|home| home.parent().map(|parent| parent.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     Ok((
-        SkillExecutor::new(provider, retriever, memory).with_global_memory(global_memory),
+        SkillExecutor::new(provider, retriever, memory)
+            .with_global_memory(global_memory)
+            .with_repo_graph_root(repo_graph_root),
         indexed_docs,
     ))
 }

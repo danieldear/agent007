@@ -196,8 +196,24 @@ const m = computed(() => metrics.value || {
   feedback_count: 0, prompt_improvements: 0,
   skills_count: 0, workflows_count: 0, personas_count: 0, memory_keys: 0,
   started_at: null, local_execution_available: false, runtime_mode: 'hosted-mcp', model_provider: 'unknown',
+  repo_graph: null,
   recent_tasks: [], recent_scorecards: [],
 })
+
+function repoGraphState(graph) {
+  if (!graph?.exists) return 'missing'
+  if (graph?.stale) return 'stale'
+  return 'ready'
+}
+
+function repoGraphBadgeClass(graph) {
+  const state = repoGraphState(graph)
+  return {
+    'badge-error': state === 'missing',
+    'badge-warning': state === 'stale',
+    'badge-success': state === 'ready',
+  }
+}
 
 const uptime = computed(() => {
   if (!m.value.started_at) return '—'
@@ -848,6 +864,36 @@ async function submitTask() {
       </div>
     </div>
 
+    <div v-if="m.repo_graph" class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
+      <div class="rounded-xl border border-base-content/10 bg-base-300/70 px-4 py-3 flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2 mr-2">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Repo Graph</span>
+          <span class="badge badge-xs font-mono" :class="repoGraphBadgeClass(m.repo_graph)">{{ repoGraphState(m.repo_graph) }}</span>
+        </div>
+        <span class="text-[10px] font-mono text-base-content/35">
+          v{{ m.repo_graph.version || '—' }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.symbols || 0 }} sym
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.files || 0 }} files
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.edges || 0 }} edges
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          stale {{ m.repo_graph.stale_files || 0 }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          missing {{ m.repo_graph.missing_files || 0 }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/25 truncate max-w-[32rem]">
+          {{ m.repo_graph.graph_path || 'no graph file yet' }}
+        </span>
+      </div>
+    </div>
+
     <!-- ── Master-detail body ─────────────────────────────────────────── -->
     <div class="flex-1 flex min-h-0">
 
@@ -1437,7 +1483,19 @@ async function submitTask() {
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
               </div>
             </div>
-            <div class="grid grid-cols-3 gap-2.5">
+            <div class="grid grid-cols-3 xl:grid-cols-6 gap-2.5">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Hits</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_hits || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Files</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_files || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Chars</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_context_chars || 0 }}</div>
+              </div>
               <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>

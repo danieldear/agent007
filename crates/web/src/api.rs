@@ -892,9 +892,11 @@ pub async fn skills_run_handler(
             Arc::new(NoOpVectorDB)
         }
     };
-    let retriever = Arc::new(agent007_memory::Retriever::new(embedder, db, 5));
-
     let memory_store = memory_store_for_web();
+    let retriever = Arc::new(
+        agent007_memory::Retriever::new(embedder, db, 5)
+            .with_memory_store(Arc::clone(&memory_store)),
+    );
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
         agent007_global_home().join("memory"),
@@ -904,7 +906,8 @@ pub async fn skills_run_handler(
     let model = state.model_router.clone() as Arc<dyn agent007_models::ModelProvider>;
 
     let executor = agent007_skills::SkillExecutor::new(model, retriever, memory)
-        .with_global_memory(global_memory);
+        .with_global_memory(global_memory)
+        .with_repo_graph_root(std::path::PathBuf::from(&state.project_path));
     let store = run_store_for_web();
     let run = match store.create_run(
         "web-skill-run",
@@ -1112,6 +1115,13 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
                 serde_json::json!(state.runtime_mode),
             );
         }
+        let repo_root = FsPath::new(&state.project_path);
+        let graph_path = agent007_core::default_graph_path_for_root(repo_root);
+        let graph_status = agent007_core::graph_status(&graph_path);
+        obj.insert(
+            "repo_graph".to_string(),
+            serde_json::to_value(graph_status).unwrap_or_else(|_| serde_json::json!({})),
+        );
     }
     Json(snapshot).into_response()
 }

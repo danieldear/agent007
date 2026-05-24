@@ -93,6 +93,46 @@ pub struct RepoGraphStatus {
     pub counts: Option<RepoGraphCounts>,
     pub stale: bool,
     pub stale_files: usize,
+    pub missing_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGraphNeighborhood {
+    pub symbol: String,
+    pub exact: bool,
+    pub max_depth: usize,
+    pub matched_symbols: Vec<RepoGraphNode>,
+    pub nodes: Vec<RepoGraphNode>,
+    pub edges: Vec<RepoGraphEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGraphPathResult {
+    pub from: String,
+    pub to: String,
+    pub exact: bool,
+    pub found: bool,
+    pub steps: Vec<RepoGraphPathStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGraphPathStep {
+    pub from_id: String,
+    pub from_name: String,
+    pub from_path: Option<String>,
+    pub edge_kind: String,
+    pub to_id: String,
+    pub to_name: String,
+    pub to_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGraphQueryContext {
+    pub query: String,
+    pub matched_symbols: Vec<RepoGraphNode>,
+    pub related_docs: Vec<RepoGraphNode>,
+    pub files: Vec<String>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +375,7 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
             counts: None,
             stale: false,
             stale_files: 0,
+            missing_files: 0,
         };
     }
     let graph = match load_graph(path) {
@@ -349,6 +390,7 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
                 counts: None,
                 stale: true,
                 stale_files: 0,
+                missing_files: 0,
             };
         }
     };
@@ -356,6 +398,7 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
         .ok()
         .map(|dt| dt.with_timezone(&Utc));
     let mut stale_files = 0usize;
+    let mut missing_files = 0usize;
     if let Some(built_at) = built_at {
         let root = PathBuf::from(&graph.root);
         for node in &graph.nodes {
@@ -366,7 +409,10 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
             }
             let Some(rel) = &node.path else { continue };
             let p = root.join(rel);
-            let Ok(meta) = fs::metadata(&p) else { continue };
+            let Ok(meta) = fs::metadata(&p) else {
+                missing_files += 1;
+                continue;
+            };
             let Ok(modified) = meta.modified() else {
                 continue;
             };
@@ -383,8 +429,9 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
         built_at: Some(graph.built_at),
         version: Some(graph.version),
         counts: Some(graph.counts),
-        stale: stale_files > 0,
+        stale: stale_files > 0 || missing_files > 0,
         stale_files,
+        missing_files,
     }
 }
 
@@ -631,13 +678,12 @@ pub fn callers_for_symbol(
     symbol: &str,
     exact: bool,
 ) -> Vec<BTreeMap<String, String>> {
-    let targets = symbol_lookup(graph, symbol, exact);
-    let target_ids: BTreeSet<_> = targets.iter().map(|node| node.id.clone()).collect();
+    let (targets, target_ids) = target_nodes_for_symbol(graph, symbol, exact);
     if target_ids.is_empty() {
         return Vec::new();
     }
-
-    let node_map: HashMap<_, _> = graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+    let _ = targets;
+    let node_map = graph_node_map(graph);
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
     for edge in &graph.edges {
@@ -650,34 +696,457 @@ pub fn callers_for_symbol(
         let Some(to_node) = node_map.get(&edge.to) else {
             continue;
         };
+        let key = unique_edge_key(from_node, to_node, edge);
+        if !seen.insert(key) {
+            continue;
+        }
+        rows.push(call_row("caller", "callee", from_node, to_node, edge));
+    }
+    rows
+}
+
+pub fn callees_for_symbol(
+    graph: &RepoGraph,
+    symbol: &str,
+    exact: bool,
+) -> Vec<BTreeMap<String, String>> {
+    let (targets, target_ids) = target_nodes_for_symbol(graph, symbol, exact);
+    if target_ids.is_empty() {
+        return Vec::new();
+    }
+    let _ = targets;
+    let node_map = graph_node_map(graph);
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for edge in &graph.edges {
+        if edge.kind != RepoGraphEdgeKind::Calls || !target_ids.contains(&edge.from) {
+            continue;
+        }
+        let Some(from_node) = node_map.get(&edge.from) else {
+            continue;
+        };
+        let Some(to_node) = node_map.get(&edge.to) else {
+            continue;
+        };
+        let key = unique_edge_key(from_node, to_node, edge);
+        if !seen.insert(key) {
+            continue;
+        }
+        rows.push(call_row("caller", "callee", from_node, to_node, edge));
+    }
+    rows
+}
+
+pub fn doc_links_for_symbol(
+    graph: &RepoGraph,
+    symbol: &str,
+    exact: bool,
+) -> Vec<BTreeMap<String, String>> {
+    let (_, target_ids) = target_nodes_for_symbol(graph, symbol, exact);
+    if target_ids.is_empty() {
+        return Vec::new();
+    }
+    let node_map = graph_node_map(graph);
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for edge in &graph.edges {
+        if edge.kind != RepoGraphEdgeKind::Documents || !target_ids.contains(&edge.to) {
+            continue;
+        }
+        let Some(doc_node) = node_map.get(&edge.from) else {
+            continue;
+        };
+        let Some(symbol_node) = node_map.get(&edge.to) else {
+            continue;
+        };
         let key = (
-            from_node.name.clone(),
-            from_node.path.clone().unwrap_or_default(),
-            to_node.name.clone(),
-            to_node.path.clone().unwrap_or_default(),
-            edge.line.unwrap_or(0),
+            doc_node.id.clone(),
+            symbol_node.id.clone(),
+            edge.path.clone(),
+            edge.line,
         );
         if !seen.insert(key) {
             continue;
         }
         let mut row = BTreeMap::new();
-        row.insert("caller".into(), from_node.name.clone());
+        row.insert("doc".into(), doc_node.name.clone());
+        row.insert("doc_path".into(), doc_node.path.clone().unwrap_or_default());
+        row.insert("symbol".into(), symbol_node.name.clone());
         row.insert(
-            "caller_path".into(),
-            from_node.path.clone().unwrap_or_default(),
-        );
-        row.insert("callee".into(), to_node.name.clone());
-        row.insert(
-            "callee_path".into(),
-            to_node.path.clone().unwrap_or_default(),
-        );
-        row.insert(
-            "line".into(),
-            edge.line.map(|v| v.to_string()).unwrap_or_default(),
+            "symbol_path".into(),
+            symbol_node.path.clone().unwrap_or_default(),
         );
         rows.push(row);
     }
     rows
+}
+
+pub fn usage_graph_for_symbol(
+    graph: &RepoGraph,
+    symbol: &str,
+    exact: bool,
+    max_depth: usize,
+) -> RepoGraphNeighborhood {
+    let matched_symbols = symbol_lookup(graph, symbol, exact);
+    let seed_ids: Vec<String> = matched_symbols.iter().map(|node| node.id.clone()).collect();
+    let (nodes, edges) = graph_neighborhood(graph, &seed_ids, max_depth.max(1));
+    RepoGraphNeighborhood {
+        symbol: symbol.to_string(),
+        exact,
+        max_depth: max_depth.max(1),
+        matched_symbols,
+        nodes,
+        edges,
+    }
+}
+
+pub fn impact_radius_for_symbol(
+    graph: &RepoGraph,
+    symbol: &str,
+    exact: bool,
+    max_depth: usize,
+) -> RepoGraphNeighborhood {
+    usage_graph_for_symbol(graph, symbol, exact, max_depth.max(2))
+}
+
+pub fn dep_path_between_symbols(
+    graph: &RepoGraph,
+    from_symbol: &str,
+    to_symbol: &str,
+    exact: bool,
+) -> RepoGraphPathResult {
+    let from_matches = symbol_lookup(graph, from_symbol, exact);
+    let to_matches = symbol_lookup(graph, to_symbol, exact);
+    let from_ids: BTreeSet<_> = from_matches.iter().map(|node| node.id.clone()).collect();
+    let to_ids: BTreeSet<_> = to_matches.iter().map(|node| node.id.clone()).collect();
+    if from_ids.is_empty() || to_ids.is_empty() {
+        return RepoGraphPathResult {
+            from: from_symbol.to_string(),
+            to: to_symbol.to_string(),
+            exact,
+            found: false,
+            steps: Vec::new(),
+        };
+    }
+
+    let node_map = graph_node_map(graph);
+    let mut adjacency: HashMap<String, Vec<(String, RepoGraphEdge)>> = HashMap::new();
+    for edge in &graph.edges {
+        adjacency
+            .entry(edge.from.clone())
+            .or_default()
+            .push((edge.to.clone(), edge.clone()));
+        adjacency.entry(edge.to.clone()).or_default().push((
+            edge.from.clone(),
+            RepoGraphEdge {
+                kind: edge.kind.clone(),
+                from: edge.to.clone(),
+                to: edge.from.clone(),
+                path: edge.path.clone(),
+                line: edge.line,
+            },
+        ));
+    }
+
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = BTreeSet::new();
+    let mut prev: HashMap<String, (String, RepoGraphEdge)> = HashMap::new();
+    for id in &from_ids {
+        queue.push_back(id.clone());
+        visited.insert(id.clone());
+    }
+
+    let mut found_target: Option<String> = None;
+    while let Some(current) = queue.pop_front() {
+        if to_ids.contains(&current) {
+            found_target = Some(current);
+            break;
+        }
+        for (next, edge) in adjacency.get(&current).cloned().unwrap_or_default() {
+            if visited.insert(next.clone()) {
+                prev.insert(next.clone(), (current.clone(), edge));
+                queue.push_back(next);
+            }
+        }
+    }
+
+    let Some(target_id) = found_target else {
+        return RepoGraphPathResult {
+            from: from_symbol.to_string(),
+            to: to_symbol.to_string(),
+            exact,
+            found: false,
+            steps: Vec::new(),
+        };
+    };
+
+    let mut steps = Vec::new();
+    let mut cursor = target_id.clone();
+    while let Some((prev_id, edge)) = prev.get(&cursor).cloned() {
+        let Some(from_node) = node_map.get(&prev_id) else {
+            break;
+        };
+        let Some(to_node) = node_map.get(&cursor) else {
+            break;
+        };
+        steps.push(RepoGraphPathStep {
+            from_id: prev_id.clone(),
+            from_name: from_node.name.clone(),
+            from_path: from_node.path.clone(),
+            edge_kind: format!("{:?}", edge.kind).to_lowercase(),
+            to_id: cursor.clone(),
+            to_name: to_node.name.clone(),
+            to_path: to_node.path.clone(),
+        });
+        cursor = prev_id;
+    }
+    steps.reverse();
+
+    RepoGraphPathResult {
+        from: from_symbol.to_string(),
+        to: to_symbol.to_string(),
+        exact,
+        found: true,
+        steps,
+    }
+}
+
+pub fn context_bundle_for_query(
+    graph: &RepoGraph,
+    query: &str,
+    max_symbols: usize,
+    max_neighbors: usize,
+) -> RepoGraphQueryContext {
+    let keywords = extract_query_keywords(query);
+    let mut matched_symbols = Vec::new();
+    let mut seen_ids = BTreeSet::new();
+    for keyword in keywords {
+        let mut matches = symbol_lookup(graph, &keyword, true);
+        if matches.is_empty() {
+            matches = symbol_lookup(graph, &keyword, false);
+        }
+        for node in matches {
+            if seen_ids.insert(node.id.clone()) {
+                matched_symbols.push(node);
+            }
+            if matched_symbols.len() >= max_symbols {
+                break;
+            }
+        }
+        if matched_symbols.len() >= max_symbols {
+            break;
+        }
+    }
+
+    let mut files = BTreeSet::new();
+    let mut related_docs = Vec::new();
+    let mut text = String::new();
+    for node in matched_symbols.iter().take(max_symbols) {
+        if let Some(path) = &node.path {
+            files.insert(path.clone());
+        }
+        text.push_str(&format!(
+            "[symbol] {} ({})\n",
+            node.name,
+            node.path.clone().unwrap_or_default()
+        ));
+
+        for row in callers_for_symbol(graph, &node.name, true)
+            .into_iter()
+            .take(max_neighbors)
+        {
+            text.push_str(&format!(
+                "  caller: {} ({})\n",
+                row.get("caller").cloned().unwrap_or_default(),
+                row.get("caller_path").cloned().unwrap_or_default()
+            ));
+            if let Some(path) = row.get("caller_path") {
+                if !path.is_empty() {
+                    files.insert(path.clone());
+                }
+            }
+        }
+
+        for row in callees_for_symbol(graph, &node.name, true)
+            .into_iter()
+            .take(max_neighbors)
+        {
+            text.push_str(&format!(
+                "  callee: {} ({})\n",
+                row.get("callee").cloned().unwrap_or_default(),
+                row.get("callee_path").cloned().unwrap_or_default()
+            ));
+            if let Some(path) = row.get("callee_path") {
+                if !path.is_empty() {
+                    files.insert(path.clone());
+                }
+            }
+        }
+
+        for row in doc_links_for_symbol(graph, &node.name, true)
+            .into_iter()
+            .take(max_neighbors)
+        {
+            let doc_path = row.get("doc_path").cloned().unwrap_or_default();
+            text.push_str(&format!(
+                "  doc: {} ({})\n",
+                row.get("doc").cloned().unwrap_or_default(),
+                doc_path
+            ));
+            if !doc_path.is_empty() {
+                files.insert(doc_path.clone());
+                if let Some(doc_node) = graph
+                    .nodes
+                    .iter()
+                    .find(|candidate| candidate.path.as_deref() == Some(doc_path.as_str()))
+                {
+                    related_docs.push(doc_node.clone());
+                }
+            }
+        }
+        text.push('\n');
+    }
+
+    RepoGraphQueryContext {
+        query: query.to_string(),
+        matched_symbols,
+        related_docs,
+        files: files.into_iter().collect(),
+        text: text.trim().to_string(),
+    }
+}
+
+pub fn evidence_refs_for_text(
+    root: &Path,
+    graph_path: Option<&Path>,
+    text: &str,
+    limit: usize,
+) -> Vec<String> {
+    let Ok(graph) = load_or_build_graph(root, graph_path) else {
+        return Vec::new();
+    };
+    let bundle = context_bundle_for_query(&graph, text, limit.max(1), 1);
+    bundle
+        .matched_symbols
+        .into_iter()
+        .take(limit)
+        .map(|node| node.id)
+        .collect()
+}
+
+fn target_nodes_for_symbol(
+    graph: &RepoGraph,
+    symbol: &str,
+    exact: bool,
+) -> (Vec<RepoGraphNode>, BTreeSet<String>) {
+    let targets = symbol_lookup(graph, symbol, exact);
+    let target_ids = targets.iter().map(|node| node.id.clone()).collect();
+    (targets, target_ids)
+}
+
+fn graph_node_map(graph: &RepoGraph) -> HashMap<String, &RepoGraphNode> {
+    graph.nodes.iter().map(|n| (n.id.clone(), n)).collect()
+}
+
+fn unique_edge_key(
+    from_node: &RepoGraphNode,
+    to_node: &RepoGraphNode,
+    edge: &RepoGraphEdge,
+) -> (String, String, String, String, usize) {
+    (
+        from_node.name.clone(),
+        from_node.path.clone().unwrap_or_default(),
+        to_node.name.clone(),
+        to_node.path.clone().unwrap_or_default(),
+        edge.line.unwrap_or(0),
+    )
+}
+
+fn call_row(
+    from_label: &str,
+    to_label: &str,
+    from_node: &RepoGraphNode,
+    to_node: &RepoGraphNode,
+    edge: &RepoGraphEdge,
+) -> BTreeMap<String, String> {
+    let mut row = BTreeMap::new();
+    row.insert(from_label.into(), from_node.name.clone());
+    row.insert(
+        format!("{from_label}_path"),
+        from_node.path.clone().unwrap_or_default(),
+    );
+    row.insert(to_label.into(), to_node.name.clone());
+    row.insert(
+        format!("{to_label}_path"),
+        to_node.path.clone().unwrap_or_default(),
+    );
+    row.insert(
+        "line".into(),
+        edge.line.map(|v| v.to_string()).unwrap_or_default(),
+    );
+    row
+}
+
+fn graph_neighborhood(
+    graph: &RepoGraph,
+    seed_ids: &[String],
+    max_depth: usize,
+) -> (Vec<RepoGraphNode>, Vec<RepoGraphEdge>) {
+    let node_map = graph_node_map(graph);
+    let mut queue = std::collections::VecDeque::new();
+    let mut seen = BTreeSet::new();
+    let mut edge_seen = BTreeSet::new();
+    let mut included_edges = Vec::new();
+    for id in seed_ids {
+        queue.push_back((id.clone(), 0usize));
+        seen.insert(id.clone());
+    }
+    while let Some((current, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+        for edge in &graph.edges {
+            let next = if edge.from == current {
+                Some(edge.to.clone())
+            } else if edge.to == current {
+                Some(edge.from.clone())
+            } else {
+                None
+            };
+            let Some(next) = next else { continue };
+            let edge_key = (
+                edge.kind.clone(),
+                edge.from.clone(),
+                edge.to.clone(),
+                edge.path.clone(),
+                edge.line,
+            );
+            if edge_seen.insert(edge_key) {
+                included_edges.push(edge.clone());
+            }
+            if seen.insert(next.clone()) {
+                queue.push_back((next, depth + 1));
+            }
+        }
+    }
+    let mut nodes: Vec<RepoGraphNode> = seen
+        .into_iter()
+        .filter_map(|id| node_map.get(&id).cloned().cloned())
+        .collect();
+    nodes.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
+    included_edges.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+    (nodes, included_edges)
+}
+
+fn extract_query_keywords(query: &str) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for token in query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+        .filter(|token| token.len() >= 3)
+    {
+        out.insert(token.to_lowercase());
+    }
+    out.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -733,6 +1202,71 @@ pub fn beta() {
         assert!(callers
             .iter()
             .any(|row| row.get("caller") == Some(&"beta".to_string())));
+    }
+
+    #[test]
+    fn graph_queries_cover_callees_paths_docs_and_context() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            r#"
+pub fn alpha() {}
+pub fn beta() { alpha(); }
+pub fn gamma() { beta(); }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("docs/alpha.md"),
+            "Alpha references `alpha` and explains the symbol.\n",
+        )
+        .unwrap();
+
+        let graph = RepoGraphBuilder::new(dir.path()).build().unwrap();
+        let callees = callees_for_symbol(&graph, "beta", true);
+        assert!(callees
+            .iter()
+            .any(|row| row.get("callee") == Some(&"alpha".to_string())));
+
+        let docs = doc_links_for_symbol(&graph, "alpha", true);
+        assert!(docs.iter().any(|row| row
+            .get("doc_path")
+            .map(|path| path.ends_with("docs/alpha.md"))
+            .unwrap_or(false)));
+
+        let dep_path = dep_path_between_symbols(&graph, "gamma", "alpha", true);
+        assert!(dep_path.found);
+        assert_eq!(dep_path.steps.len(), 2);
+
+        let usage = usage_graph_for_symbol(&graph, "alpha", true, 2);
+        assert!(usage.nodes.iter().any(|node| node.name == "beta"));
+
+        let impact = impact_radius_for_symbol(&graph, "alpha", true, 2);
+        assert!(impact.nodes.iter().any(|node| node.name == "gamma"));
+
+        let context = context_bundle_for_query(&graph, "alpha behavior", 4, 2);
+        assert!(context.text.contains("[symbol] alpha"));
+        assert!(context
+            .files
+            .iter()
+            .any(|path| path.ends_with("src/lib.rs")));
+    }
+
+    #[test]
+    fn graph_status_marks_missing_files_as_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn hello() {}\n").unwrap();
+
+        let graph_path = default_graph_path_for_root(dir.path());
+        build_and_save_graph(dir.path(), Some(&graph_path)).unwrap();
+        fs::remove_file(dir.path().join("src/lib.rs")).unwrap();
+
+        let status = graph_status(&graph_path);
+        assert!(status.stale);
+        assert_eq!(status.missing_files, 1);
     }
 
     #[test]

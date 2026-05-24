@@ -5,6 +5,7 @@ use agent007_memory::retriever::RetrieveStats;
 use agent007_memory::{Retriever, ScopedMemoryStore};
 use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -13,6 +14,9 @@ pub struct SkillExecutionMetrics {
     pub retrieval_hits: u32,
     pub retrieval_hit_rate: f64,
     pub rag_context_chars: usize,
+    pub graph_hits: usize,
+    pub graph_files: usize,
+    pub graph_context_chars: usize,
     pub vector_hits: usize,
     pub fallback_hits: usize,
     pub mock_embedding: bool,
@@ -27,6 +31,13 @@ pub struct SkillExecutionReport {
     pub metrics: SkillExecutionMetrics,
 }
 
+#[derive(Debug, Clone, Default)]
+struct GraphRetrievalStats {
+    hits: usize,
+    files: usize,
+    context_chars: usize,
+}
+
 pub struct SkillExecutor {
     provider: Arc<dyn ModelProvider>,
     retriever: Arc<Retriever>,
@@ -34,6 +45,7 @@ pub struct SkillExecutor {
     global_memory: Option<ScopedMemoryStore>,
     router: Option<Arc<ModelRouter>>,
     lsp_inject_categories: Vec<String>,
+    repo_graph_root: Option<PathBuf>,
 }
 
 impl SkillExecutor {
@@ -52,6 +64,7 @@ impl SkillExecutor {
                 .into_iter()
                 .map(ToString::to_string)
                 .collect(),
+            repo_graph_root: None,
         }
     }
 
@@ -70,6 +83,11 @@ impl SkillExecutor {
         self
     }
 
+    pub fn with_repo_graph_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.repo_graph_root = Some(root.into());
+        self
+    }
+
     pub async fn execute(&self, skill: &Skill, args: &str) -> Result<String, SkillError> {
         let report = self.execute_with_report(skill, args).await?;
         Ok(report.output)
@@ -80,15 +98,18 @@ impl SkillExecutor {
         skill: &Skill,
         args: &str,
     ) -> Result<SkillExecutionReport, SkillError> {
-        // 1. RAG context
-        let (rag_context, retrieval_stats) = self
+        // 1. Structural repo context + RAG context
+        let (graph_context, graph_stats) = self.graph_context(args);
+        let (retrieved_context, retrieval_stats) = self
             .retriever
             .retrieve_with_stats(args)
             .await
             .map_err(|e| SkillError::Memory {
-                name: skill.name().to_string(),
-                source: e,
-            })?;
+            name: skill.name().to_string(),
+            source: e,
+        })?;
+        let rag_context =
+            combine_context_blocks([graph_context.as_str(), retrieved_context.as_str()]);
 
         // 2. Read memory values — data lives at <scope>/<key>.md, so read the full scope
         let memory_user =
@@ -189,7 +210,7 @@ impl SkillExecutor {
             source: e,
         })?;
 
-        let mut metrics = metrics_from_retrieval(&rag_context, &retrieval_stats);
+        let mut metrics = metrics_from_retrieval(&rag_context, &retrieval_stats, &graph_stats);
         metrics.input_tokens = response.input_tokens;
         metrics.output_tokens = response.output_tokens;
 
@@ -198,15 +219,52 @@ impl SkillExecutor {
             metrics,
         })
     }
+
+    fn graph_context(&self, query: &str) -> (String, GraphRetrievalStats) {
+        let Some(root) = &self.repo_graph_root else {
+            return (String::new(), GraphRetrievalStats::default());
+        };
+        let Ok(graph) = agent007_core::load_or_build_graph(root, None) else {
+            return (String::new(), GraphRetrievalStats::default());
+        };
+        let bundle = agent007_core::context_bundle_for_query(&graph, query, 6, 2);
+        if bundle.text.trim().is_empty() {
+            return (String::new(), GraphRetrievalStats::default());
+        }
+        (
+            format!("[repo_graph]\n{}", bundle.text.trim()),
+            GraphRetrievalStats {
+                hits: bundle.matched_symbols.len(),
+                files: bundle.files.len(),
+                context_chars: bundle.text.chars().count(),
+            },
+        )
+    }
 }
 
-fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> SkillExecutionMetrics {
-    let hits = u32::from(!rag_context.is_empty());
+fn combine_context_blocks<'a>(blocks: impl IntoIterator<Item = &'a str>) -> String {
+    blocks
+        .into_iter()
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn metrics_from_retrieval(
+    rag_context: &str,
+    retrieval: &RetrieveStats,
+    graph: &GraphRetrievalStats,
+) -> SkillExecutionMetrics {
+    let hits = u32::from(graph.hits > 0 || !rag_context.is_empty());
     SkillExecutionMetrics {
         retrieval_queries: 1,
         retrieval_hits: hits,
         retrieval_hit_rate: hits as f64,
         rag_context_chars: rag_context.chars().count(),
+        graph_hits: graph.hits,
+        graph_files: graph.files,
+        graph_context_chars: graph.context_chars,
         vector_hits: retrieval.vector_hits,
         fallback_hits: retrieval.fallback_hits,
         mock_embedding: retrieval.mock_embedding,
@@ -395,6 +453,27 @@ mod tests {
         let result = executor.execute(&skill, "x").await.unwrap();
         assert_eq!(result, "mock-output");
         // Smoke assertion on render path: execution succeeded with the new variable present.
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn executor_includes_repo_graph_context_in_metrics() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn alpha() {}\npub fn beta() { alpha(); }\n",
+        )
+        .unwrap();
+
+        let provider = Arc::new(MockModelProvider::new());
+        let executor = make_executor(dir.path(), Arc::clone(&provider))
+            .with_repo_graph_root(dir.path().to_path_buf());
+        let skill = make_skill("Args: {{args}}\n{{rag_context}}", "claude");
+
+        let report = executor.execute_with_report(&skill, "alpha").await.unwrap();
+        assert!(report.metrics.graph_hits >= 1);
+        assert!(report.metrics.graph_context_chars > 0);
         assert_eq!(provider.call_count(), 1);
     }
 }

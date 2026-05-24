@@ -16,6 +16,7 @@ pub fn run(input: &Value) -> Result<Value> {
         "counts": status.counts,
         "stale": status.stale,
         "stale_files": status.stale_files,
+        "missing_files": status.missing_files,
     }))
 }
 

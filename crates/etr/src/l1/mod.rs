@@ -1,15 +1,22 @@
 pub mod artifact_read;
+pub mod callees;
 pub mod callers;
+pub mod context_bundle;
 pub mod csv_slice;
 pub mod delta_compare;
+pub mod dep_path;
 pub mod diff;
+pub mod doc_links;
 pub mod file_stat;
 pub mod glob;
 pub mod graph_build;
 pub mod graph_common;
+pub mod graph_refresh;
+pub mod graph_refresh_paths;
 pub mod graph_status;
 pub mod grep;
 pub mod group_count;
+pub mod impact_radius;
 pub mod join_on_key;
 pub mod json_extract;
 pub mod json_query;
@@ -24,6 +31,7 @@ pub mod table_select;
 pub mod table_stats;
 pub mod text_extract;
 pub mod time_window_filter;
+pub mod usage_graph;
 pub mod workflow_outputs_index;
 pub mod workflow_status_summary;
 pub mod workflow_step_health;
@@ -37,6 +45,8 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.grep" => grep::run(input),
         "etr.artifact_read" => artifact_read::run(input),
         "etr.graph_build" => graph_build::run(input),
+        "etr.graph_refresh" => graph_refresh::run(input),
+        "etr.graph_refresh_paths" => graph_refresh_paths::run(input),
         "etr.graph_status" => graph_status::run(input),
         "etr.group_count" => group_count::run(input),
         "etr.join_on_key" => join_on_key::run(input),
@@ -52,6 +62,12 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.metrics_summary" => metrics_summary::run(input),
         "etr.symbol_lookup" => symbol_lookup::run(input),
         "etr.callers" => callers::run(input),
+        "etr.callees" => callees::run(input),
+        "etr.doc_links" => doc_links::run(input),
+        "etr.dep_path" => dep_path::run(input),
+        "etr.impact_radius" => impact_radius::run(input),
+        "etr.usage_graph" => usage_graph::run(input),
+        "etr.context_bundle" => context_bundle::run(input),
         "etr.semantic_search_local" => semantic_search_local::run(input),
         "etr.table_select" => table_select::run(input),
         "etr.table_stats" => table_stats::run(input),
@@ -96,6 +112,46 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
             output_schema: serde_json::json!({"built":"boolean","root":"string","graph_path":"string","version":"integer","counts":"object"}),
         },
         crate::types::ToolManifest {
+            name: "etr.graph_refresh".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Rebuild the structural repo graph and report before/after freshness".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)"
+            }),
+            output_schema: serde_json::json!({
+                "refreshed":"boolean",
+                "strategy":"string",
+                "graph_path":"string",
+                "root":"string",
+                "version":"integer",
+                "counts":"object",
+                "before":"object",
+                "after":"object"
+            }),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_refresh_paths".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Refresh the structural repo graph for specific changed paths (currently full rebuild with path provenance)".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)",
+                "paths":"array of string"
+            }),
+            output_schema: serde_json::json!({
+                "refreshed":"boolean",
+                "strategy":"string",
+                "requested_paths":"array",
+                "graph_path":"string",
+                "root":"string",
+                "version":"integer",
+                "counts":"object",
+                "before":"object",
+                "after":"object"
+            }),
+        },
+        crate::types::ToolManifest {
             name: "etr.graph_status".into(),
             layer: crate::types::ToolLayer::L1,
             description: "Inspect whether a persisted structural repo graph exists and whether it is stale".into(),
@@ -103,7 +159,7 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "root":"string (optional, default .)",
                 "graph_path":"string (optional explicit graph path)"
             }),
-            output_schema: serde_json::json!({"exists":"boolean","graph_path":"string","root":"string?","built_at":"string?","version":"integer?","counts":"object?","stale":"boolean","stale_files":"integer"}),
+            output_schema: serde_json::json!({"exists":"boolean","graph_path":"string","root":"string?","built_at":"string?","version":"integer?","counts":"object?","stale":"boolean","stale_files":"integer","missing_files":"integer"}),
         },
         crate::types::ToolManifest {
             name: "etr.artifact_read".into(),
@@ -254,6 +310,88 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "build_if_missing":"boolean (optional, default false)"
             }),
             output_schema: serde_json::json!({"symbol":"string","exact":"boolean","count":"integer","callers":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.callees".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Find callees of a symbol using the structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","count":"integer","callees":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.doc_links".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Find documentation links associated with a symbol in the structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","count":"integer","docs":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.dep_path".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Find a shortest dependency path between two symbols in the structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "from_symbol":"string",
+                "to_symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"from":"string","to":"string","exact":"boolean","found":"boolean","steps":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.impact_radius".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Expand a symbol neighborhood to estimate structural impact radius".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "max_depth":"integer (optional, default 2)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","max_depth":"integer","matched_symbols":"array","nodes":"array","edges":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.usage_graph".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Return a symbol-centered usage neighborhood from the structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "max_depth":"integer (optional, default 1)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","max_depth":"integer","matched_symbols":"array","nodes":"array","edges":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.context_bundle".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Build a graph-aware structural context bundle for a free-text query".into(),
+            input_schema: serde_json::json!({
+                "query":"string",
+                "max_symbols":"integer (optional, default 5)",
+                "max_neighbors":"integer (optional, default 3)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"query":"string","symbol_count":"integer","doc_count":"integer","file_count":"integer","matched_symbols":"array","related_docs":"array","files":"array","text":"string"}),
         },
         crate::types::ToolManifest {
             name: "etr.semantic_search_local".into(),

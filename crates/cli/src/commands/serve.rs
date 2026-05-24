@@ -2885,6 +2885,9 @@ struct RetrievalTelemetryArtifact {
     retrieval_hits: u32,
     retrieval_hit_rate: f64,
     rag_context_chars: usize,
+    graph_hits: usize,
+    graph_files: usize,
+    graph_context_chars: usize,
     vector_hits: usize,
     fallback_hits: usize,
     mock_embedding: bool,
@@ -2898,6 +2901,9 @@ impl RetrievalTelemetryArtifact {
             retrieval_hits: 0,
             retrieval_hit_rate: 0.0,
             rag_context_chars: 0,
+            graph_hits: 0,
+            graph_files: 0,
+            graph_context_chars: 0,
             vector_hits: 0,
             fallback_hits: 0,
             mock_embedding: false,
@@ -2914,6 +2920,9 @@ impl RetrievalTelemetryArtifact {
             retrieval_hits: report.metrics.retrieval_hits,
             retrieval_hit_rate: report.metrics.retrieval_hit_rate,
             rag_context_chars: report.metrics.rag_context_chars,
+            graph_hits: report.metrics.graph_hits,
+            graph_files: report.metrics.graph_files,
+            graph_context_chars: report.metrics.graph_context_chars,
             vector_hits: report.metrics.vector_hits,
             fallback_hits: report.metrics.fallback_hits,
             mock_embedding: report.metrics.mock_embedding,
@@ -2992,6 +3001,8 @@ fn persist_record_tokens_memory_record(
 ) {
     let scoped = memory_store().scoped("project");
     let normalized_kind = sanitize_tool_component(kind);
+    let repo_root = current_project_root();
+    let graph_refs = agent007_core::evidence_refs_for_text(&repo_root, None, output, 8);
     let record = serde_json::json!({
         "run_id": run_id,
         "kind": kind,
@@ -2999,6 +3010,7 @@ fn persist_record_tokens_memory_record(
         "model": model,
         "tokens": tokens,
         "output": output,
+        "graph_refs": graph_refs,
         "source": "agent007_record_tokens",
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
@@ -3576,7 +3588,8 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
         .flatten()
         .unwrap_or_default();
 
-    let rag_context = {
+    let graph_rag_context = structural_repo_context(task_or_args);
+    let memory_rag_context = {
         let keywords: Vec<String> = task_or_args
             .split_whitespace()
             .filter(|w| w.len() >= 3)
@@ -3615,6 +3628,12 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
         }
         hits.join("\n\n")
     };
+    let rag_context = [graph_rag_context.as_str(), memory_rag_context.as_str()]
+        .into_iter()
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     MemoryContext {
         project: memory_project,
@@ -3623,6 +3642,29 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
         repo_brain: memory_repo_brain,
         rag: rag_context,
     }
+}
+
+fn structural_repo_context(task_or_args: &str) -> String {
+    let root = current_project_root();
+    let Ok(graph) = agent007_core::load_or_build_graph(&root, None) else {
+        return String::new();
+    };
+    let bundle = agent007_core::context_bundle_for_query(&graph, task_or_args, 6, 2);
+    if bundle.text.trim().is_empty() {
+        return String::new();
+    }
+    format!("[repo_graph]\n{}", bundle.text.trim())
+}
+
+fn current_project_root() -> std::path::PathBuf {
+    let write_home = agent007_write_home();
+    write_home
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name == ".agent007")
+        .and_then(|_| write_home.parent().map(|parent| parent.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or(write_home)
 }
 
 fn memory_read(scope: &str, key: &str) -> Result<Option<String>> {
@@ -6276,6 +6318,7 @@ output = "notes"
             assert_eq!(value["model"], "host-llm");
             assert_eq!(value["tokens"], 77);
             assert_eq!(value["output"], "workflow result");
+            assert!(value["graph_refs"].is_array());
             assert_eq!(value["source"], "agent007_record_tokens");
             assert!(value["timestamp"].as_str().is_some());
         }

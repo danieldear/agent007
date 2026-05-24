@@ -26,10 +26,13 @@ pub use events::AgentEvent;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
 pub use repo_graph::{
-    build_and_save_graph, callers_for_symbol, default_graph_path_for_root, graph_status,
-    load_graph, load_or_build_graph, resolve_graph_path, symbol_lookup, RepoGraph,
-    RepoGraphBuilder, RepoGraphCounts, RepoGraphEdge, RepoGraphEdgeKind, RepoGraphNode,
-    RepoGraphNodeKind, RepoGraphStatus,
+    build_and_save_graph, callees_for_symbol, callers_for_symbol, context_bundle_for_query,
+    default_graph_path_for_root, dep_path_between_symbols, doc_links_for_symbol,
+    evidence_refs_for_text, graph_status, impact_radius_for_symbol, load_graph,
+    load_or_build_graph, resolve_graph_path, symbol_lookup, usage_graph_for_symbol, RepoGraph,
+    RepoGraphBuilder, RepoGraphCounts, RepoGraphEdge, RepoGraphEdgeKind, RepoGraphNeighborhood,
+    RepoGraphNode, RepoGraphNodeKind, RepoGraphPathResult, RepoGraphPathStep,
+    RepoGraphQueryContext, RepoGraphStatus,
 };
 pub use run_store::{
     AgentMessage, AgentMessageKind, RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus,
