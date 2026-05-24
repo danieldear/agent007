@@ -125,12 +125,14 @@ impl RepoGraphBuilder {
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
         let mut pending_calls = Vec::new();
 
-        for path in walk_repo_files(&root)? {
-            let rel = relative_path(&root, &path);
+        // ── Pass 1: Rust files — build symbol_index first so doc links work ──
+        let all_files = walk_repo_files(&root)?;
+        for path in &all_files {
+            let rel = relative_path(&root, path);
             let path_str = rel.to_string_lossy().to_string();
-            if is_rust_file(&path) {
+            if is_rust_file(path) {
                 counts.rust_files += 1;
-                let parsed = parse_rust_file(&path, &path_str)?;
+                let parsed = parse_rust_file(path, &path_str)?;
                 counts.files += 1;
                 let file_id = format!("file:{path_str}");
                 nodes.push(RepoGraphNode {
@@ -201,7 +203,14 @@ impl RepoGraphBuilder {
                         });
                     }
                 }
-            } else if is_doc_file(&path) {
+            }
+        }
+
+        // ── Pass 2: Doc files — symbol_index is now fully populated ──────────
+        for path in &all_files {
+            let rel = relative_path(&root, path);
+            let path_str = rel.to_string_lossy().to_string();
+            if is_doc_file(path) {
                 counts.doc_files += 1;
                 counts.files += 1;
                 counts.docs += 1;
@@ -220,7 +229,7 @@ impl RepoGraphBuilder {
                     line: None,
                     signature: None,
                 });
-                for symbol_name in extract_doc_symbol_mentions(&path)? {
+                for symbol_name in extract_doc_symbol_mentions(path)? {
                     if let Some(matches) = symbol_index.get(&symbol_name) {
                         for symbol_id in matches {
                             edges.push(RepoGraphEdge {
@@ -350,7 +359,9 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
     if let Some(built_at) = built_at {
         let root = PathBuf::from(&graph.root);
         for node in &graph.nodes {
-            if node.kind != RepoGraphNodeKind::File {
+            // Check both Rust source files and doc files for staleness; changes
+            // to either can invalidate doc→symbol edges or symbol definitions.
+            if node.kind != RepoGraphNodeKind::File && node.kind != RepoGraphNodeKind::Doc {
                 continue;
             }
             let Some(rel) = &node.path else { continue };
@@ -444,7 +455,14 @@ fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
 fn should_skip_name(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "node_modules" | ".venv" | "venv" | ".idea" | ".zed"
+        ".git"
+            | "target"
+            | "node_modules"
+            | ".venv"
+            | "venv"
+            | ".idea"
+            | ".zed"
+            | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
     )
 }
 

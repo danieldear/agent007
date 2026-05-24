@@ -5,7 +5,8 @@
 2. M2 Visibility and Productization
 3. M3 Controlled Rollout and Quality Gate
 4. M4 Runtime Sessions, Agent Collaboration, and TUI Usability
-5. M6 Repo-Native Structural Intelligence and Graph Retrieval
+5. M5 True Multi-Agent Orchestration
+6. M6 Repo-Native Structural Intelligence and Graph Retrieval
 
 ## Milestone Table
 | Milestone | Status | Goal | Key Features | Dependencies | Exit Criteria |

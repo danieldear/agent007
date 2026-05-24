@@ -3702,7 +3702,16 @@ name = "night"
     #[tokio::test]
     async fn project_init_builds_initial_repo_graph() {
         let temp = tempfile::tempdir().unwrap();
-        let prev = std::env::current_dir().unwrap();
+
+        // Guard that restores the working directory even on panic/assertion failure.
+        struct DirGuard(std::path::PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = DirGuard(std::env::current_dir().unwrap());
+
         std::fs::write(
             temp.path().join("Cargo.toml"),
             "[package]\nname='demo'\nversion='0.1.0'\n",
@@ -3730,8 +3739,6 @@ name = "night"
         let graph: agent007_core::RepoGraph =
             serde_json::from_str(&std::fs::read_to_string(&graph_path).unwrap()).unwrap();
         assert!(graph.counts.symbols >= 2);
-
-        std::env::set_current_dir(prev).unwrap();
     }
 }
 
