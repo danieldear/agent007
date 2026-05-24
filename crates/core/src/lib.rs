@@ -4,6 +4,7 @@ pub mod context;
 pub mod error;
 pub mod paths;
 pub mod repo_brain;
+pub mod repo_graph;
 pub mod tool_executor;
 pub mod types;
 pub use tool_executor::ToolExecutor;
@@ -24,6 +25,12 @@ pub use error::CoreError;
 pub use events::AgentEvent;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
+pub use repo_graph::{
+    build_and_save_graph, callers_for_symbol, default_graph_path_for_root, graph_status,
+    load_graph, load_or_build_graph, resolve_graph_path, symbol_lookup, RepoGraph,
+    RepoGraphBuilder, RepoGraphCounts, RepoGraphEdge, RepoGraphEdgeKind, RepoGraphNode,
+    RepoGraphNodeKind, RepoGraphStatus,
+};
 pub use run_store::{
     AgentMessage, AgentMessageKind, RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus,
     RunStore, TOKEN_PRICE_PER_TOKEN_USD,

@@ -1,3 +1,4 @@
+use agent007_core::build_and_save_graph;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::path::{Path, PathBuf};
@@ -500,6 +501,7 @@ pub async fn execute(
     ensure_dir(&home.join("memory"), "memory/")?;
     ensure_dir(&home.join("hooks"), "hooks/")?;
     ensure_dir(&home.join("audit"), "audit/")?;
+    ensure_dir(&home.join("runtime"), "runtime/")?;
     ensure_dir(&home.join("vectordb"), "vectordb/")?;
     ensure_dir(&home.join("checkpoints"), "checkpoints/")?;
     ensure_dir(&home.join("sessions"), "sessions/")?;
@@ -642,6 +644,15 @@ pub async fn execute(
         section("5b. Bootstrapping global ~/.agent007/ (first-run)");
         if let Err(e) = seed_global_if_missing(&global_home) {
             warn(&format!("Could not seed global home: {e}"));
+        }
+
+        section("5c. Building initial repo graph");
+        match build_and_save_graph(&project_dir, None) {
+            Ok(graph) => ok(&format!(
+                "repo graph created ({} files, {} symbols)",
+                graph.counts.files, graph.counts.symbols
+            )),
+            Err(e) => warn(&format!("Could not build initial repo graph: {e}")),
         }
     }
 
@@ -3686,6 +3697,41 @@ name = "night"
         assert!(generated.contains("## When to use agent007"));
         assert!(generated.contains("agent007_record_tokens"));
         assert!(generated.contains("agent007_workflow_run"));
+    }
+
+    #[tokio::test]
+    async fn project_init_builds_initial_repo_graph() {
+        let temp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::fs::write(
+            temp.path().join("Cargo.toml"),
+            "[package]\nname='demo'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(
+            temp.path().join("src/lib.rs"),
+            "pub fn alpha() {}\npub fn beta() { alpha(); }\n",
+        )
+        .unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        let config = std::sync::Arc::new(crate::config::Config::default());
+        execute(config, false, false, false, false, false, false, false)
+            .await
+            .unwrap();
+
+        let graph_path = temp.path().join(".agent007/runtime/repo_graph_v1.json");
+        assert!(
+            graph_path.exists(),
+            "expected repo graph at {}",
+            graph_path.display()
+        );
+        let graph: agent007_core::RepoGraph =
+            serde_json::from_str(&std::fs::read_to_string(&graph_path).unwrap()).unwrap();
+        assert!(graph.counts.symbols >= 2);
+
+        std::env::set_current_dir(prev).unwrap();
     }
 }
 

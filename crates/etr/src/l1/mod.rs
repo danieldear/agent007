@@ -1,9 +1,13 @@
 pub mod artifact_read;
+pub mod callers;
 pub mod csv_slice;
 pub mod delta_compare;
 pub mod diff;
 pub mod file_stat;
 pub mod glob;
+pub mod graph_build;
+pub mod graph_common;
+pub mod graph_status;
 pub mod grep;
 pub mod group_count;
 pub mod join_on_key;
@@ -15,6 +19,7 @@ pub mod logs_slice;
 pub mod math;
 pub mod metrics_summary;
 pub mod semantic_search_local;
+pub mod symbol_lookup;
 pub mod table_select;
 pub mod table_stats;
 pub mod text_extract;
@@ -31,6 +36,8 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.delta_compare" => delta_compare::run(input),
         "etr.grep" => grep::run(input),
         "etr.artifact_read" => artifact_read::run(input),
+        "etr.graph_build" => graph_build::run(input),
+        "etr.graph_status" => graph_status::run(input),
         "etr.group_count" => group_count::run(input),
         "etr.join_on_key" => join_on_key::run(input),
         "etr.json_extract" => json_extract::run(input),
@@ -43,6 +50,8 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.file_stat" => file_stat::run(input),
         "etr.math" => math::run(input),
         "etr.metrics_summary" => metrics_summary::run(input),
+        "etr.symbol_lookup" => symbol_lookup::run(input),
+        "etr.callers" => callers::run(input),
         "etr.semantic_search_local" => semantic_search_local::run(input),
         "etr.table_select" => table_select::run(input),
         "etr.table_stats" => table_stats::run(input),
@@ -75,6 +84,26 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "context_lines": "integer (optional, default 0)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_build".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Build and persist a structural repo graph for the project root".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)"
+            }),
+            output_schema: serde_json::json!({"built":"boolean","root":"string","graph_path":"string","version":"integer","counts":"object"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_status".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Inspect whether a persisted structural repo graph exists and whether it is stale".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)"
+            }),
+            output_schema: serde_json::json!({"exists":"boolean","graph_path":"string","root":"string?","built_at":"string?","version":"integer?","counts":"object?","stale":"boolean","stale_files":"integer"}),
         },
         crate::types::ToolManifest {
             name: "etr.artifact_read".into(),
@@ -199,6 +228,32 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
             description: "Compute min/max/mean/p50/p95/stddev for numeric columns".into(),
             input_schema: serde_json::json!({"rows":"array?","path":"string?","format":"string?","columns":"array?"}),
             output_schema: serde_json::json!({"metrics":"object"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.symbol_lookup".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Look up symbols or modules in the persisted structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default false)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","count":"integer","matches":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.callers".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Find callers of a symbol using the structural repo graph".into(),
+            input_schema: serde_json::json!({
+                "symbol":"string",
+                "exact":"boolean (optional, default true)",
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)",
+                "build_if_missing":"boolean (optional, default false)"
+            }),
+            output_schema: serde_json::json!({"symbol":"string","exact":"boolean","count":"integer","callers":"array"}),
         },
         crate::types::ToolManifest {
             name: "etr.semantic_search_local".into(),
