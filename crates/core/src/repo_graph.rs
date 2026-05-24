@@ -455,14 +455,7 @@ fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
 fn should_skip_name(name: &str) -> bool {
     matches!(
         name,
-        ".git"
-            | "target"
-            | "node_modules"
-            | ".venv"
-            | "venv"
-            | ".idea"
-            | ".zed"
-            | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
+        ".git" | "target" | "node_modules" | ".venv" | "venv" | ".idea" | ".zed" | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
     )
 }
 
