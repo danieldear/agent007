@@ -477,8 +477,10 @@ fn relative_path(root: &Path, path: &Path) -> PathBuf {
 fn parse_rust_file(path: &Path, rel_path: &str) -> Result<ParsedRustFile, CoreError> {
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
     let import_re = Regex::new(r"^\s*use\s+([^;]+);").expect("valid regex");
-    let fn_re = Regex::new(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
-        .expect("valid regex");
+    let fn_re = Regex::new(
+        r#"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|extern\s+"[^"]+")\s+)*fn\s+([A-Za-z_][A-Za-z0-9_]*)"#,
+    )
+    .expect("valid regex");
     let type_re = Regex::new(r"^\s*(?:pub\s+)?(struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)")
         .expect("valid regex");
     let call_re = Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(").expect("valid regex");
@@ -731,5 +733,25 @@ pub fn beta() {
         assert!(callers
             .iter()
             .any(|row| row.get("caller") == Some(&"beta".to_string())));
+    }
+
+    #[test]
+    fn indexes_extern_c_functions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            r#"
+use std::ffi::c_char;
+
+pub extern "C" fn tubeai_version() -> *const c_char {
+    std::ptr::null()
+}
+"#,
+        )
+        .unwrap();
+        let graph = RepoGraphBuilder::new(dir.path()).build().unwrap();
+        let matches = symbol_lookup(&graph, "tubeai_version", true);
+        assert_eq!(matches.len(), 1);
     }
 }
