@@ -880,6 +880,26 @@ footer {
 [data-theme="light"] .mobile-nav { background: rgba(250,250,250,.97); }
 [data-theme="light"] body::before { background-image: radial-gradient(circle, rgba(0,0,0,.1) 1px, transparent 1px); }
 
+/* Light-mode hero overrides */
+[data-theme="light"] .hero { background: #f5f5f7; }
+[data-theme="light"] .hero-glow-a { background: radial-gradient(circle, rgba(217,119,6,.12) 0%, transparent 65%); opacity:.5; }
+[data-theme="light"] .hero-glow-b { background: radial-gradient(circle, rgba(37,99,235,.08) 0%, transparent 65%); opacity:.5; }
+[data-theme="light"] .hero-glow-c { background: radial-gradient(circle, rgba(124,58,237,.06) 0%, transparent 65%); opacity:.5; }
+[data-theme="light"] .d-node {
+  background: rgba(255,255,255,.92);
+  border-color: rgba(217,119,6,.22);
+  box-shadow: 0 2px 16px rgba(0,0,0,.1);
+}
+[data-theme="light"] .d-node:hover { border-color: rgba(217,119,6,.5); box-shadow: 0 0 20px rgba(217,119,6,.14), 0 2px 16px rgba(0,0,0,.1); }
+[data-theme="light"] .d-node-center {
+  background: rgba(255,255,255,.96);
+  border-color: rgba(217,119,6,.55);
+  box-shadow: 0 0 40px rgba(217,119,6,.18), 0 2px 20px rgba(0,0,0,.1);
+}
+[data-theme="light"] .dn-name { color: #18181b; }
+[data-theme="light"] .hero-eyebrow-pill { background: rgba(217,119,6,.08); }
+[data-theme="light"] #stars-canvas { opacity: 0; }
+
 /* ── RESPONSIVE ── */
 @media (max-width: 860px) {
   .hero-diagram { display: none; }
@@ -1739,6 +1759,11 @@ footer {
     var H = diagram.offsetHeight;
     if(!W || !H) return;
 
+    var light     = document.documentElement.getAttribute('data-theme') === 'light';
+    var lineClr   = light ? 'rgba(180,83,9,.28)'   : 'rgba(245,158,11,.2)';
+    var glowClr   = light ? 'rgba(180,83,9,.28)'   : 'rgba(245,158,11,.22)';
+    var dotClr    = light ? '#b45309'               : '#f59e0b';
+
     // Position each node card
     Object.values(NODES).forEach(function(n){
       var el = document.getElementById(n.id);
@@ -1763,7 +1788,7 @@ footer {
       path.setAttribute('d', d);
       path.setAttribute('fill','none');
       path.style.cssText =
-        'stroke:rgba(245,158,11,.2);stroke-width:1;'+
+        'stroke:'+lineClr+';stroke-width:1;'+
         'stroke-dasharray:4 7;stroke-dashoffset:0;'+
         'animation:dash-flow '+(edge[2])+'s linear infinite;'+
         'animation-delay:-'+edge[3]+'s;';
@@ -1771,8 +1796,8 @@ footer {
 
       // Glow halo + bright dot travelling along the path
       [
-        {r:5,  fill:'rgba(245,158,11,.22)'},
-        {r:2.2,fill:'#f59e0b'},
+        {r:5,  fill:glowClr},
+        {r:2.2,fill:dotClr},
       ].forEach(function(spec){
         var c    = document.createElementNS(NS,'circle');
         var anim = document.createElementNS(NS,'animateMotion');
@@ -1795,7 +1820,8 @@ footer {
     window.addEventListener('load', build);
   }
   var rt2;
-  window.addEventListener('resize', function(){ clearTimeout(rt2); rt2 = setTimeout(build, 120); });
+  window.addEventListener('resize',          function(){ clearTimeout(rt2); rt2 = setTimeout(build, 120); });
+  window.addEventListener('diagram-rebuild', function(){ build(); });
 })();
 
 /* ══ HERO MORPH BAR ══ */
@@ -2063,7 +2089,14 @@ footer {
 /* ══ THEME TOGGLE ══ */
 (function(){
   function getT(){ return localStorage.getItem('a7theme') || document.documentElement.getAttribute('data-theme') || 'dark'; }
-  function setT(t){ document.documentElement.setAttribute('data-theme',t); localStorage.setItem('a7theme',t); document.querySelectorAll('.theme-toggle').forEach(function(b){ b.textContent = t==='dark'?'☀':'🌙'; }); }
+  function setT(t){
+    document.documentElement.setAttribute('data-theme',t);
+    localStorage.setItem('a7theme',t);
+    document.querySelectorAll('.theme-toggle').forEach(function(b){ b.textContent = t==='dark'?'☀':'🌙'; });
+    // Rebuild diagram so SVG line/dot colors match new theme
+    var buildEv = new Event('diagram-rebuild');
+    window.dispatchEvent(buildEv);
+  }
   var t = getT(); document.querySelectorAll('.theme-toggle').forEach(function(b){ b.textContent=t==='dark'?'☀':'🌙'; b.addEventListener('click', function(){ setT(getT()==='dark'?'light':'dark'); }); });
 })();
 
