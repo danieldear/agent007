@@ -9,6 +9,11 @@ pub fn run(input: &Value) -> Result<Value> {
     let before = agent007_core::graph_status(&graph_path);
     let graph = agent007_core::build_and_save_graph(&root, Some(&graph_path))?;
     let after = agent007_core::graph_status(&graph_path);
+    let readiness = agent007_core::write_repo_intelligence_readiness(
+        &root,
+        None,
+        &agent007_core::RepoIntelligenceOptions::default(),
+    )?;
     Ok(json!({
         "refreshed": true,
         "strategy": "full_rebuild",
@@ -18,6 +23,7 @@ pub fn run(input: &Value) -> Result<Value> {
         "counts": graph.counts,
         "before": before,
         "after": after,
+        "readiness": readiness,
     }))
 }
 

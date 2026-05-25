@@ -21,6 +21,11 @@ pub fn run(input: &Value) -> Result<Value> {
         .collect::<Vec<_>>();
     let graph = agent007_core::refresh_graph_for_paths(&root, Some(&graph_path), &requested)?;
     let after = agent007_core::graph_status(&graph_path);
+    let readiness = agent007_core::write_repo_intelligence_readiness(
+        &root,
+        None,
+        &agent007_core::RepoIntelligenceOptions::default(),
+    )?;
     Ok(json!({
         "refreshed": true,
         "strategy": "incremental_path_patch",
@@ -31,6 +36,7 @@ pub fn run(input: &Value) -> Result<Value> {
         "counts": graph.counts,
         "before": before,
         "after": after,
+        "readiness": readiness,
     }))
 }
 

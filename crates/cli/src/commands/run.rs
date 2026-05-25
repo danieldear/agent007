@@ -1435,6 +1435,27 @@ pub(crate) fn spawn_learning_runtime_workers(stack: &Stack) {
 
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
+    if let Some(project_home) = agent007_project_home() {
+        if let Some(project_root) = project_home.parent() {
+            match agent007_core::ensure_repo_graph_ready_for_task(
+                project_root,
+                &task,
+                &agent007_core::RepoIntelligenceOptions::default(),
+            ) {
+                Ok(Some(preflight)) => {
+                    tracing::info!(
+                        action = ?preflight.action,
+                        reason = %preflight.matched_reason,
+                        "structural repo graph preflight completed"
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "structural repo graph preflight failed");
+                }
+            }
+        }
+    }
     let mode = runtime_mode_label(&config);
     let provider = stack.model_router.route("task").name().to_string();
     let run = stack

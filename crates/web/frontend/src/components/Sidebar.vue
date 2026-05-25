@@ -78,6 +78,7 @@ onMounted(async () => {
 
 const primaryNav = [
   { id: 'dashboard', label: 'Dashboard', symbol: '▣' },
+  { id: 'repo-intelligence', label: 'Repo Intelligence', symbol: '◎' },
   { id: 'agents',    label: 'Personas',  symbol: '◉' },
   { id: 'skills',    label: 'Skills',    symbol: '⚡' },
   { id: 'workflows', label: 'Workflows', symbol: '⬡' },

@@ -316,6 +316,14 @@ impl WebServer {
                     .post(api::lsp_config_set_handler)
                     .delete(api::lsp_config_delete_handler),
             )
+            .route(
+                "/api/repo-intelligence/readiness",
+                get(api::repo_intelligence_readiness_handler),
+            )
+            .route(
+                "/api/repo-intelligence/install",
+                post(api::repo_intelligence_install_handler),
+            )
             // RAG sources
             .route(
                 "/api/rag/sources",

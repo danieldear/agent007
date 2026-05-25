@@ -116,6 +116,12 @@ export function useApi() {
     postRuntimeMessage: (id, data) =>
       fetchJson(`/api/runtime/sessions/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify(data) }),
     getProviderStatus: () => fetchJson('/api/providers/status'),
+    getRepoIntelligenceReadiness: () => fetchJson('/api/repo-intelligence/readiness'),
+    installRepoIntelligence: (id, confirm = true) =>
+      fetchJson('/api/repo-intelligence/install', {
+        method: 'POST',
+        body: JSON.stringify({ id, confirm }),
+      }),
     getScorecards: (limit = 100) => fetchJson(`/api/scorecards?limit=${encodeURIComponent(limit)}`),
     evaluateRegression: (params = {}) => {
       const query = new URLSearchParams()

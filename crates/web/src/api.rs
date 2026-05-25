@@ -10,6 +10,7 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path as FsPath, PathBuf};
+use tokio::process::Command as TokioCommand;
 use ts_rs::TS;
 
 use crate::tool_registry::{
@@ -141,6 +142,17 @@ pub struct LspConfigResponse {
     pub enabled: bool,
     pub servers: std::collections::HashMap<String, String>,
     pub inject_for_categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoIntelligenceReadinessResponse {
+    pub readiness: agent007_core::RepoIntelligenceReadiness,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RepoIntelligenceInstallRequest {
+    pub id: String,
+    pub confirm: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -658,6 +670,23 @@ pub async fn run_handler(
                 .into_response();
         }
     };
+    match structural_preflight_for_task(FsPath::new(&state.project_path), &payload.task) {
+        Ok(Some(preflight)) => {
+            let _ = store.write_json_artifact(&run.id, "structural-preflight.json", &preflight);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let _ = store.write_json_artifact(
+                &run.id,
+                "structural-preflight.json",
+                &serde_json::json!({
+                    "error": error.to_string(),
+                    "task": payload.task,
+                }),
+            );
+            tracing::warn!(error = %error, task = %payload.task, "repo graph preflight failed");
+        }
+    }
     let trace = match store
         .spawn_dispatcher_trace(
             run.id.clone(),
@@ -924,6 +953,23 @@ pub async fn skills_run_handler(
                 .into_response();
         }
     };
+    match structural_preflight_for_trigger(FsPath::new(&state.project_path), &payload.trigger) {
+        Ok(Some(preflight)) => {
+            let _ = store.write_json_artifact(&run.id, "structural-preflight.json", &preflight);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let _ = store.write_json_artifact(
+                &run.id,
+                "structural-preflight.json",
+                &serde_json::json!({
+                    "error": error.to_string(),
+                    "trigger": payload.trigger,
+                }),
+            );
+            tracing::warn!(error = %error, trigger = %payload.trigger, "repo graph preflight failed");
+        }
+    }
 
     let mut matched_skill = None;
     for dir in skills_search_dirs() {
@@ -1118,9 +1164,14 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
         let repo_root = FsPath::new(&state.project_path);
         let graph_path = agent007_core::default_graph_path_for_root(repo_root);
         let graph_status = agent007_core::graph_status(&graph_path);
+        let repo_readiness = repo_intelligence_readiness_for_project(repo_root);
         obj.insert(
             "repo_graph".to_string(),
             serde_json::to_value(graph_status).unwrap_or_else(|_| serde_json::json!({})),
+        );
+        obj.insert(
+            "repo_intelligence".to_string(),
+            serde_json::to_value(repo_readiness).unwrap_or_else(|_| serde_json::json!({})),
         );
     }
     Json(snapshot).into_response()
@@ -6809,6 +6860,88 @@ pub async fn lsp_config_get_handler(State(_state): State<AppState>) -> impl Into
     }
 }
 
+/// `GET /api/repo-intelligence/readiness`
+pub async fn repo_intelligence_readiness_handler(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let root = PathBuf::from(&state.project_path);
+    Json(RepoIntelligenceReadinessResponse {
+        readiness: repo_intelligence_readiness_for_project(&root),
+    })
+    .into_response()
+}
+
+/// `POST /api/repo-intelligence/install`
+pub async fn repo_intelligence_install_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<RepoIntelligenceInstallRequest>,
+) -> impl IntoResponse {
+    let root = PathBuf::from(&state.project_path);
+    let readiness = repo_intelligence_readiness_for_project(&root);
+    let Some(recommendation) = readiness
+        .recommendations
+        .iter()
+        .find(|item| item.id == payload.id)
+        .cloned()
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "unknown install recommendation" })),
+        )
+            .into_response();
+    };
+
+    if !payload.confirm {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "install requires explicit confirmation",
+                "recommendation": recommendation,
+            })),
+        )
+            .into_response();
+    }
+    if !recommendation.can_run {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "this install command must be run manually on this platform",
+                "recommendation": recommendation,
+            })),
+        )
+            .into_response();
+    }
+
+    let output = TokioCommand::new("sh")
+        .arg("-lc")
+        .arg(&recommendation.command)
+        .current_dir(&root)
+        .output()
+        .await;
+
+    match output {
+        Ok(output) => {
+            let refreshed = repo_intelligence_readiness_for_project(&root);
+            Json(serde_json::json!({
+                "ok": output.status.success(),
+                "exit_code": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+                "recommendation": recommendation,
+                "readiness": refreshed,
+            }))
+            .into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                serde_json::json!({ "error": error.to_string(), "recommendation": recommendation }),
+            ),
+        )
+            .into_response(),
+    }
+}
+
 /// `POST /api/lsp/config`
 pub async fn lsp_config_set_handler(
     State(_state): State<AppState>,
@@ -6859,6 +6992,64 @@ fn default_lsp_inject_categories() -> Vec<String> {
         .into_iter()
         .map(ToString::to_string)
         .collect()
+}
+
+fn repo_intelligence_options_from_lsp() -> agent007_core::RepoIntelligenceOptions {
+    match read_lsp_config_from_file() {
+        Ok(cfg) => agent007_core::RepoIntelligenceOptions {
+            lsp_enabled: cfg.enabled,
+            configured_servers: cfg
+                .servers
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        },
+        Err(_) => agent007_core::RepoIntelligenceOptions {
+            lsp_enabled: true,
+            configured_servers: std::collections::BTreeMap::new(),
+        },
+    }
+}
+
+fn structural_preflight_for_task(
+    root: &FsPath,
+    task: &str,
+) -> Result<Option<agent007_core::RepoGraphEnsureResult>, agent007_core::CoreError> {
+    let options = repo_intelligence_options_from_lsp();
+    agent007_core::ensure_repo_graph_ready_for_task(root, task, &options)
+}
+
+fn structural_preflight_for_trigger(
+    root: &FsPath,
+    trigger: &str,
+) -> Result<Option<agent007_core::RepoGraphEnsureResult>, agent007_core::CoreError> {
+    let options = repo_intelligence_options_from_lsp();
+    agent007_core::ensure_repo_graph_ready_for_trigger(root, trigger, &options)
+}
+
+fn repo_intelligence_readiness_for_project(
+    root: &FsPath,
+) -> agent007_core::RepoIntelligenceReadiness {
+    let options = repo_intelligence_options_from_lsp();
+    agent007_core::write_repo_intelligence_readiness(root, None, &options).unwrap_or_else(|_| {
+        agent007_core::RepoIntelligenceReadiness {
+            version: 1,
+            root: root.display().to_string(),
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            state: agent007_core::RepoIntelligenceState::BaselineOnly,
+            baseline_ready: true,
+            graph: agent007_core::graph_status(&agent007_core::default_graph_path_for_root(root)),
+            languages: Vec::new(),
+            tree_sitter: agent007_core::TreeSitterReadiness {
+                wired: false,
+                available: false,
+                installable: false,
+                status: "unknown".to_string(),
+                note: "readiness detection failed".to_string(),
+            },
+            recommendations: Vec::new(),
+            notes: vec!["repo intelligence readiness detection failed".to_string()],
+        }
+    })
 }
 
 fn read_lsp_config_from_file() -> Result<LspConfigResponse, String> {
@@ -7210,6 +7401,21 @@ mod tests {
         .unwrap();
     }
 
+    fn write_rust_repo_fixture(base: &Path) {
+        std::fs::write(
+            base.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\npub fn uses_add(v: i32) -> i32 { add(v, 1) }\n",
+        )
+        .unwrap();
+    }
+
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -7459,6 +7665,127 @@ mod tests {
                 .map(|entries| entries.len()),
             Some(2)
         );
+    }
+
+    #[tokio::test]
+    async fn api_run_writes_structural_preflight_for_analysis_task() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_rust_repo_fixture(project.path());
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let result = async {
+            let ts = test_server();
+            let response = ts
+                .post("/api/run")
+                .json(&serde_json::json!({
+                    "task": "please analyze the codebase and summarize architecture"
+                }))
+                .await;
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            let session = body["session"].as_str().expect("session should be present");
+
+            let artifact = ts
+                .get(&format!(
+                    "/api/runs/{session}/artifacts/raw?path=structural-preflight.json"
+                ))
+                .await;
+            artifact.assert_status_ok();
+            let preflight: serde_json::Value = artifact.json();
+            assert_eq!(preflight["action"].as_str(), Some("built"));
+            assert_eq!(
+                preflight["matched_reason"].as_str(),
+                Some("phrase:analyze the code")
+            );
+            assert_eq!(
+                preflight["readiness"]["graph"]["exists"].as_bool(),
+                Some(true)
+            );
+            assert!(project
+                .path()
+                .join(".agent007/runtime/repo_graph_v1.json")
+                .exists());
+        }
+        .await;
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn api_skill_run_writes_structural_preflight_for_analysis_trigger() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_rust_repo_fixture(project.path());
+        write_skill_fixture(
+            project.path(),
+            "meta_analyze.md",
+            "/meta-analyze-codebase",
+            "Codebase Analyzer",
+        );
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let result = async {
+            let ts = test_server();
+            let response = ts
+                .post("/api/skills/run")
+                .json(&serde_json::json!({
+                    "trigger": "/meta-analyze-codebase",
+                    "args": "summarize architecture"
+                }))
+                .await;
+            response.assert_status_ok();
+            let body: serde_json::Value = response.json();
+            let session = body["session"].as_str().expect("session should be present");
+
+            let artifact = ts
+                .get(&format!(
+                    "/api/runs/{session}/artifacts/raw?path=structural-preflight.json"
+                ))
+                .await;
+            artifact.assert_status_ok();
+            let preflight: serde_json::Value = artifact.json();
+            assert_eq!(preflight["action"].as_str(), Some("built"));
+            assert_eq!(
+                preflight["matched_reason"].as_str(),
+                Some("skill:/meta-analyze-codebase")
+            );
+            assert_eq!(
+                preflight["readiness"]["graph"]["exists"].as_bool(),
+                Some(true)
+            );
+            assert!(project
+                .path()
+                .join(".agent007/runtime/repo_graph_v1.json")
+                .exists());
+        }
+        .await;
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        result
     }
 
     #[tokio::test]

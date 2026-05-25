@@ -1,4 +1,6 @@
-use agent007_core::build_and_save_graph;
+use agent007_core::{
+    build_and_save_graph, write_repo_intelligence_readiness, RepoIntelligenceOptions,
+};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::path::{Path, PathBuf};
@@ -653,6 +655,14 @@ pub async fn execute(
                 graph.counts.files, graph.counts.symbols
             )),
             Err(e) => warn(&format!("Could not build initial repo graph: {e}")),
+        }
+        match write_repo_intelligence_readiness(
+            &project_dir,
+            None,
+            &RepoIntelligenceOptions::default(),
+        ) {
+            Ok(readiness) => ok(&format!("repo readiness captured ({:?})", readiness.state)),
+            Err(e) => warn(&format!("Could not capture repo readiness: {e}")),
         }
     }
 

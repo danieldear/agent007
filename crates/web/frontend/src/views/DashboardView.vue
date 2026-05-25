@@ -7,6 +7,7 @@ import DOMPurify from 'dompurify'
 marked.setOptions({ gfm: true, breaks: true })
 
 const props = defineProps({ events: Array, connected: Boolean, stats: Object })
+const emit = defineEmits(['navigate'])
 const { api } = useApi()
 
 const health = ref(null)
@@ -53,6 +54,8 @@ const graphExplorerBusy = ref(false)
 const graphExplorerStatus = ref('')
 const graphExplorerResult = ref(null)
 const graphExplorerMermaidRef = ref(null)
+const repoInstallStatus = ref('')
+const repoInstallingId = ref('')
 
 // ETR cache stats
 const etrCacheStats = ref(null)
@@ -106,6 +109,29 @@ async function loadSlashCommands() {
         source: w.source || 'global',
       })
     }
+    cmds.push(
+      {
+        type: 'builtin',
+        trigger: '/repo-intelligence',
+        name: 'Repo Intelligence',
+        description: 'Open the dedicated repo intelligence page',
+        source: 'dashboard',
+      },
+      {
+        type: 'builtin',
+        trigger: '/repo-graph-build',
+        name: 'Build Repo Graph',
+        description: 'Build the structural repo graph if missing',
+        source: 'dashboard',
+      },
+      {
+        type: 'builtin',
+        trigger: '/repo-graph-refresh',
+        name: 'Refresh Repo Graph',
+        description: 'Refresh the structural repo graph when stale',
+        source: 'dashboard',
+      },
+    )
     slashCommands.value = cmds.sort((a, b) => a.trigger.localeCompare(b.trigger))
   } catch { slashCommandsLoaded.value = false }
 }
@@ -176,10 +202,6 @@ watch(() => props.events?.length, async () => {
   }
 })
 
-watch(graphExplorerMermaidSource, async () => {
-  await renderGraphExplorerMermaid()
-})
-
 const providerReadiness = computed(() => providerStatus.value || {
   runtime_mode: m.value.runtime_mode || 'hosted-mcp',
   selected_provider: null,
@@ -212,8 +234,11 @@ const m = computed(() => metrics.value || {
   skills_count: 0, workflows_count: 0, personas_count: 0, memory_keys: 0,
   started_at: null, local_execution_available: false, runtime_mode: 'hosted-mcp', model_provider: 'unknown',
   repo_graph: null,
+  repo_intelligence: null,
   recent_tasks: [], recent_scorecards: [],
 })
+
+const repoIntel = computed(() => m.value.repo_intelligence || null)
 
 function repoGraphState(graph) {
   if (!graph?.exists) return 'missing'
@@ -227,6 +252,38 @@ function repoGraphBadgeClass(graph) {
     'badge-error': state === 'missing',
     'badge-warning': state === 'stale',
     'badge-success': state === 'ready',
+  }
+}
+
+function repoIntelligenceBadgeClass(readiness) {
+  const state = readiness?.state || 'baseline_only'
+  if (state === 'enrichment_active') return 'badge-success'
+  if (state === 'enrichment_available') return 'badge-warning'
+  if (state === 'empty_repo') return 'badge-ghost'
+  return 'badge-neutral'
+}
+
+async function copyText(value) {
+  if (!value) return
+  await navigator.clipboard.writeText(value)
+}
+
+async function runRepoRecommendation(rec) {
+  if (!rec?.id) return
+  repoInstallingId.value = rec.id
+  repoInstallStatus.value = ''
+  try {
+    const result = await api.installRepoIntelligence(rec.id, true)
+    if (result?.ok) {
+      repoInstallStatus.value = `${rec.title} finished`
+    } else {
+      repoInstallStatus.value = result?.stderr || result?.error || `${rec.title} failed`
+    }
+    await refreshDashboardSnapshots()
+  } catch (error) {
+    repoInstallStatus.value = error?.message || String(error)
+  } finally {
+    repoInstallingId.value = ''
   }
 }
 
@@ -488,6 +545,10 @@ const graphExplorerMermaidSource = computed(() => {
   }
 
   return ''
+})
+
+watch(graphExplorerMermaidSource, async () => {
+  await renderGraphExplorerMermaid()
 })
 
 async function renderGraphExplorerMermaid() {
@@ -906,6 +967,34 @@ async function cleanupStaleApprovals() {
 async function submitTask() {
   const input = taskInput.value.trim()
   if (!input || chatPending.value) return
+  taskStatus.value = ''
+
+  const normalized = input.toLowerCase()
+  if (normalized === '/repo-intelligence') {
+    taskStatus.value = 'Opening Repo Intelligence…'
+    emit('navigate', 'repo-intelligence')
+    taskInput.value = ''
+    taskPanelOpen.value = false
+    return
+  }
+  if (normalized === '/repo-graph-build') {
+    taskStatus.value = 'Building repo graph…'
+    await api.etrCall('etr.graph_build', {}, false)
+    await refreshDashboardSnapshots()
+    taskStatus.value = 'Repo graph built.'
+    taskInput.value = ''
+    emit('navigate', 'repo-intelligence')
+    return
+  }
+  if (normalized === '/repo-graph-refresh') {
+    taskStatus.value = 'Refreshing repo graph…'
+    await api.etrCall('etr.graph_refresh', {}, false)
+    await refreshDashboardSnapshots()
+    taskStatus.value = 'Repo graph refreshed.'
+    taskInput.value = ''
+    emit('navigate', 'repo-intelligence')
+    return
+  }
 
   chatMessages.value.push({ role: 'user', content: input })
   chatMessages.value.push({ role: 'assistant', content: '', status: 'running', sessionId: null })
@@ -1074,85 +1163,48 @@ async function submitTask() {
       </div>
     </div>
 
-    <div class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
+    <div v-if="repoIntel" class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
       <div class="rounded-xl border border-base-content/10 bg-base-300/70 p-4 space-y-3">
-        <div class="flex flex-wrap items-center gap-3">
-          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Graph Explorer</span>
-          <select v-model="graphExplorerMode" class="select select-xs select-bordered font-mono">
-            <option value="usage">usage neighborhood</option>
-            <option value="impact">impact radius</option>
-            <option value="callers">callers</option>
-            <option value="callees">callees</option>
-            <option value="docs">doc links</option>
-            <option value="path">dependency path</option>
-            <option value="context">context bundle</option>
-          </select>
-          <input
-            v-if="['usage','impact','callers','callees','docs'].includes(graphExplorerMode)"
-            v-model="graphExplorerSymbol"
-            class="input input-xs input-bordered font-mono w-56"
-            placeholder="symbol"
-          />
-          <template v-if="graphExplorerMode === 'path'">
-            <input v-model="graphExplorerFrom" class="input input-xs input-bordered font-mono w-48" placeholder="from symbol" />
-            <input v-model="graphExplorerTo" class="input input-xs input-bordered font-mono w-48" placeholder="to symbol" />
-          </template>
-          <input
-            v-if="graphExplorerMode === 'context'"
-            v-model="graphExplorerQuery"
-            class="input input-xs input-bordered font-mono flex-1 min-w-[18rem]"
-            placeholder="free-text query"
-          />
-          <input
-            v-if="['usage','impact','context'].includes(graphExplorerMode)"
-            v-model="graphExplorerDepth"
-            type="number"
-            min="1"
-            max="6"
-            class="input input-xs input-bordered font-mono w-20"
-            placeholder="depth"
-          />
-          <button class="btn btn-xs btn-primary font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer()">
-            {{ graphExplorerBusy ? 'running…' : 'run' }}
-          </button>
-          <button class="btn btn-xs btn-ghost font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_build')">build</button>
-          <button class="btn btn-xs btn-ghost font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_refresh')">refresh</button>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Repo Intelligence</span>
+            <span class="badge badge-xs font-mono" :class="repoIntelligenceBadgeClass(repoIntel)">{{ repoIntel.state }}</span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              {{ repoIntel.languages?.length || 0 }} language{{ (repoIntel.languages?.length || 0) === 1 ? '' : 's' }}
+            </span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              baseline {{ repoIntel.baseline_ready ? 'ready' : 'unknown' }}
+            </span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              tree-sitter {{ repoIntel.tree_sitter?.status || 'unknown' }}
+            </span>
+          </div>
+          <button class="btn btn-xs btn-primary font-mono" @click="emit('navigate', 'repo-intelligence')">open page</button>
         </div>
-
-        <div class="flex flex-wrap items-start gap-2">
-          <textarea
-            v-model="graphExplorerPaths"
-            rows="2"
-            class="textarea textarea-bordered textarea-xs font-mono w-[32rem] max-w-full"
-            placeholder="paths for incremental refresh, one per line or comma-separated"
-          />
-          <button class="btn btn-xs btn-ghost font-mono mt-1" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_refresh_paths')">refresh paths</button>
-          <span class="text-[10px] font-mono text-base-content/35 mt-1">{{ graphExplorerStatus || 'query repo graph, rebuild, or patch changed paths' }}</span>
-        </div>
-
-        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_22rem] gap-3 items-start">
-          <div class="rounded-xl border border-base-content/8 bg-base-200/70 min-h-[10rem] overflow-hidden">
-            <div ref="graphExplorerMermaidRef" class="p-3 max-h-[24rem] overflow-auto"></div>
-            <div v-if="!graphExplorerMermaidSource" class="px-3 pb-3 text-[10px] font-mono text-base-content/30">
-              no diagram yet
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_auto] gap-3 items-start">
+          <div class="flex flex-col gap-1">
+            <div v-for="note in (repoIntel.notes || [])" :key="note" class="text-[11px] font-mono text-base-content/55">
+              {{ note }}
+            </div>
+            <div class="text-[11px] font-mono text-base-content/40">
+              {{ m.repo_graph?.exists ? 'Graph is available for analysis and review flows.' : 'Graph is not built yet — use the Repo Intelligence page to build it.' }}
             </div>
           </div>
-          <div class="rounded-xl border border-base-content/8 bg-base-200/70 p-3 space-y-2">
-            <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/30">Result Summary</div>
-            <template v-if="graphExplorerResult?.output">
-              <div class="font-mono text-[11px] text-base-content/65">tool: {{ graphExplorerResult.tool }}</div>
-              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.count != null">count: {{ graphExplorerResult.output.count }}</div>
-              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.symbol_count != null">symbols: {{ graphExplorerResult.output.symbol_count }}</div>
-              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.file_count != null">files: {{ graphExplorerResult.output.file_count }}</div>
-              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.counts">graph: {{ graphExplorerResult.output.counts.symbols || 0 }} sym / {{ graphExplorerResult.output.counts.edges || 0 }} edges</div>
-              <pre class="mt-2 text-[10px] font-mono whitespace-pre-wrap break-words max-h-[18rem] overflow-auto text-base-content/60">{{ JSON.stringify(graphExplorerResult.output, null, 2) }}</pre>
-            </template>
-            <div v-else class="text-[10px] font-mono text-base-content/30">run a graph query to inspect structure and paths</div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-if="!m.repo_graph?.exists && repoIntel.state !== 'empty_repo'"
+              class="btn btn-xs btn-ghost font-mono"
+              @click="taskInput = '/repo-graph-build'; taskPanelOpen = true"
+            >build via slash</button>
+            <button
+              v-else-if="m.repo_graph?.stale"
+              class="btn btn-xs btn-ghost font-mono"
+              @click="taskInput = '/repo-graph-refresh'; taskPanelOpen = true"
+            >refresh via slash</button>
           </div>
         </div>
       </div>
     </div>
-
     <!-- ── Master-detail body ─────────────────────────────────────────── -->
     <div class="flex-1 flex min-h-0">
 
@@ -2294,6 +2346,9 @@ async function submitTask() {
           <div class="flex items-center justify-between mt-2 px-1">
             <span class="text-[10px] font-mono text-base-content/15">↵ send · Shift↵ newline · / for commands</span>
             <span class="text-[10px] font-mono text-base-content/15" v-if="chatMessages.length">{{ chatMessages.filter(m => m.role === 'user').length }} task(s)</span>
+          </div>
+          <div v-if="taskStatus" class="mt-2 px-1 text-[10px] font-mono text-base-content/35">
+            {{ taskStatus }}
           </div>
         </div>
       </div>

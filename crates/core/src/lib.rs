@@ -5,6 +5,7 @@ pub mod error;
 pub mod paths;
 pub mod repo_brain;
 pub mod repo_graph;
+pub mod repo_readiness;
 pub mod tool_executor;
 pub mod types;
 pub use tool_executor::ToolExecutor;
@@ -33,6 +34,14 @@ pub use repo_graph::{
     usage_graph_for_symbol, RepoGraph, RepoGraphBuilder, RepoGraphCounts, RepoGraphEdge,
     RepoGraphEdgeKind, RepoGraphNeighborhood, RepoGraphNode, RepoGraphNodeKind,
     RepoGraphPathResult, RepoGraphPathStep, RepoGraphQueryContext, RepoGraphStatus,
+};
+pub use repo_readiness::{
+    detect_repo_intelligence_readiness, ensure_repo_graph_ready_for_task,
+    ensure_repo_graph_ready_for_trigger, load_repo_intelligence_readiness, readiness_path_for_root,
+    task_requests_repo_graph, write_repo_intelligence_readiness, InstallRecommendation,
+    LanguageKind, LanguageReadiness, LspServerReadiness, RepoGraphEnsureAction,
+    RepoGraphEnsureResult, RepoIntelligenceOptions, RepoIntelligenceReadiness,
+    RepoIntelligenceState, TreeSitterReadiness,
 };
 pub use run_store::{
     AgentMessage, AgentMessageKind, RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus,

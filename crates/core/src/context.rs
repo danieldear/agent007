@@ -10,6 +10,7 @@ use crate::compact::compact_command_output;
 use crate::error::CoreError;
 use crate::repo_brain::{RepoBrain, RepoBrainBuilder};
 use crate::repo_graph::{context_bundle_for_query, load_or_build_graph};
+use crate::repo_readiness::{write_repo_intelligence_readiness, RepoIntelligenceOptions};
 use crate::run_store::{RunMetadata, RunStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +196,11 @@ impl ContextCompiler {
     }
 
     fn collect_structural_context(&self, task: &str) -> (String, Vec<String>) {
+        let _ = write_repo_intelligence_readiness(
+            &self.root,
+            None,
+            &RepoIntelligenceOptions::default(),
+        );
         let Ok(graph) = load_or_build_graph(&self.root, None) else {
             return (String::new(), Vec::new());
         };

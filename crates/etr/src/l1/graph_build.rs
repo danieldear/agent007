@@ -7,12 +7,18 @@ pub fn run(input: &Value) -> Result<Value> {
     let root = input_root(input)?;
     let graph_path = input_graph_path(input, &root);
     let graph = agent007_core::build_and_save_graph(&root, Some(&graph_path))?;
+    let readiness = agent007_core::write_repo_intelligence_readiness(
+        &root,
+        None,
+        &agent007_core::RepoIntelligenceOptions::default(),
+    )?;
     Ok(json!({
         "built": true,
         "root": graph.root,
         "graph_path": graph.graph_path,
         "version": graph.version,
         "counts": graph.counts,
+        "readiness": readiness,
     }))
 }
 
