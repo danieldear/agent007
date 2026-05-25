@@ -15,11 +15,15 @@ pub fn run(input: &Value) -> Result<Value> {
         })
         .unwrap_or_default();
     let before = agent007_core::graph_status(&graph_path);
-    let graph = agent007_core::build_and_save_graph(&root, Some(&graph_path))?;
+    let requested = paths
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let graph = agent007_core::refresh_graph_for_paths(&root, Some(&graph_path), &requested)?;
     let after = agent007_core::graph_status(&graph_path);
     Ok(json!({
         "refreshed": true,
-        "strategy": "full_rebuild_for_requested_paths",
+        "strategy": "incremental_path_patch",
         "requested_paths": paths,
         "graph_path": graph.graph_path,
         "root": graph.root,

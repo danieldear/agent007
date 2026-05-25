@@ -364,6 +364,173 @@ pub fn build_and_save_graph(root: &Path, path: Option<&Path>) -> Result<RepoGrap
     Ok(graph)
 }
 
+pub fn refresh_graph_for_paths(
+    root: &Path,
+    path: Option<&Path>,
+    requested_paths: &[PathBuf],
+) -> Result<RepoGraph, CoreError> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let target = path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_graph_path_for_root(&root));
+    if requested_paths.is_empty() || !target.exists() {
+        return build_and_save_graph(&root, Some(&target));
+    }
+
+    let mut graph = load_graph(&target)?;
+    let requested = normalize_requested_paths(&root, requested_paths);
+    if requested.is_empty() {
+        return build_and_save_graph(&root, Some(&target));
+    }
+
+    let old_nodes = std::mem::take(&mut graph.nodes);
+    let old_edges = std::mem::take(&mut graph.edges);
+    let old_node_map: HashMap<_, _> = old_nodes
+        .iter()
+        .map(|node| (node.id.clone(), node))
+        .collect();
+    let removed_node_ids: BTreeSet<String> = old_nodes
+        .iter()
+        .filter(|node| {
+            node.path
+                .as_ref()
+                .map(|path| requested.contains(path))
+                .unwrap_or(false)
+        })
+        .map(|node| node.id.clone())
+        .collect();
+
+    let mut rebound_calls: Vec<PendingCall> = Vec::new();
+    let mut rebound_docs: Vec<(String, String, String)> = Vec::new();
+    let mut retained_edges = Vec::new();
+
+    for edge in old_edges {
+        if edge
+            .path
+            .as_ref()
+            .map(|path| requested.contains(path))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let from_removed = removed_node_ids.contains(&edge.from);
+        let to_removed = removed_node_ids.contains(&edge.to);
+
+        match edge.kind {
+            RepoGraphEdgeKind::Calls if !from_removed && to_removed => {
+                if let Some(target_node) = old_node_map.get(&edge.to) {
+                    rebound_calls.push(PendingCall {
+                        from_symbol_id: edge.from.clone(),
+                        target_name: target_node.name.clone(),
+                        path: edge.path.clone().unwrap_or_default(),
+                        line: edge.line.unwrap_or(0),
+                    });
+                }
+            }
+            RepoGraphEdgeKind::Documents if !from_removed && to_removed => {
+                if let (Some(doc_node), Some(target_node)) =
+                    (old_node_map.get(&edge.from), old_node_map.get(&edge.to))
+                {
+                    rebound_docs.push((
+                        doc_node.id.clone(),
+                        doc_node.path.clone().unwrap_or_default(),
+                        target_node.name.clone(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        if from_removed || to_removed {
+            continue;
+        }
+        retained_edges.push(edge);
+    }
+
+    let mut nodes: Vec<RepoGraphNode> = old_nodes
+        .into_iter()
+        .filter(|node| !removed_node_ids.contains(&node.id))
+        .collect();
+    let mut edges = retained_edges;
+    let mut counts = RepoGraphCounts::default();
+    let mut symbol_index: HashMap<String, Vec<String>> = build_symbol_index(&nodes);
+    let mut pending_calls = Vec::new();
+    let mut pending_doc_links = Vec::new();
+
+    for rel_path in &requested {
+        let abs_path = root.join(rel_path);
+        if !abs_path.exists() {
+            continue;
+        }
+        if is_rust_file(&abs_path) {
+            patch_rust_file(
+                &abs_path,
+                rel_path,
+                &mut nodes,
+                &mut edges,
+                &mut symbol_index,
+                &mut pending_calls,
+                &mut counts,
+            )?;
+        } else if is_doc_file(&abs_path) {
+            patch_doc_file(
+                &abs_path,
+                rel_path,
+                &mut nodes,
+                &mut pending_doc_links,
+                &mut counts,
+            )?;
+        }
+    }
+
+    for pending in pending_calls.into_iter().chain(rebound_calls.into_iter()) {
+        if let Some(targets) = symbol_index.get(&pending.target_name) {
+            for target in targets {
+                edges.push(RepoGraphEdge {
+                    kind: RepoGraphEdgeKind::Calls,
+                    from: pending.from_symbol_id.clone(),
+                    to: target.clone(),
+                    path: Some(pending.path.clone()),
+                    line: Some(pending.line),
+                });
+            }
+        }
+    }
+
+    for (doc_id, doc_path, symbol_name) in pending_doc_links
+        .into_iter()
+        .chain(rebound_docs.into_iter())
+    {
+        if let Some(targets) = symbol_index.get(&symbol_name) {
+            for target in targets {
+                edges.push(RepoGraphEdge {
+                    kind: RepoGraphEdgeKind::Documents,
+                    from: doc_id.clone(),
+                    to: target.clone(),
+                    path: Some(doc_path.clone()),
+                    line: None,
+                });
+            }
+        }
+    }
+
+    dedupe_nodes(&mut nodes, &mut counts);
+    dedupe_edges(&mut edges);
+    counts = recalculate_counts(&nodes, &edges);
+
+    let refreshed = RepoGraph {
+        version: GRAPH_VERSION,
+        root: root.display().to_string(),
+        built_at: Utc::now().to_rfc3339(),
+        graph_path: target.display().to_string(),
+        counts,
+        nodes,
+        edges,
+    };
+    save_graph(&refreshed, &target)?;
+    Ok(refreshed)
+}
+
 pub fn graph_status(path: &Path) -> RepoGraphStatus {
     if !path.exists() {
         return RepoGraphStatus {
@@ -473,6 +640,178 @@ fn dedupe_edges(edges: &mut Vec<RepoGraphEdge>) {
             edge.line,
         ))
     });
+}
+
+fn recalculate_counts(nodes: &[RepoGraphNode], edges: &[RepoGraphEdge]) -> RepoGraphCounts {
+    RepoGraphCounts {
+        files: nodes
+            .iter()
+            .filter(|node| matches!(node.kind, RepoGraphNodeKind::File | RepoGraphNodeKind::Doc))
+            .count(),
+        rust_files: nodes
+            .iter()
+            .filter(|node| {
+                node.kind == RepoGraphNodeKind::File && node.language.as_deref() == Some("rust")
+            })
+            .count(),
+        doc_files: nodes
+            .iter()
+            .filter(|node| node.kind == RepoGraphNodeKind::Doc)
+            .count(),
+        symbols: nodes
+            .iter()
+            .filter(|node| node.kind == RepoGraphNodeKind::Symbol)
+            .count(),
+        modules: nodes
+            .iter()
+            .filter(|node| node.kind == RepoGraphNodeKind::Module)
+            .count(),
+        docs: nodes
+            .iter()
+            .filter(|node| node.kind == RepoGraphNodeKind::Doc)
+            .count(),
+        edges: edges.len(),
+    }
+}
+
+fn build_symbol_index(nodes: &[RepoGraphNode]) -> HashMap<String, Vec<String>> {
+    let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+    for node in nodes {
+        if node.kind == RepoGraphNodeKind::Symbol {
+            symbol_index
+                .entry(node.name.clone())
+                .or_default()
+                .push(node.id.clone());
+        }
+    }
+    symbol_index
+}
+
+fn normalize_requested_paths(root: &Path, requested_paths: &[PathBuf]) -> BTreeSet<String> {
+    requested_paths
+        .iter()
+        .map(|path| {
+            if path.is_absolute() {
+                relative_path(root, path).to_string_lossy().to_string()
+            } else {
+                path.to_string_lossy().to_string()
+            }
+        })
+        .collect()
+}
+
+fn patch_rust_file(
+    abs_path: &Path,
+    rel_path: &str,
+    nodes: &mut Vec<RepoGraphNode>,
+    edges: &mut Vec<RepoGraphEdge>,
+    symbol_index: &mut HashMap<String, Vec<String>>,
+    pending_calls: &mut Vec<PendingCall>,
+    counts: &mut RepoGraphCounts,
+) -> Result<(), CoreError> {
+    counts.rust_files += 1;
+    counts.files += 1;
+    let parsed = parse_rust_file(abs_path, rel_path)?;
+    let file_id = format!("file:{rel_path}");
+    nodes.push(RepoGraphNode {
+        id: file_id.clone(),
+        kind: RepoGraphNodeKind::File,
+        name: abs_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(rel_path)
+            .to_string(),
+        path: Some(rel_path.to_string()),
+        language: Some("rust".into()),
+        symbol_kind: None,
+        line: None,
+        signature: None,
+    });
+    for import_path in parsed.imports {
+        let module_id = format!("module:{import_path}");
+        nodes.push(RepoGraphNode {
+            id: module_id.clone(),
+            kind: RepoGraphNodeKind::Module,
+            name: import_path.clone(),
+            path: None,
+            language: Some("rust".into()),
+            symbol_kind: None,
+            line: None,
+            signature: None,
+        });
+        edges.push(RepoGraphEdge {
+            kind: RepoGraphEdgeKind::Imports,
+            from: file_id.clone(),
+            to: module_id,
+            path: Some(rel_path.to_string()),
+            line: None,
+        });
+    }
+    for symbol in parsed.symbols {
+        counts.symbols += 1;
+        let node_id = format!("symbol:{rel_path}:{}:{}", symbol.name, symbol.line);
+        nodes.push(RepoGraphNode {
+            id: node_id.clone(),
+            kind: RepoGraphNodeKind::Symbol,
+            name: symbol.name.clone(),
+            path: Some(rel_path.to_string()),
+            language: Some("rust".into()),
+            symbol_kind: Some(symbol.kind.clone()),
+            line: Some(symbol.line),
+            signature: Some(symbol.signature.clone()),
+        });
+        symbol_index
+            .entry(symbol.name.clone())
+            .or_default()
+            .push(node_id.clone());
+        edges.push(RepoGraphEdge {
+            kind: RepoGraphEdgeKind::Defines,
+            from: file_id.clone(),
+            to: node_id.clone(),
+            path: Some(rel_path.to_string()),
+            line: Some(symbol.line),
+        });
+        for call in symbol.calls {
+            pending_calls.push(PendingCall {
+                from_symbol_id: node_id.clone(),
+                target_name: call.name,
+                path: rel_path.to_string(),
+                line: call.line,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn patch_doc_file(
+    abs_path: &Path,
+    rel_path: &str,
+    nodes: &mut Vec<RepoGraphNode>,
+    pending_doc_links: &mut Vec<(String, String, String)>,
+    counts: &mut RepoGraphCounts,
+) -> Result<(), CoreError> {
+    counts.doc_files += 1;
+    counts.files += 1;
+    counts.docs += 1;
+    let doc_id = format!("doc:{rel_path}");
+    nodes.push(RepoGraphNode {
+        id: doc_id.clone(),
+        kind: RepoGraphNodeKind::Doc,
+        name: abs_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(rel_path)
+            .to_string(),
+        path: Some(rel_path.to_string()),
+        language: Some("markdown".into()),
+        symbol_kind: None,
+        line: None,
+        signature: None,
+    });
+    for symbol_name in extract_doc_symbol_mentions(abs_path)? {
+        pending_doc_links.push((doc_id.clone(), rel_path.to_string(), symbol_name));
+    }
+    Ok(())
 }
 
 fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
@@ -1267,6 +1606,38 @@ pub fn gamma() { beta(); }
         let status = graph_status(&graph_path);
         assert!(status.stale);
         assert_eq!(status.missing_files, 1);
+    }
+
+    #[test]
+    fn refresh_graph_for_paths_rebuilds_only_changed_path() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn alpha() {}\npub fn beta() { alpha(); }\n",
+        )
+        .unwrap();
+        let graph_path = default_graph_path_for_root(dir.path());
+        build_and_save_graph(dir.path(), Some(&graph_path)).unwrap();
+
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn alpha_renamed() {}\npub fn beta() { alpha_renamed(); }\n",
+        )
+        .unwrap();
+
+        let refreshed = refresh_graph_for_paths(
+            dir.path(),
+            Some(&graph_path),
+            &[PathBuf::from("src/lib.rs")],
+        )
+        .unwrap();
+        assert_eq!(symbol_lookup(&refreshed, "alpha", true).len(), 0);
+        assert_eq!(symbol_lookup(&refreshed, "alpha_renamed", true).len(), 1);
+        let callees = callees_for_symbol(&refreshed, "beta", true);
+        assert!(callees
+            .iter()
+            .any(|row| row.get("callee") == Some(&"alpha_renamed".to_string())));
     }
 
     #[test]
