@@ -147,28 +147,32 @@ nav {
 /* Big headline */
 .hero-title {
   font-family: var(--font-display); font-weight: 700;
-  font-size: clamp(2.8rem, 5.8vw, 5.6rem);
-  letter-spacing: -.05em; line-height: .92;
-  color: var(--white); margin-bottom: 2.25rem;
+  font-size: clamp(2.6rem, 5.4vw, 5.2rem);
+  letter-spacing: -.05em; line-height: .96;
+  color: var(--white); margin-bottom: 1.5rem;
   animation: fade-up 500ms 80ms var(--ease-out) both;
 }
-.hero-title .line2 {
+.hero-title-accent {
   display: block; color: transparent;
-  -webkit-text-stroke: 1.5px var(--amber);
-  text-stroke: 1.5px var(--amber);
+  -webkit-text-stroke: 2px var(--amber);
+  text-stroke: 2px var(--amber);
 }
-/* Morphing text in line2 */
-.hero-morph { position: relative; display: inline-block; }
-.hero-morph span {
-  position: absolute; left: 0; top: 0; white-space: nowrap;
-  -webkit-text-stroke: 1.5px var(--amber); text-stroke: 1.5px var(--amber);
-  opacity: 0; transform: translateY(10px);
-  transition: opacity 480ms var(--ease-out), transform 480ms var(--ease-out);
+
+/* Morphing benefit bar — separate block, zero overlap risk */
+.hero-morph-bar {
+  position: relative; height: 1.25rem; overflow: hidden;
+  margin-bottom: 2rem;
+  animation: fade-up 500ms 120ms var(--ease-out) both;
 }
-.hero-morph span.active { opacity: 1; transform: translateY(0); }
-.hero-morph span.out    { opacity: 0; transform: translateY(-8px); }
-/* Invisible placeholder to reserve space */
-.hero-morph-sizer { visibility: hidden; display: inline; }
+.hmb-item {
+  position: absolute; left: 0; top: 0; right: 0; white-space: nowrap;
+  font-family: var(--font-mono); font-size: .78rem;
+  color: var(--amber); letter-spacing: .04em;
+  transform: translateY(110%);
+  transition: transform 540ms cubic-bezier(0.23,1,0.32,1);
+}
+.hmb-item.active { transform: translateY(0); }
+.hmb-item.out    { transform: translateY(-110%); }
 
 .hero-sub {
   font-size: clamp(.86rem, 1.5vw, .98rem); color: var(--text2);
@@ -191,32 +195,77 @@ nav {
 }
 @media (hover: hover) and (pointer: fine) { .editor-pill:hover { border-color: var(--amber); color: var(--amber); } }
 
-/* Right: 3D sphere + floating cards */
+/* Right: live session card */
 .hero-visual {
   position: relative; display: flex; align-items: center; justify-content: center;
-  animation: fade-up 600ms 160ms var(--ease-out) both;
+  animation: fade-up 600ms 200ms var(--ease-out) both;
 }
-#sphere-canvas {
-  width: 100%; max-width: 520px; aspect-ratio: 1; display: block;
+/* Hero session card */
+.hs-card {
+  width: 100%; max-width: 510px;
+  background: var(--black2);
+  border: 1px solid var(--border2); border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 48px 96px rgba(0,0,0,.55), 0 0 0 1px rgba(245,158,11,.07);
 }
-/* Floating metric cards around the sphere */
-.float-card {
-  position: absolute; background: rgba(13,13,17,.88);
-  border: 1px solid var(--border2); border-radius: 10px;
-  padding: .65rem .9rem; backdrop-filter: blur(12px);
-  min-width: 110px;
-  animation: float-card 4s ease-in-out infinite alternate;
+.hs-topbar {
+  background: var(--black3); border-bottom: 1px solid var(--border);
+  padding: .7rem 1rem;
+  display: flex; align-items: center; justify-content: space-between;
 }
-.float-card:nth-child(2) { top: 14%; left: -2%; animation-delay: 0s;   animation-duration: 3.8s; }
-.float-card:nth-child(3) { top: 22%; right: -4%; animation-delay: 1.2s; animation-duration: 4.2s; }
-.float-card:nth-child(4) { bottom: 20%; left: 0%; animation-delay: 2.1s; animation-duration: 3.6s; }
-.float-card:nth-child(5) { bottom: 12%; right: 1%; animation-delay: .6s;  animation-duration: 4.5s; }
-.fc-label { font-size: .58rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; margin-bottom: .2rem; }
-.fc-val   { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; line-height: 1; letter-spacing: -.03em; }
-.fc-sub   { font-size: .6rem; margin-top: .2rem; }
-.fc-val.amber { color: var(--amber); }
-.fc-val.green { color: var(--green); }
-.fc-val.blue  { color: var(--blue); }
+.hs-dots { display: flex; gap: 5px; }
+.hs-dot  { width: 9px; height: 9px; border-radius: 50%; }
+.hs-dot.r { background: rgba(255,95,86,.65); }
+.hs-dot.y { background: rgba(255,189,0,.65); }
+.hs-dot.g { background: rgba(40,201,64,.65); }
+.hs-title-bar {
+  font-size: .64rem; color: var(--muted); letter-spacing: .06em; text-transform: uppercase;
+  display: flex; align-items: center; gap: .4rem;
+}
+.hs-live-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green); animation: glow-pulse 2s ease-in-out infinite;
+}
+/* Metric strip */
+.hs-metrics { display: flex; border-bottom: 1px solid var(--border); }
+.hs-metric  { flex: 1; padding: .6rem .85rem; border-right: 1px solid var(--border); }
+.hs-metric:last-child { border-right: none; }
+.hs-m-label { font-size: .56rem; color: var(--muted); letter-spacing: .07em; text-transform: uppercase; margin-bottom: .18rem; }
+.hs-m-val   { font-family: var(--font-display); font-size: 1rem; font-weight: 700; line-height: 1; letter-spacing: -.04em; }
+/* Activity feed */
+.hs-feed {
+  padding: .8rem .85rem; display: flex; flex-direction: column; gap: .3rem;
+  min-height: 220px;
+}
+.hs-row {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .38rem .55rem; border-radius: 7px;
+  font-size: .7rem; font-family: var(--font-mono);
+  opacity: 0; transform: translateY(5px);
+  transition: opacity 280ms var(--ease-out), transform 280ms var(--ease-out), background 180ms;
+}
+.hs-row.vis { opacity: 1; transform: translateY(0); }
+@media (hover: hover) and (pointer: fine) { .hs-row:hover { background: var(--surface); } }
+.hs-icon { font-size: .72rem; flex-shrink: 0; width: 1.1rem; text-align: center; }
+.hs-tool { color: var(--amber); font-weight: 600; min-width: 7.5rem; }
+.hs-desc { color: var(--text2); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hs-badge {
+  font-size: .6rem; padding: .1rem .38rem; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid; font-weight: 600;
+}
+.hs-badge.fast    { color: var(--green);  border-color: rgba(52,211,153,.3);  background: rgba(52,211,153,.07); }
+.hs-badge.live    { color: var(--amber);  border-color: rgba(245,158,11,.3);  background: rgba(245,158,11,.07); animation: hs-blink 1.1s ease-in-out infinite alternate; }
+.hs-badge.worker  { color: var(--blue);   border-color: rgba(96,165,250,.3);  background: rgba(96,165,250,.07); }
+@keyframes hs-blink { to { opacity: .45; } }
+/* Bottom bar — workers status */
+.hs-footer {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .55rem .85rem; border-top: 1px solid var(--border);
+  font-size: .62rem; color: var(--muted);
+}
+.hs-worker-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: glow-pulse 2s ease-in-out infinite; }
+.hs-worker-dot:nth-child(2) { animation-delay: .5s; }
+.hs-worker-dot:nth-child(3) { animation-delay: 1s; }
 
 /* ── Buttons ── */
 .btn-primary {
@@ -398,26 +447,53 @@ section { position: relative; z-index: 1; padding: 5.5rem 2.5rem; }
 .speed-val.amber { color: var(--amber); }
 .speed-val.green { color: var(--green); }
 
-/* Memory dots visual */
-.mem-vis { position: relative; height: 108px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.mem-dot { position: absolute; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .58rem; font-weight: 700; border: 1px solid; animation: mem-float 3s ease-in-out infinite alternate; }
-.mem-dot:nth-child(even) { animation-direction: alternate-reverse; animation-duration: 3.6s; }
-.mem-connector { position: absolute; height: 1px; transform-origin: left center; background: linear-gradient(90deg, transparent, rgba(245,158,11,.2), transparent); pointer-events: none; }
-
-/* Workflow step visual */
-.wf-vis { display: flex; }
-.wf-step {
-  flex: 1; padding: .55rem .4rem; text-align: center;
-  background: var(--surface); border: 1px solid var(--border);
-  font-size: .6rem; color: var(--text2); line-height: 1.35;
-  transition: background 200ms, border-color 200ms;
+/* Memory search visual */
+.mem-search { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.mem-search-bar {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .5rem .75rem; border-bottom: 1px solid var(--border);
+  background: var(--black3);
 }
-.wf-step:first-child { border-radius: 7px 0 0 7px; }
-.wf-step:last-child  { border-radius: 0 7px 7px 0; }
-.wf-step.done    { background: rgba(16,185,129,.07);  border-color: rgba(16,185,129,.3); color: var(--green); }
-.wf-step.active  { background: rgba(245,158,11,.09); border-color: rgba(245,158,11,.35); color: var(--amber); font-weight: 700; }
-.wf-step.pending { opacity: .4; }
-.wf-step-icon { display: block; font-size: .8rem; margin-bottom: .2rem; }
+.mem-search-icon { font-size: .78rem; }
+.mem-search-query { font-family: var(--font-mono); font-size: .69rem; color: var(--amber); flex: 1; }
+.mem-search-ms { font-size: .62rem; color: var(--green); font-family: var(--font-mono); font-weight: 700; }
+.mem-result {
+  padding: .42rem .75rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; gap: .5rem;
+  opacity: 0; transform: translateX(-5px);
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.mem-result:last-child { border-bottom: none; }
+.mem-result.vis { opacity: 1; transform: translateX(0); }
+.mem-tag {
+  font-size: .54rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: .1rem .35rem; border-radius: 3px; flex-shrink: 0; margin-top: .14rem;
+  border: 1px solid;
+}
+.mem-text { font-size: .68rem; color: var(--text2); line-height: 1.55; }
+.mem-text mark { background: rgba(245,158,11,.18); color: var(--amber); padding: 0 2px; border-radius: 2px; font-style: normal; }
+
+/* Parallel workflow visual */
+.wf-parallel { display: flex; flex-direction: column; gap: .32rem; }
+.wf-p-label { font-size: .57rem; color: var(--muted); letter-spacing: .07em; text-transform: uppercase; text-align: center; margin-bottom: .25rem; }
+.wf-p-row   { display: flex; gap: .3rem; }
+.wf-pnode {
+  flex: 1; padding: .38rem .4rem; text-align: center;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; font-size: .62rem; color: var(--text2); line-height: 1.25;
+  transition: background 220ms var(--ease-out), border-color 220ms var(--ease-out), color 220ms var(--ease-out);
+}
+.wf-pnode.done    { background: rgba(16,185,129,.08);  border-color: rgba(16,185,129,.3);  color: var(--green); }
+.wf-pnode.active  { background: rgba(245,158,11,.08);  border-color: rgba(245,158,11,.3);  color: var(--amber); font-weight: 700; }
+.wf-pnode.pending { opacity: .38; }
+.wf-p-badge {
+  display: flex; justify-content: center; margin-top: .35rem;
+}
+.wf-badge-pill {
+  display: inline-flex; align-items: center; gap: .25rem;
+  font-size: .6rem; padding: .2rem .6rem; border-radius: 20px;
+  background: rgba(96,165,250,.08); border: 1px solid rgba(96,165,250,.2); color: var(--blue);
+}
 
 /* ── CAPABILITY GRID — expandable cards ── */
 .cap-section { background: var(--black2); border-top: 1px solid var(--border); }
@@ -735,14 +811,6 @@ footer {
   0%,100% { transform: translateY(0); }
   50%      { transform: translateY(-3px); }
 }
-@keyframes mem-float {
-  0%   { transform: translate(0,0); }
-  100% { transform: translate(2px,-5px); }
-}
-@keyframes float-card {
-  0%   { transform: translateY(0px) rotate(0deg); }
-  100% { transform: translateY(-8px) rotate(.5deg); }
-}
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes node-pop {
   from { opacity: 0; transform: scale(0.7); }
@@ -841,7 +909,7 @@ footer {
 /* prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   .reveal { transition: opacity 300ms; transform: none !important; }
-  .cap-card, .value-card, .dv-worker, .mem-dot, .float-card { animation: none !important; transform: none !important; }
+  .cap-card, .value-card, .dv-worker, .hs-row, .hs-live-dot, .hs-worker-dot { animation: none !important; transform: none !important; }
   @keyframes fade-up { from { opacity: 0; } to { opacity: 1; } }
   @keyframes glow-pulse { 0%,100% { opacity: 1; } }
 }
@@ -894,17 +962,17 @@ footer {
       </div>
 
       <h1 class="hero-title">
-        Your AI just
-        <span class="line2">
-          <span class="hero-morph" id="hero-morph">
-            <span>got a team.</span>
-            <span>never forgets.</span>
-            <span>goes 200× faster.</span>
-            <span>sees the whole picture.</span>
-            <span class="hero-morph-sizer" aria-hidden="true">got a team.</span>
-          </span>
-        </span>
+        Your AI just got
+        <span class="hero-title-accent">a team.</span>
       </h1>
+
+      <!-- Cycling benefit bar — fixed height block, zero overlap risk -->
+      <div class="hero-morph-bar" id="hero-morph-bar" aria-live="polite" aria-atomic="true">
+        <span class="hmb-item active">Persistent memory. Parallel workers.</span>
+        <span class="hmb-item">200× faster than raw LLM calls.</span>
+        <span class="hmb-item">Ships full features end-to-end.</span>
+        <span class="hmb-item">Knows your entire codebase.</span>
+      </div>
 
       <p class="hero-sub">
         agent007 is the operations layer every AI coding assistant is missing — persistent memory, parallel workers, sub-millisecond built-in tools, and a live ops dashboard. One binary. Any editor.
@@ -926,30 +994,50 @@ footer {
       </div>
     </div>
 
-    <!-- Right: particle sphere + floating metric cards -->
+    <!-- Right: live agent session card -->
     <div class="hero-visual">
-      <canvas id="sphere-canvas" aria-label="agent007 activity visualization"></canvas>
-
-      <!-- Floating metric cards -->
-      <div class="float-card">
-        <div class="fc-label">Tool executions</div>
-        <div class="fc-val green" id="fc-tools">0</div>
-        <div class="fc-sub" style="color:var(--green2);">▲ sub-millisecond</div>
-      </div>
-      <div class="float-card">
-        <div class="fc-label">Tokens saved</div>
-        <div class="fc-val amber" id="fc-tokens">0%</div>
-        <div class="fc-sub" style="color:var(--amber3);">this session</div>
-      </div>
-      <div class="float-card">
-        <div class="fc-label">Active workers</div>
-        <div class="fc-val blue" id="fc-workers">3</div>
-        <div class="fc-sub" style="color:var(--blue2);">parallel</div>
-      </div>
-      <div class="float-card">
-        <div class="fc-label">Memory recalls</div>
-        <div class="fc-val" style="color:var(--purple);" id="fc-mem">0</div>
-        <div class="fc-sub" style="color:var(--purple);opacity:.7;">instant</div>
+      <div class="hs-card">
+        <!-- Title bar -->
+        <div class="hs-topbar">
+          <div class="hs-dots">
+            <div class="hs-dot r"></div>
+            <div class="hs-dot y"></div>
+            <div class="hs-dot g"></div>
+          </div>
+          <div class="hs-title-bar">
+            <span class="hs-live-dot"></span>
+            agent007 &mdash; live session
+          </div>
+          <div style="width:3.5rem"></div>
+        </div>
+        <!-- Metrics strip -->
+        <div class="hs-metrics">
+          <div class="hs-metric">
+            <div class="hs-m-label">Tools/s</div>
+            <div class="hs-m-val" style="color:var(--amber)" id="hs-tools">14</div>
+          </div>
+          <div class="hs-metric">
+            <div class="hs-m-label">Workers</div>
+            <div class="hs-m-val" style="color:var(--green)" id="hs-workers">3</div>
+          </div>
+          <div class="hs-metric">
+            <div class="hs-m-label">Tokens saved</div>
+            <div class="hs-m-val" style="color:var(--blue)" id="hs-saved">72%</div>
+          </div>
+          <div class="hs-metric">
+            <div class="hs-m-label">Recall</div>
+            <div class="hs-m-val" style="color:var(--purple);font-size:.75rem;letter-spacing:-.01em">instant</div>
+          </div>
+        </div>
+        <!-- Activity feed -->
+        <div class="hs-feed" id="hs-feed"></div>
+        <!-- Footer worker dots -->
+        <div class="hs-footer">
+          <span class="hs-worker-dot"></span>
+          <span class="hs-worker-dot"></span>
+          <span class="hs-worker-dot"></span>
+          3 workers active &nbsp;&middot;&nbsp; sub-millisecond tools &nbsp;&middot;&nbsp; local only
+        </div>
       </div>
     </div>
   </div>
@@ -1046,7 +1134,7 @@ footer {
 <section class="value-section">
   <div class="section-inner">
     <span class="section-eyebrow reveal">Why it works</span>
-    <h2 class="section-title reveal">Three things your AI<br/>can't do without this.</h2>
+    <h2 class="section-title reveal">What your AI<br/>needed all along.</h2>
 
     <div class="value-grid stagger-group">
 
@@ -1078,7 +1166,25 @@ footer {
         <div class="vc-title">AI that actually remembers</div>
         <div class="vc-desc">Every session, decision, and result stored in local vector memory your AI retrieves instantly. Give it your team context once — it carries it forever.</div>
         <div class="vc-visual">
-          <div class="mem-vis" id="mem-vis"></div>
+          <div class="mem-search" id="mem-search-vis">
+            <div class="mem-search-bar">
+              <span class="mem-search-icon">🔍</span>
+              <span class="mem-search-query">recall: "auth bug fix"</span>
+              <span class="mem-search-ms">0.2ms</span>
+            </div>
+            <div class="mem-result" id="mem-r1">
+              <span class="mem-tag" style="color:var(--amber);border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.1);">session</span>
+              <span class="mem-text">Fixed <mark>auth token refresh</mark> — rotates every 15m, edge case on logout</span>
+            </div>
+            <div class="mem-result" id="mem-r2">
+              <span class="mem-tag" style="color:var(--blue);border-color:rgba(96,165,250,.3);background:rgba(96,165,250,.1);">arch</span>
+              <span class="mem-text">JWT middleware in <mark>auth.rs</mark>, not the gateway layer</span>
+            </div>
+            <div class="mem-result" id="mem-r3">
+              <span class="mem-tag" style="color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.1);">rule</span>
+              <span class="mem-text">Always verify <mark>claims.sub</mark> before granting session</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1087,12 +1193,27 @@ footer {
         <div class="vc-title">Ship whole features, not just answers</div>
         <div class="vc-desc">Multi-step workflows take a task from spec to done — with parallel agents, approval gates, and live dashboard visibility at every milestone.</div>
         <div class="vc-visual">
-          <div class="wf-vis" id="wf-vis">
-            <div class="wf-step done"><span class="wf-step-icon">📋</span>Spec</div>
-            <div class="wf-step done"><span class="wf-step-icon">🗺</span>Plan</div>
-            <div class="wf-step active"><span class="wf-step-icon">⚡</span>Build</div>
-            <div class="wf-step pending"><span class="wf-step-icon">🧪</span>Test</div>
-            <div class="wf-step pending"><span class="wf-step-icon">✅</span>Review</div>
+          <div class="wf-parallel" id="wf-parallel-vis">
+            <div class="wf-p-label">Feature workflow — parallel execution</div>
+            <div class="wf-p-row">
+              <div class="wf-pnode done" id="wp-spec">📋 Spec</div>
+            </div>
+            <div class="wf-p-row">
+              <div class="wf-pnode done" id="wp-plan">🗺 Plan</div>
+            </div>
+            <div class="wf-p-row">
+              <div class="wf-pnode active" id="wp-b1">⚡ Build A</div>
+              <div class="wf-pnode active" id="wp-b2">⚡ Build B</div>
+            </div>
+            <div class="wf-p-row">
+              <div class="wf-pnode pending" id="wp-test">🧪 Test</div>
+            </div>
+            <div class="wf-p-row">
+              <div class="wf-pnode pending" id="wp-review">✅ Review</div>
+            </div>
+            <div class="wf-p-badge">
+              <span class="wf-badge-pill">⚡ 2 agents running in parallel</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1545,149 +1666,78 @@ footer {
 </footer>
 
 <script>
-/* ══ 3D PARTICLE SPHERE (SenBeCoin-style) ══ */
+/* ══ HERO SESSION FEED ══ */
 (function(){
-  var canvas = document.getElementById('sphere-canvas');
-  if(!canvas) return;
-  var ctx = canvas.getContext('2d');
-  var W, H, cx, cy, dpr, raf;
-  var N = 280; // number of dots
-  var points = [];
+  var feed = document.getElementById('hs-feed');
+  if(!feed) return;
+  var CALLS = [
+    { icon:'✓', tool:'memory.recall',   desc:'3 relevant memories loaded',      badge:'0.2ms',  type:'fast'   },
+    { icon:'✓', tool:'fs.search',        desc:'10 847 files scanned',             badge:'0.4ms',  type:'fast'   },
+    { icon:'✓', tool:'git.diff',         desc:'14 changed files analysed',        badge:'0.1ms',  type:'fast'   },
+    { icon:'⟳', tool:'workflow.run',     desc:'step 3/5: building feature…',      badge:'live',   type:'live'   },
+    { icon:'✓', tool:'symbol.lookup',    desc:'auth_middleware — found in auth.rs',badge:'0.1ms',  type:'fast'   },
+    { icon:'✓', tool:'quality.gate',     desc:'all 5 checks passed',              badge:'0.3ms',  type:'fast'   },
+    { icon:'⟳', tool:'agent.spawn',      desc:'worker #3 dispatched (parallel)',  badge:'worker', type:'worker' },
+    { icon:'✓', tool:'memory.write',     desc:'context saved to local store',     badge:'0.2ms',  type:'fast'   },
+    { icon:'✓', tool:'repo.graph',       desc:'symbol index updated (2 448 nodes)',badge:'0.6ms',  type:'fast'   },
+    { icon:'⟳', tool:'skill.run',        desc:'dispatching /code-review…',        badge:'live',   type:'live'   },
+  ];
+  var MAX = 5, idx = 0;
 
-  // Generate uniform points on sphere surface (Fibonacci spiral)
-  for(var i = 0; i < N; i++){
-    var phi   = Math.acos(1 - 2*(i+.5)/N);
-    var theta = Math.PI * (1 + Math.sqrt(5)) * i;
-    points.push({
-      ox: Math.sin(phi)*Math.cos(theta),
-      oy: Math.cos(phi),
-      oz: Math.sin(phi)*Math.sin(theta),
-    });
+  function addRow(call) {
+    var row = document.createElement('div');
+    row.className = 'hs-row';
+    row.innerHTML =
+      '<span class="hs-icon">'  + call.icon  + '</span>' +
+      '<span class="hs-tool">'  + call.tool  + '</span>' +
+      '<span class="hs-desc">'  + call.desc  + '</span>' +
+      '<span class="hs-badge '  + call.type  + '">' + call.badge + '</span>';
+    feed.appendChild(row);
+    // evict oldest
+    while(feed.children.length > MAX){
+      var old = feed.children[0];
+      old.style.cssText += 'opacity:0;transform:translateY(-6px);transition:opacity 240ms,transform 240ms;';
+      setTimeout(function(el){ if(el.parentNode) el.parentNode.removeChild(el); }, 250, old);
+    }
+    setTimeout(function(){ row.classList.add('vis'); }, 30);
   }
 
-  function setup(){
-    dpr = window.devicePixelRatio || 1;
-    var rect = canvas.getBoundingClientRect();
-    W = rect.width * dpr; H = rect.height * dpr;
-    canvas.width = W; canvas.height = H;
-    cx = W/2; cy = H/2;
+  // seed 3 rows immediately
+  for(var s = 0; s < 3; s++){
+    (function(i){ setTimeout(function(){ addRow(CALLS[i]); }, i * 180); })(s);
   }
+  idx = 3;
 
-  var tick = 0;
-  function draw(){
-    ctx.clearRect(0,0,W,H);
-    tick++;
-    var t = tick * 0.005;
-    var R = Math.min(W,H) * 0.38;
-
-    // Rotation angles
-    var rx = Math.sin(t*.3) * 0.15; // slow tilt
-    var ry = t * 0.4;               // main Y rotation
-
-    // Project + sort by z
-    var projected = points.map(function(p){
-      // Rotate Y
-      var x1 = p.ox * Math.cos(ry) - p.oz * Math.sin(ry);
-      var z1 = p.ox * Math.sin(ry) + p.oz * Math.cos(ry);
-      var y1 = p.oy;
-      // Rotate X
-      var y2 = y1 * Math.cos(rx) - z1 * Math.sin(rx);
-      var z2 = y1 * Math.sin(rx) + z1 * Math.cos(rx);
-      return { sx: cx + x1*R, sy: cy + y2*R, z: z2 };
-    }).sort(function(a,b){ return a.z - b.z; });
-
-    // Draw edges (connect nearby points)
-    var edgeThresh = R * 0.42;
-    projected.forEach(function(p, i){
-      for(var j = i+1; j < projected.length; j++){
-        var q = projected[j];
-        var dx = p.sx - q.sx, dy = p.sy - q.sy;
-        var d  = Math.sqrt(dx*dx + dy*dy);
-        if(d < edgeThresh){
-          var depthAlpha = ((p.z + q.z) * 0.5 + 1) * 0.5; // 0..1
-          ctx.beginPath();
-          ctx.moveTo(p.sx, p.sy);
-          ctx.lineTo(q.sx, q.sy);
-          ctx.strokeStyle = 'rgba(245,158,11,' + (depthAlpha * 0.065 * (1 - d/edgeThresh)) + ')';
-          ctx.lineWidth = 0.5;
-          ctx.stroke();
-        }
-      }
-    });
-
-    // Draw dots
-    projected.forEach(function(p){
-      var depth = (p.z + 1) * 0.5; // 0 (back) .. 1 (front)
-      var r     = (0.8 + depth * 1.8);
-      var alpha = 0.15 + depth * 0.7;
-      ctx.beginPath();
-      ctx.arc(p.sx, p.sy, r, 0, Math.PI*2);
-      // Amber for front, muted for back
-      var rb = Math.round(245 * depth + 40 * (1-depth));
-      var gb = Math.round(158 * depth + 40 * (1-depth));
-      var bb = Math.round(11  * depth + 40 * (1-depth));
-      ctx.fillStyle = 'rgba(' + rb + ',' + gb + ',' + bb + ',' + alpha + ')';
-      ctx.fill();
-    });
-
-    raf = requestAnimationFrame(draw);
-  }
-
-  function start(){ if(!raf){ setup(); draw(); } }
-  function stop(){  cancelAnimationFrame(raf); raf = null; }
-
-  var io = new IntersectionObserver(function(e){ e[0].isIntersecting ? start() : stop(); }, {threshold:.05});
-  io.observe(canvas);
-  var rt;
-  window.addEventListener('resize', function(){ clearTimeout(rt); rt = setTimeout(setup, 150); });
-
-  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){
-    setup(); tick=120; draw(); stop();
-  }
+  setInterval(function(){
+    addRow(CALLS[idx % CALLS.length]);
+    idx++;
+    // nudge tools/s counter
+    var el = document.getElementById('hs-tools');
+    if(el){ var v = parseInt(el.textContent)||14; el.textContent = v + Math.ceil(Math.random()*4); }
+  }, 1700);
 })();
 
-/* ══ FLOATING CARD COUNTER ANIMATION ══ */
+/* ══ HERO MORPH BAR ══ */
 (function(){
-  var frames = 0;
-  function tick(){
-    frames++;
-    if(frames % 40 === 0){
-      var el = document.getElementById('fc-tools');
-      if(el){ var v = parseInt(el.textContent)||0; el.textContent = v + Math.ceil(Math.random()*3); }
-    }
-    if(frames % 60 === 0){
-      var el2 = document.getElementById('fc-tokens');
-      if(el2){
-        var cur = parseInt(el2.textContent)||0;
-        var next = Math.min(cur + 2, 72);
-        el2.textContent = next + '%';
-      }
-    }
-    if(frames % 90 === 0){
-      var el3 = document.getElementById('fc-mem');
-      if(el3){ var v3 = parseInt(el3.textContent)||0; el3.textContent = v3 + 1; }
-    }
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-})();
-
-/* ══ HEADLINE MORPH ══ */
-(function(){
-  var c = document.getElementById('hero-morph');
-  if(!c) return;
-  var spans = Array.from(c.querySelectorAll('span:not(.hero-morph-sizer)'));
-  if(!spans.length) return;
+  var bar = document.getElementById('hero-morph-bar');
+  if(!bar) return;
+  var items = Array.from(bar.querySelectorAll('.hmb-item'));
+  if(!items.length) return;
   var cur = 0;
-  spans[0].classList.add('active');
   if(window.matchMedia('(prefers-reduced-motion:reduce)').matches) return;
   setInterval(function(){
-    spans[cur].classList.remove('active'); spans[cur].classList.add('out');
     var prev = cur;
-    cur = (cur+1) % spans.length;
-    spans[cur].classList.remove('out'); spans[cur].classList.add('active');
-    setTimeout(function(){ spans[prev].classList.remove('out'); }, 520);
-  }, 2600);
+    cur = (cur + 1) % items.length;
+    items[prev].classList.remove('active');
+    items[prev].classList.add('out');
+    items[cur].classList.add('active');
+    setTimeout(function(){
+      items[prev].classList.remove('out');
+      // instant-reset without transition
+      items[prev].style.transition = 'none';
+      setTimeout(function(){ items[prev].style.transition = ''; }, 40);
+    }, 560);
+  }, 2900);
 })();
 
 /* ══ SCROLL REVEAL ══ */
@@ -1739,58 +1789,82 @@ footer {
   document.querySelectorAll('.value-card').forEach(function(c){ io.observe(c); });
 })();
 
-/* ══ MEMORY NETWORK VISUAL ══ */
+/* ══ MEMORY SEARCH REVEAL ══ */
 (function(){
-  var container = document.getElementById('mem-vis');
-  if(!container) return;
-  var W = container.offsetWidth||260, H = 108;
-  var MEMS = [
-    {label:'Context', color:'#f59e0b', cx:.5,  cy:.5,  r:22, anim:0},
-    {label:'Arch',    color:'#60a5fa', cx:.18, cy:.28, r:17, anim:.8},
-    {label:'Rules',   color:'#34d399', cx:.78, cy:.22, r:16, anim:1.6},
-    {label:'Tasks',   color:'#a78bfa', cx:.2,  cy:.72, r:15, anim:2.4},
-    {label:'Docs',    color:'#fb923c', cx:.82, cy:.72, r:15, anim:3.2},
-  ];
-  MEMS.forEach(function(m,i){
-    if(i>0){
-      var line = document.createElement('div'); line.className='mem-connector';
-      var cx0=MEMS[0].cx*W, cy0=MEMS[0].cy*H, cx1=m.cx*W, cy1=m.cy*H;
-      var dx=cx1-cx0, dy=cy1-cy0, len=Math.hypot(dx,dy), angle=Math.atan2(dy,dx)*180/Math.PI;
-      line.style.cssText='left:'+cx0+'px;top:'+cy0+'px;width:'+len+'px;transform:rotate('+angle+'deg);';
-      container.appendChild(line);
-    }
-    var dot = document.createElement('div'); dot.className='mem-dot';
-    dot.style.cssText='width:'+(m.r*2)+'px;height:'+(m.r*2)+'px;left:'+(m.cx*W-m.r)+'px;top:'+(m.cy*H-m.r)+'px;color:'+m.color+';border-color:'+m.color+'55;background:'+m.color+'14;animation-delay:'+m.anim+'s;';
-    dot.textContent=m.label;
-    container.appendChild(dot);
-  });
-})();
+  var vis = document.getElementById('mem-search-vis');
+  if(!vis) return;
+  var results = [
+    document.getElementById('mem-r1'),
+    document.getElementById('mem-r2'),
+    document.getElementById('mem-r3'),
+  ].filter(Boolean);
 
-/* ══ WORKFLOW STEP ANIMATOR ══ */
-(function(){
-  if(window.matchMedia('(prefers-reduced-motion:reduce)').matches) return;
-  var steps = document.querySelectorAll('#wf-vis .wf-step');
-  if(!steps.length) return;
-  var SEQ = [[1,1,0,0,0],[1,1,1,0,0],[1,1,1,1,0],[1,1,1,1,1]];
-  var phase = 0;
-  function apply(p){
-    var d = SEQ[p];
-    steps.forEach(function(s,i){
-      s.classList.remove('done','active','pending');
-      if(d[i]){
-        if(i===d.lastIndexOf(1) && p<SEQ.length-1) s.classList.add('active');
-        else s.classList.add('done');
-      } else { s.classList.add('pending'); }
+  function revealResults() {
+    results.forEach(function(r, i){
+      setTimeout(function(){ r.classList.add('vis'); }, 180 + i * 160);
     });
   }
+  function resetResults() {
+    results.forEach(function(r){ r.classList.remove('vis'); });
+  }
+  function cycle() {
+    resetResults();
+    setTimeout(revealResults, 300);
+  }
+
+  var io = new IntersectionObserver(function(entries){
+    if(!entries[0].isIntersecting) return;
+    revealResults();
+    if(!window.matchMedia('(prefers-reduced-motion:reduce)').matches){
+      setInterval(cycle, 3800);
+    }
+    io.disconnect();
+  }, {threshold: .4});
+  io.observe(vis);
+})();
+
+/* ══ PARALLEL WORKFLOW ANIMATOR ══ */
+(function(){
+  if(window.matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  var vis = document.getElementById('wf-parallel-vis');
+  if(!vis) return;
+
+  // Sequence: [spec, plan, b1, b2, test, review]
+  // States per phase: 0=pending, 1=active, 2=done
+  var SEQ = [
+    [1,0,0,0,0,0],  // spec active
+    [2,1,0,0,0,0],  // plan active
+    [2,2,1,1,0,0],  // both build active (parallel!)
+    [2,2,2,2,1,0],  // test active
+    [2,2,2,2,2,1],  // review active
+    [2,2,2,2,2,2],  // all done
+  ];
+  var IDS = ['wp-spec','wp-plan','wp-b1','wp-b2','wp-test','wp-review'];
+  var phase = 0;
+
+  function apply(p){
+    var s = SEQ[p];
+    IDS.forEach(function(id, i){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.classList.remove('done','active','pending');
+      if(s[i] === 2)      el.classList.add('done');
+      else if(s[i] === 1) el.classList.add('active');
+      else                el.classList.add('pending');
+    });
+  }
+
   var io = new IntersectionObserver(function(entries){
     if(!entries[0].isIntersecting) return;
     apply(0);
-    setInterval(function(){ phase=(phase+1)%(SEQ.length+2); if(phase<SEQ.length) apply(phase); else if(phase>=SEQ.length+1){phase=0;apply(0);} }, 1100);
+    setInterval(function(){
+      phase = (phase + 1) % (SEQ.length + 1);
+      if(phase < SEQ.length) apply(phase);
+      else { phase = 0; apply(0); }
+    }, 950);
     io.disconnect();
-  },{threshold:.5});
-  var wf = document.getElementById('wf-vis');
-  if(wf) io.observe(wf);
+  }, {threshold: .4});
+  io.observe(vis);
 })();
 
 /* ══ EXPANDABLE CAPABILITY CARDS ══ */
