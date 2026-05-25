@@ -64,6 +64,17 @@ const etrCacheStats = ref(null)
 const runFilter = ref('')
 const runStatusFilter = ref('')
 
+function mergeStatsSnapshot(previous, incoming) {
+  if (!incoming) return previous
+  if (!previous) return incoming
+  return {
+    ...previous,
+    ...incoming,
+    repo_graph: incoming.repo_graph ?? previous.repo_graph ?? null,
+    repo_intelligence: incoming.repo_intelligence ?? previous.repo_intelligence ?? null,
+  }
+}
+
 watch(slashMenuIndex, (idx) => {
   nextTick(() => {
     const items = slashMenuRef.value?.querySelectorAll('button[data-slash-item]')
@@ -193,7 +204,7 @@ onUnmounted(() => {
 })
 
 watch(() => props.stats, (v) => {
-  if (v) metrics.value = v
+  if (v) metrics.value = mergeStatsSnapshot(metrics.value, v)
 })
 
 watch(() => props.events?.length, async () => {
@@ -723,7 +734,7 @@ async function refreshDashboardSnapshots() {
     api.getProviderStatus(),
   ])
   if (results[0].status === 'fulfilled' && results[0].value) {
-    metrics.value = results[0].value
+    metrics.value = mergeStatsSnapshot(metrics.value, results[0].value)
   }
   if (results[3].status === 'fulfilled' && results[3].value) {
     providerStatus.value = results[3].value

@@ -23,8 +23,19 @@ const graphExplorerStatus = ref('')
 const graphExplorerResult = ref(null)
 const graphExplorerMermaidRef = ref(null)
 
+function mergeStatsSnapshot(previous, incoming) {
+  if (!incoming) return previous
+  if (!previous) return incoming
+  return {
+    ...previous,
+    ...incoming,
+    repo_graph: incoming.repo_graph ?? previous.repo_graph ?? null,
+    repo_intelligence: incoming.repo_intelligence ?? previous.repo_intelligence ?? null,
+  }
+}
+
 watch(() => props.stats, (value) => {
-  if (value) metrics.value = value
+  if (value) metrics.value = mergeStatsSnapshot(metrics.value, value)
 }, { deep: true })
 
 const m = computed(() => metrics.value || {
