@@ -8,27 +8,42 @@ for public releases.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-25
+
+### Added
+
+- Structural repo graph v1 with persisted graph artifacts, file/symbol/module/doc nodes, and relationship edges for repo-aware analysis.
+- Repo Intelligence lifecycle with empty-repo, baseline-only, enrichment-available, and enrichment-active readiness states.
+- New ETR graph tools for build, refresh, symbol lookup, callers/callees, context bundles, doc links, impact radius, dependency paths, and usage graph queries.
+- Dedicated Repo Intelligence dashboard page with graph health, readiness, install actions, capability notes, and an interactive graph workbench.
+- Automatic structural-graph preflight for analysis and review flows in CLI and dashboard execution paths.
+- Structural-intelligence milestone documentation and updated homepage copy aligned to the shipped feature set.
+
+### Changed
+
+- Dashboard now keeps Repo Graph and Repo Intelligence as compact summary surfaces while moving heavy graph exploration to a dedicated page.
+- WebSocket/dashboard metric merging now preserves repo graph and readiness state instead of flickering when partial status updates arrive.
+- Repo Intelligence install UX now separates actionable installs, recent install results, and non-actionable capability notes.
+- Homepage product messaging and MCP config examples were corrected to match the current runtime and release behavior.
+
+## [0.4.0] - 2026-05-22
+
 ### Added
 
 - Public release governance files (`SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, `LICENSE`).
 - GitHub Actions CI and release workflows for automated checks and tagged artifact publishing.
 - `scripts/install.sh` curl installer with platform detection and checksum verification.
-- **Hosted workflow self-submitting steps**: every dispatched step now receives `session_id` + `step_id` injected into its prompt footer, allowing the step agent to call `agent007_workflow_submit_step` directly without the orchestrator holding context.
-- **Lazy output fetching**: `agent007_workflow_get_output(session, key)` MCP tool lets step agents pull prior outputs on demand, eliminating full-output injection into the orchestrating context and reducing token bloat.
-- **Heartbeat liveness**: `agent007_workflow_heartbeat(session, step, hint?)` writes a timestamped progress note to memory. Step prompts now require heartbeats every 3-5 minutes; steps silent for >10 min are flagged stale.
-- **Staleness detection**: `workflow_status` and `workflow_next` compute `running_step_liveness` per in-flight step — shows last heartbeat hint, age, and `stale: true` if >10 min silent. A top-level `warnings` array surfaces stale steps to the host LLM.
-- **Memory-backed step claims**: `workflow_next` writes a 2-hour TTL claim record per dispatched step; `workflow_submit_step` verifies the claim has not expired before accepting output.
-- **Actual LLM token counts in skill executor**: `SkillExecutionMetrics` now carries `input_tokens` and `output_tokens` from the real API response; `run_skill_mcp` uses them instead of the `chars/4` heuristic when available.
-- **`workflow_submit_step` tokens parameter**: optional `tokens: integer` field lets any hosted client (Codex, Cursor, etc.) report actual token usage inline without a separate `agent007_record_tokens` call.
-- **Dashboard step liveness**: running workflow steps in the dashboard now show last heartbeat hint + relative age ("3m ago") with an animated pulse indicator; stale steps show a red `stale` badge and border.
+- Hosted workflow self-submitting steps with injected `session_id` and `step_id` so step agents can submit outputs directly.
+- Lazy output fetching via `agent007_workflow_get_output(session, key)` to reduce full-output injection into hosted workflows.
+- Workflow heartbeat and staleness tracking with per-step liveness surfaced in workflow status and dashboard UI.
+- Memory-backed step claims and optional inline token reporting for hosted workflow submissions.
 
 ### Changed
 
-- README and release strategy docs aligned with the GitHub Releases + curl installer path.
-- Regression test fixture in `crates/testing/src/regression.rs` updated for deterministic baseline threshold behavior.
-- GitHub release workflow now builds Linux release artifacts only to reduce CI runtime; installer prints source-install guidance when macOS artifacts are unavailable.
-- `WorkflowStepState` gains `last_heartbeat_at` and `last_heartbeat_hint` fields (backward-compatible via `#[serde(default)]`).
-- Step prompt heartbeat instruction updated from "periodically" to "every 3-5 minutes; silence >10 min marks the step stale".
+- README and release strategy docs aligned with the GitHub Releases plus curl installer path.
+- Regression fixture behavior in `crates/testing/src/regression.rs` made deterministic.
+- Release workflow now focuses Linux artifacts and provides explicit source-install guidance when macOS assets are unavailable.
+- Workflow step state and prompt instructions now carry heartbeat metadata and stronger stale-step guidance.
 
 ## [0.3.1] - 2026-05-08
 
