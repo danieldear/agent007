@@ -1684,7 +1684,24 @@ footer {
   ];
   var MAX = 5, idx = 0;
 
+  function evictOldest() {
+    // Evict ONE row with a fade-out, then synchronously remove after transition.
+    // Must NOT use `while` here — removeChild is async via setTimeout so
+    // feed.children.length never decreases inside a while loop → infinite loop.
+    if(feed.children.length < MAX) return;
+    var old = feed.children[0];
+    // Animate out using individual properties (cssText+= is unreliable cross-browser)
+    old.style.transition = 'opacity 220ms, transform 220ms';
+    old.style.opacity    = '0';
+    old.style.transform  = 'translateY(-6px)';
+    old.style.pointerEvents = 'none';
+    (function(el){
+      setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 230);
+    })(old);
+  }
+
   function addRow(call) {
+    evictOldest(); // remove oldest BEFORE appending so length stays bounded
     var row = document.createElement('div');
     row.className = 'hs-row';
     row.innerHTML =
@@ -1693,12 +1710,6 @@ footer {
       '<span class="hs-desc">'  + call.desc  + '</span>' +
       '<span class="hs-badge '  + call.type  + '">' + call.badge + '</span>';
     feed.appendChild(row);
-    // evict oldest
-    while(feed.children.length > MAX){
-      var old = feed.children[0];
-      old.style.cssText += 'opacity:0;transform:translateY(-6px);transition:opacity 240ms,transform 240ms;';
-      setTimeout(function(el){ if(el.parentNode) el.parentNode.removeChild(el); }, 250, old);
-    }
     setTimeout(function(){ row.classList.add('vis'); }, 30);
   }
 
@@ -1713,7 +1724,7 @@ footer {
     idx++;
     // nudge tools/s counter
     var el = document.getElementById('hs-tools');
-    if(el){ var v = parseInt(el.textContent)||14; el.textContent = v + Math.ceil(Math.random()*4); }
+    if(el){ var v = (parseInt(el.textContent, 10) || 14); el.textContent = v + Math.ceil(Math.random()*4); }
   }, 1700);
 })();
 
