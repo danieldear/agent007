@@ -862,22 +862,23 @@ async fn build_skill_executor(
             agent007_memory::start_background_indexer(memory_store, Arc::clone(&indexer));
     }
 
-    let retriever =
-        Arc::new(Retriever::new(embedder, db, 5).with_memory_store(Arc::clone(memory_store)));
+    let repo_graph_root = agent007_project_home()
+        .and_then(|home| home.parent().map(|parent| parent.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let retriever = Arc::new(
+        Retriever::new(embedder, db, 5)
+            .with_memory_store(Arc::clone(memory_store))
+            .with_repo_graph_root(repo_graph_root),
+    );
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
         agent007_global_home().join("memory"),
     ));
     let global_memory = global_store.scoped("global");
-    let repo_graph_root = agent007_project_home()
-        .and_then(|home| home.parent().map(|parent| parent.to_path_buf()))
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     Ok((
-        SkillExecutor::new(provider, retriever, memory)
-            .with_global_memory(global_memory)
-            .with_repo_graph_root(repo_graph_root),
+        SkillExecutor::new(provider, retriever, memory).with_global_memory(global_memory),
         indexed_docs,
     ))
 }

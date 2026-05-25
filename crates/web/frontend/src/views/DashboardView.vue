@@ -42,6 +42,17 @@ const showSlashMenu = ref(false)
 const slashFilter = ref('')
 const slashMenuIndex = ref(0)
 const slashMenuRef = ref(null)
+const graphExplorerMode = ref('usage')
+const graphExplorerSymbol = ref('')
+const graphExplorerFrom = ref('')
+const graphExplorerTo = ref('')
+const graphExplorerQuery = ref('')
+const graphExplorerDepth = ref(2)
+const graphExplorerPaths = ref('')
+const graphExplorerBusy = ref(false)
+const graphExplorerStatus = ref('')
+const graphExplorerResult = ref(null)
+const graphExplorerMermaidRef = ref(null)
 
 // ETR cache stats
 const etrCacheStats = ref(null)
@@ -163,6 +174,10 @@ watch(() => props.events?.length, async () => {
   if (expandedRunId.value) {
     try { selectedRun.value = await api.getRunDetail(expandedRunId.value) } catch { }
   }
+})
+
+watch(graphExplorerMermaidSource, async () => {
+  await renderGraphExplorerMermaid()
 })
 
 const providerReadiness = computed(() => providerStatus.value || {
@@ -396,6 +411,104 @@ async function renderArtifactMermaid() {
   }
 }
 
+const graphExplorerMermaidSource = computed(() => {
+  const payload = graphExplorerResult.value?.output
+  const tool = graphExplorerResult.value?.tool
+  if (!payload || !tool) return ''
+
+  const esc = (value) => String(value || '').replace(/"/g, '\\"')
+
+  if (tool === 'etr.usage_graph' || tool === 'etr.impact_radius') {
+    const nodes = payload.nodes || []
+    const edges = payload.edges || []
+    if (!nodes.length) return ''
+    const ids = new Map(nodes.map((node, index) => [node.id, `N${index + 1}`]))
+    const lines = ['graph TD']
+    for (const node of nodes) {
+      const nodeId = ids.get(node.id)
+      const label = `${node.name}${node.path ? `\\n${node.path}` : ''}`
+      lines.push(`  ${nodeId}["${esc(label)}"]`)
+    }
+    for (const edge of edges) {
+      const from = ids.get(edge.from)
+      const to = ids.get(edge.to)
+      if (!from || !to) continue
+      lines.push(`  ${from} -->|${esc(edge.kind)}| ${to}`)
+    }
+    return lines.join('\n')
+  }
+
+  if (tool === 'etr.callers') {
+    const rows = payload.callers || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  C${index}["${esc(row.caller)}"] --> T${index}["${esc(row.callee)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.callees') {
+    const rows = payload.callees || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  C${index}["${esc(row.caller)}"] --> T${index}["${esc(row.callee)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.doc_links') {
+    const rows = payload.docs || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  D${index}["${esc(row.doc)}"] -.-> S${index}["${esc(row.symbol)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.dep_path') {
+    const steps = payload.steps || []
+    if (!steps.length) return ''
+    const lines = ['graph TD']
+    steps.forEach((step, index) => {
+      lines.push(`  P${index}["${esc(step.from_name)}"] -->|${esc(step.edge_kind)}| P${index + 1}["${esc(step.to_name)}"]`)
+    })
+    return lines.join('\n')
+  }
+
+  if (tool === 'etr.context_bundle') {
+    const symbols = payload.matched_symbols || []
+    const docs = payload.related_docs || []
+    if (!symbols.length && !docs.length) return ''
+    const lines = ['graph TD']
+    symbols.forEach((node, index) => {
+      lines.push(`  S${index}["${esc(node.name)}"]`)
+    })
+    docs.forEach((doc, index) => {
+      lines.push(`  D${index}["${esc(doc.name)}"]`)
+      if (symbols.length) lines.push(`  D${index} -.-> S0`)
+    })
+    return lines.join('\n')
+  }
+
+  return ''
+})
+
+async function renderGraphExplorerMermaid() {
+  await nextTick()
+  const root = graphExplorerMermaidRef.value
+  const source = graphExplorerMermaidSource.value
+  if (!root) return
+  root.innerHTML = ''
+  if (!source) return
+  const target = document.createElement('div')
+  target.className = 'artifact-mermaid-block'
+  target.textContent = source
+  root.appendChild(target)
+  try {
+    const mermaid = await ensureMermaid()
+    await mermaid.run({ nodes: [target] })
+  } catch (error) {
+    console.warn('graph explorer mermaid render error:', error)
+  }
+}
+
 function toggleRawStep(stepId) {
   const next = new Set(rawStepView.value)
   if (next.has(stepId)) next.delete(stepId)
@@ -553,6 +666,73 @@ async function refreshDashboardSnapshots() {
   }
   if (results[3].status === 'fulfilled' && results[3].value) {
     providerStatus.value = results[3].value
+  }
+}
+
+function splitGraphPaths(raw) {
+  return (raw || '')
+    .split(/\r?\n|,/)
+    .map(v => v.trim())
+    .filter(Boolean)
+}
+
+async function runGraphExplorer(toolOverride = null) {
+  graphExplorerBusy.value = true
+  graphExplorerStatus.value = ''
+  try {
+    let tool = toolOverride
+    let input = {}
+    if (!tool) {
+      switch (graphExplorerMode.value) {
+        case 'usage':
+          tool = 'etr.usage_graph'
+          input = { symbol: graphExplorerSymbol.value, exact: true, max_depth: Number(graphExplorerDepth.value || 1) }
+          break
+        case 'impact':
+          tool = 'etr.impact_radius'
+          input = { symbol: graphExplorerSymbol.value, exact: true, max_depth: Number(graphExplorerDepth.value || 2) }
+          break
+        case 'callers':
+          tool = 'etr.callers'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'callees':
+          tool = 'etr.callees'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'docs':
+          tool = 'etr.doc_links'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'path':
+          tool = 'etr.dep_path'
+          input = { from_symbol: graphExplorerFrom.value, to_symbol: graphExplorerTo.value, exact: true }
+          break
+        case 'context':
+          tool = 'etr.context_bundle'
+          input = {
+            query: graphExplorerQuery.value,
+            max_symbols: 6,
+            max_neighbors: Math.max(1, Number(graphExplorerDepth.value || 2)),
+          }
+          break
+        default:
+          throw new Error('unknown graph explorer mode')
+      }
+    } else if (tool === 'etr.graph_refresh_paths') {
+      input = { paths: splitGraphPaths(graphExplorerPaths.value) }
+    }
+
+    const output = await api.etrCall(tool, input, false)
+    graphExplorerResult.value = { tool, input, output }
+    graphExplorerStatus.value = `${tool} ok`
+    if (tool.startsWith('etr.graph_')) {
+      await refreshDashboardSnapshots()
+    }
+  } catch (error) {
+    graphExplorerStatus.value = error?.message || String(error)
+  } finally {
+    graphExplorerBusy.value = false
   }
 }
 
@@ -891,6 +1071,85 @@ async function submitTask() {
         <span class="text-[10px] font-mono text-base-content/25 truncate max-w-[32rem]">
           {{ m.repo_graph.graph_path || 'no graph file yet' }}
         </span>
+      </div>
+    </div>
+
+    <div class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
+      <div class="rounded-xl border border-base-content/10 bg-base-300/70 p-4 space-y-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Graph Explorer</span>
+          <select v-model="graphExplorerMode" class="select select-xs select-bordered font-mono">
+            <option value="usage">usage neighborhood</option>
+            <option value="impact">impact radius</option>
+            <option value="callers">callers</option>
+            <option value="callees">callees</option>
+            <option value="docs">doc links</option>
+            <option value="path">dependency path</option>
+            <option value="context">context bundle</option>
+          </select>
+          <input
+            v-if="['usage','impact','callers','callees','docs'].includes(graphExplorerMode)"
+            v-model="graphExplorerSymbol"
+            class="input input-xs input-bordered font-mono w-56"
+            placeholder="symbol"
+          />
+          <template v-if="graphExplorerMode === 'path'">
+            <input v-model="graphExplorerFrom" class="input input-xs input-bordered font-mono w-48" placeholder="from symbol" />
+            <input v-model="graphExplorerTo" class="input input-xs input-bordered font-mono w-48" placeholder="to symbol" />
+          </template>
+          <input
+            v-if="graphExplorerMode === 'context'"
+            v-model="graphExplorerQuery"
+            class="input input-xs input-bordered font-mono flex-1 min-w-[18rem]"
+            placeholder="free-text query"
+          />
+          <input
+            v-if="['usage','impact','context'].includes(graphExplorerMode)"
+            v-model="graphExplorerDepth"
+            type="number"
+            min="1"
+            max="6"
+            class="input input-xs input-bordered font-mono w-20"
+            placeholder="depth"
+          />
+          <button class="btn btn-xs btn-primary font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer()">
+            {{ graphExplorerBusy ? 'running…' : 'run' }}
+          </button>
+          <button class="btn btn-xs btn-ghost font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_build')">build</button>
+          <button class="btn btn-xs btn-ghost font-mono" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_refresh')">refresh</button>
+        </div>
+
+        <div class="flex flex-wrap items-start gap-2">
+          <textarea
+            v-model="graphExplorerPaths"
+            rows="2"
+            class="textarea textarea-bordered textarea-xs font-mono w-[32rem] max-w-full"
+            placeholder="paths for incremental refresh, one per line or comma-separated"
+          />
+          <button class="btn btn-xs btn-ghost font-mono mt-1" :disabled="graphExplorerBusy" @click="runGraphExplorer('etr.graph_refresh_paths')">refresh paths</button>
+          <span class="text-[10px] font-mono text-base-content/35 mt-1">{{ graphExplorerStatus || 'query repo graph, rebuild, or patch changed paths' }}</span>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_22rem] gap-3 items-start">
+          <div class="rounded-xl border border-base-content/8 bg-base-200/70 min-h-[10rem] overflow-hidden">
+            <div ref="graphExplorerMermaidRef" class="p-3 max-h-[24rem] overflow-auto"></div>
+            <div v-if="!graphExplorerMermaidSource" class="px-3 pb-3 text-[10px] font-mono text-base-content/30">
+              no diagram yet
+            </div>
+          </div>
+          <div class="rounded-xl border border-base-content/8 bg-base-200/70 p-3 space-y-2">
+            <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/30">Result Summary</div>
+            <template v-if="graphExplorerResult?.output">
+              <div class="font-mono text-[11px] text-base-content/65">tool: {{ graphExplorerResult.tool }}</div>
+              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.count != null">count: {{ graphExplorerResult.output.count }}</div>
+              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.symbol_count != null">symbols: {{ graphExplorerResult.output.symbol_count }}</div>
+              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.file_count != null">files: {{ graphExplorerResult.output.file_count }}</div>
+              <div class="font-mono text-[11px] text-base-content/65" v-if="graphExplorerResult.output.counts">graph: {{ graphExplorerResult.output.counts.symbols || 0 }} sym / {{ graphExplorerResult.output.counts.edges || 0 }} edges</div>
+              <pre class="mt-2 text-[10px] font-mono whitespace-pre-wrap break-words max-h-[18rem] overflow-auto text-base-content/60">{{ JSON.stringify(graphExplorerResult.output, null, 2) }}</pre>
+            </template>
+            <div v-else class="text-[10px] font-mono text-base-content/30">run a graph query to inspect structure and paths</div>
+          </div>
+        </div>
       </div>
     </div>
 

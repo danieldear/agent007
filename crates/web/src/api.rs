@@ -895,7 +895,8 @@ pub async fn skills_run_handler(
     let memory_store = memory_store_for_web();
     let retriever = Arc::new(
         agent007_memory::Retriever::new(embedder, db, 5)
-            .with_memory_store(Arc::clone(&memory_store)),
+            .with_memory_store(Arc::clone(&memory_store))
+            .with_repo_graph_root(std::path::PathBuf::from(&state.project_path)),
     );
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
@@ -906,8 +907,7 @@ pub async fn skills_run_handler(
     let model = state.model_router.clone() as Arc<dyn agent007_models::ModelProvider>;
 
     let executor = agent007_skills::SkillExecutor::new(model, retriever, memory)
-        .with_global_memory(global_memory)
-        .with_repo_graph_root(std::path::PathBuf::from(&state.project_path));
+        .with_global_memory(global_memory);
     let store = run_store_for_web();
     let run = match store.create_run(
         "web-skill-run",
