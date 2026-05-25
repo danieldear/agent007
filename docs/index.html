@@ -1207,9 +1207,9 @@ footer {
     <!-- Cycling benefit bar -->
     <div class="hero-morph-bar" id="hero-morph-bar" aria-live="polite" aria-atomic="true">
       <span class="hmb-item active">Persistent memory. Parallel workers.</span>
-      <span class="hmb-item">200&times; faster than raw LLM calls.</span>
+      <span class="hmb-item">Deterministic tools before expensive LLM calls.</span>
       <span class="hmb-item">Ships full features end-to-end.</span>
-      <span class="hmb-item">Knows your entire codebase.</span>
+      <span class="hmb-item">Builds a live repo graph for your project.</span>
     </div>
 
     <!-- Sub -->
@@ -1256,7 +1256,7 @@ footer {
       <div class="d-node" id="dn-tools">
         <div class="dn-icon">⚙️</div>
         <div class="dn-name">Tools</div>
-        <div class="dn-val">0.3ms avg</div>
+        <div class="dn-val">ETR built-ins</div>
       </div>
       <div class="d-node" id="dn-workers">
         <div class="dn-icon">👥</div>
@@ -1271,7 +1271,7 @@ footer {
       <div class="d-node" id="dn-graph">
         <div class="dn-icon">🗺</div>
         <div class="dn-name">Repo Graph</div>
-        <div class="dn-val">2.4k nodes</div>
+        <div class="dn-val">structural</div>
       </div>
     </div>
   </div>
@@ -1281,12 +1281,12 @@ footer {
 <div class="stats-section">
   <div class="stats-inner stagger-group">
     <div class="stat-item reveal" style="--sc-color:var(--amber);">
-      <span class="stat-num amber" data-target="200" data-suffix="×">200×</span>
-      <div class="stat-label"><strong>Tool execution speed</strong>vs waiting on an LLM for the same result</div>
+      <span class="stat-num amber">&lt;1ms</span>
+      <div class="stat-label"><strong>Built-in ETR execution</strong>for common deterministic queries before escalating to an LLM</div>
     </div>
     <div class="stat-item reveal" style="--sc-color:var(--green);">
-      <span class="stat-num green" data-target="70" data-prefix="~" data-suffix="%">~70%</span>
-      <div class="stat-label"><strong>Token reduction</strong>applied automatically on every run, no config</div>
+      <span class="stat-num green">RAG</span>
+      <div class="stat-label"><strong>Context reduction</strong>via structural graph, memory, and retrieval-aware context assembly</div>
     </div>
     <div class="stat-item reveal" style="--sc-color:var(--blue);">
       <span class="stat-num blue" data-target="50" data-suffix="+">50+</span>
@@ -1459,9 +1459,9 @@ footer {
 <!-- ══ CODEBASE INTELLIGENCE ══ -->
 <section class="cgi-section" id="cgi-section">
   <div class="section-inner">
-    <span class="section-eyebrow reveal">RAG · LSP · Tree-sitter</span>
+    <span class="section-eyebrow reveal">Repo Graph · RAG · LSP</span>
     <h2 class="section-title reveal">Sees your codebase<br/>the way you do.</h2>
-    <p class="section-sub reveal">agent007 builds a live semantic graph of your entire codebase — every symbol, definition, and cross-file call — using tree-sitter for parsing and LSP for type resolution. RAG retrieval surfaces exactly the right context in under a millisecond.</p>
+    <p class="section-sub reveal">agent007 builds a live structural graph of your codebase — files, symbols, docs, and cross-file relationships — and can enrich that view further when LSP is available. Retrieval then uses that repo graph plus memory to narrow context before the LLM has to reason.</p>
 
     <div class="cgi-demo reveal" id="cgi-demo">
 
@@ -1488,7 +1488,7 @@ footer {
           <div class="cgl"><span class="tm">      .collect()</span></div>
           <div class="cgl"><span class="tm">  }</span></div>
           <div class="cgl"><span class="tm">  </span><span class="tk">pub fn </span><span class="tf">build_graph</span><span class="tm">(p: &amp;</span><span class="tt">Path</span><span class="tm">) {</span></div>
-          <div class="cgl"><span class="tg">    // tree-sitter → AST → LSP</span></div>
+          <div class="cgl"><span class="tg">    // structural parse → optional LSP enrich</span></div>
           <div class="cgl"><span class="tm">  }</span></div>
           <div class="cgl"><span class="tm">}</span></div>
         </div>
@@ -1496,7 +1496,7 @@ footer {
 
       <!-- Center: pipeline steps -->
       <div class="cgi-pipe">
-        <div class="cgi-pstep" id="cgps-ts"><div class="cgi-picon">🌳</div><div class="cgi-plabel">tree&#8209;sitter</div></div>
+        <div class="cgi-pstep" id="cgps-ts"><div class="cgi-picon">🧩</div><div class="cgi-plabel">parsers</div></div>
         <div class="cgi-parrow">↓</div>
         <div class="cgi-pstep" id="cgps-lsp"><div class="cgi-picon">🔗</div><div class="cgi-plabel">LSP</div></div>
         <div class="cgi-parrow">↓</div>
@@ -1509,7 +1509,7 @@ footer {
       <div class="cgi-panel">
         <div class="cgi-phdr">
           <span class="cgi-dot cgi-dot-r"></span><span class="cgi-dot cgi-dot-y"></span><span class="cgi-dot cgi-dot-g"></span>
-          <span class="cgi-fname">semantic graph · 3,241 nodes</span>
+          <span class="cgi-fname">repo graph · illustrative topology</span>
         </div>
         <div class="cgi-graphwrap" id="cgi-graph">
           <svg class="cgi-gsvg" id="cgi-svg"></svg>
@@ -1531,10 +1531,10 @@ footer {
     </div><!-- /.cgi-demo -->
 
     <div class="cgi-stats reveal">
-      <div class="cgi-stat"><span class="cgi-snum">3.2k</span><span class="cgi-slbl">symbols indexed</span></div>
-      <div class="cgi-stat"><span class="cgi-snum">18k</span><span class="cgi-slbl">cross-file edges</span></div>
-      <div class="cgi-stat"><span class="cgi-snum">&lt;1ms</span><span class="cgi-slbl">RAG retrieval</span></div>
-      <div class="cgi-stat"><span class="cgi-snum">50+</span><span class="cgi-slbl">language grammars</span></div>
+      <div class="cgi-stat"><span class="cgi-snum">files</span><span class="cgi-slbl">tracked in the local repo graph</span></div>
+      <div class="cgi-stat"><span class="cgi-snum">symbols</span><span class="cgi-slbl">indexed for structural queries</span></div>
+      <div class="cgi-stat"><span class="cgi-snum">&lt;1ms</span><span class="cgi-slbl">graph and ETR query class</span></div>
+      <div class="cgi-stat"><span class="cgi-snum">LSP</span><span class="cgi-slbl">adds semantic enrichment when available</span></div>
     </div>
   </div>
 </section>
@@ -1741,7 +1741,7 @@ footer {
             <button class="cap-expand-btn" aria-label="Expand Bundles">+</button>
           </div>
           <div class="cap-title">Bundles & Sharing</div>
-          <div class="cap-desc">Pack skills, workflows, and personas into verified bundles. Import from GitHub, npm, or local paths. Share your setup across the team instantly.</div>
+          <div class="cap-desc">Pack skills, workflows, and personas into verified bundles. Move signed bundle files between projects, and use separate extension/source import flows for GitHub, npm, or local sources.</div>
           <span class="cap-tag purple">SHA-256 verified</span>
         </div>
         <div class="cap-demo">
@@ -1750,7 +1750,7 @@ footer {
             <div class="demo-term">
               <div class="demo-term-bar"><div class="demo-term-dot r"></div><div class="demo-term-dot y"></div><div class="demo-term-dot g"></div></div>
               <div class="demo-term-body">
-                <div style="color:var(--amber);">$ agent007 bundle import github:team/skills</div>
+                <div style="color:var(--amber);">$ agent007 bundle import ./team-skills.a7bundle</div>
                 <div style="color:var(--text2);">⏳ Fetching bundle manifest…</div>
                 <div style="color:var(--text2);">✓ SHA-256 verified</div>
                 <div style="color:var(--text2);">✓ 5 skills, 2 workflows</div>
@@ -1811,7 +1811,7 @@ footer {
         <div class="wf-phase-desc">Turn a rough idea into a researched plan. Get 3–5 approaches with trade-offs, a full PRD, and architecture decisions — before writing a line of code.</div>
         <div class="wf-skills">
           <span class="wf-skill">/brainstorm</span>
-          <span class="wf-skill">/ideation</span>
+          <span class="wf-skill">ideation workflow</span>
           <span class="wf-skill">/project-prd</span>
         </div>
         <div class="wf-cmd">/brainstorm "add real-time collaboration"</div>
@@ -1827,11 +1827,11 @@ footer {
         <div class="wf-phase-title">Deliver end-to-end</div>
         <div class="wf-phase-desc">Full-cycle implementation: spec → architecture → code → tests. Parallel workers handle research, coding, and review without manual hand-offs.</div>
         <div class="wf-skills">
-          <span class="wf-skill">/workflow-feature</span>
+          <span class="wf-skill">feature workflow</span>
           <span class="wf-skill">/dev-tdd</span>
           <span class="wf-skill">/dev-architect</span>
         </div>
-        <div class="wf-cmd">/workflow-feature "real-time cursors"</div>
+        <div class="wf-cmd">run the feature workflow for "real-time cursors"</div>
       </div>
 
       <div class="wf-arrow" aria-hidden="true">→</div>
@@ -1844,10 +1844,10 @@ footer {
         <div class="wf-phase-title">Harden &amp; review</div>
         <div class="wf-phase-desc">Security, performance, and style reviewers run concurrently. OWASP threat modeling, dependency audit, and code quality — all in parallel.</div>
         <div class="wf-skills">
-          <span class="wf-skill">/workflow-security-audit</span>
-          <span class="wf-skill">/workflow-code-review</span>
+          <span class="wf-skill">security-audit workflow</span>
+          <span class="wf-skill">code-review workflow</span>
         </div>
-        <div class="wf-cmd">/workflow-security-audit</div>
+        <div class="wf-cmd">run the security-audit workflow</div>
       </div>
 
       <div class="wf-arrow" aria-hidden="true">→</div>
@@ -2004,7 +2004,7 @@ footer {
 <span class="kw">agent007 serve</span>
 <span class="sym">  ✓ MCP ready on stdio</span>
 <span class="sym">  ✓ Dashboard → </span><span class="str">http://localhost:8007</span>
-<span class="sym">  ✓ 50+ tools available</span></pre>
+      <span class="sym">  ✓ 50+ tools available</span></pre>
         </div>
       </div>
       <div class="reveal">
@@ -2017,7 +2017,7 @@ footer {
   <span class="str">"mcpServers"</span><span class="sym">: {</span>
     <span class="str">"agent007"</span><span class="sym">: {</span>
       <span class="str">"command"</span><span class="sym">: </span><span class="str">"agent007"</span><span class="sym">,</span>
-      <span class="str">"args"</span><span class="sym">: [</span><span class="str">"mcp"</span><span class="sym">]</span>
+      <span class="str">"args"</span><span class="sym">: [</span><span class="str">"serve"</span><span class="sym">]</span>
     <span class="sym">}</span>
   <span class="sym">}</span>
 <span class="sym">}</span>
