@@ -13,6 +13,9 @@ pub struct SkillExecutionMetrics {
     pub retrieval_hits: u32,
     pub retrieval_hit_rate: f64,
     pub rag_context_chars: usize,
+    pub graph_hits: usize,
+    pub graph_files: usize,
+    pub graph_context_chars: usize,
     pub vector_hits: usize,
     pub fallback_hits: usize,
     pub mock_embedding: bool,
@@ -207,6 +210,9 @@ fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> Skill
         retrieval_hits: hits,
         retrieval_hit_rate: hits as f64,
         rag_context_chars: rag_context.chars().count(),
+        graph_hits: retrieval.graph_hits,
+        graph_files: retrieval.graph_files,
+        graph_context_chars: retrieval.graph_context_chars,
         vector_hits: retrieval.vector_hits,
         fallback_hits: retrieval.fallback_hits,
         mock_embedding: retrieval.mock_embedding,
@@ -395,6 +401,39 @@ mod tests {
         let result = executor.execute(&skill, "x").await.unwrap();
         assert_eq!(result, "mock-output");
         // Smoke assertion on render path: execution succeeded with the new variable present.
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn executor_includes_repo_graph_context_in_metrics() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn alpha() {}\npub fn beta() { alpha(); }\n",
+        )
+        .unwrap();
+
+        let provider = Arc::new(MockModelProvider::new());
+        let embedder = Arc::new(FixedEmbedder) as Arc<dyn EmbeddingProvider>;
+        let db = Arc::new(FixedVectorDB {
+            fragment: "rag-fragment".to_string(),
+        }) as Arc<dyn VectorDB>;
+        let retriever = Arc::new(
+            Retriever::new(embedder, db, 1).with_repo_graph_root(dir.path().to_path_buf()),
+        );
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        let memory = store.global();
+        let executor = SkillExecutor::new(
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            retriever,
+            memory,
+        );
+        let skill = make_skill("Args: {{args}}\n{{rag_context}}", "claude");
+
+        let report = executor.execute_with_report(&skill, "alpha").await.unwrap();
+        assert!(report.metrics.graph_hits >= 1);
+        assert!(report.metrics.graph_context_chars > 0);
         assert_eq!(provider.call_count(), 1);
     }
 }

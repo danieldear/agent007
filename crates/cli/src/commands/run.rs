@@ -862,8 +862,15 @@ async fn build_skill_executor(
             agent007_memory::start_background_indexer(memory_store, Arc::clone(&indexer));
     }
 
-    let retriever =
-        Arc::new(Retriever::new(embedder, db, 5).with_memory_store(Arc::clone(memory_store)));
+    let repo_graph_root = agent007_project_home()
+        .and_then(|home| home.parent().map(|parent| parent.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let retriever = Arc::new(
+        Retriever::new(embedder, db, 5)
+            .with_memory_store(Arc::clone(memory_store))
+            .with_repo_graph_root(repo_graph_root),
+    );
     let memory = memory_store.global();
     let global_store = Arc::new(agent007_memory::store::MemoryStore::new(
         agent007_global_home().join("memory"),
@@ -1428,6 +1435,27 @@ pub(crate) fn spawn_learning_runtime_workers(stack: &Stack) {
 
 pub async fn execute(config: Arc<Config>, task: String) -> Result<()> {
     let stack = build_stack(&config).await?;
+    if let Some(project_home) = agent007_project_home() {
+        if let Some(project_root) = project_home.parent() {
+            match agent007_core::ensure_repo_graph_ready_for_task(
+                project_root,
+                &task,
+                &agent007_core::RepoIntelligenceOptions::default(),
+            ) {
+                Ok(Some(preflight)) => {
+                    tracing::info!(
+                        action = ?preflight.action,
+                        reason = %preflight.matched_reason,
+                        "structural repo graph preflight completed"
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "structural repo graph preflight failed");
+                }
+            }
+        }
+    }
     let mode = runtime_mode_label(&config);
     let provider = stack.model_router.route("task").name().to_string();
     let run = stack

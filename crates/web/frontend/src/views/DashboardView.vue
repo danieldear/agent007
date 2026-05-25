@@ -7,6 +7,7 @@ import DOMPurify from 'dompurify'
 marked.setOptions({ gfm: true, breaks: true })
 
 const props = defineProps({ events: Array, connected: Boolean, stats: Object })
+const emit = defineEmits(['navigate'])
 const { api } = useApi()
 
 const health = ref(null)
@@ -42,6 +43,19 @@ const showSlashMenu = ref(false)
 const slashFilter = ref('')
 const slashMenuIndex = ref(0)
 const slashMenuRef = ref(null)
+const graphExplorerMode = ref('usage')
+const graphExplorerSymbol = ref('')
+const graphExplorerFrom = ref('')
+const graphExplorerTo = ref('')
+const graphExplorerQuery = ref('')
+const graphExplorerDepth = ref(2)
+const graphExplorerPaths = ref('')
+const graphExplorerBusy = ref(false)
+const graphExplorerStatus = ref('')
+const graphExplorerResult = ref(null)
+const graphExplorerMermaidRef = ref(null)
+const repoInstallStatus = ref('')
+const repoInstallingId = ref('')
 
 // ETR cache stats
 const etrCacheStats = ref(null)
@@ -49,6 +63,17 @@ const etrCacheStats = ref(null)
 // Run list filter
 const runFilter = ref('')
 const runStatusFilter = ref('')
+
+function mergeStatsSnapshot(previous, incoming) {
+  if (!incoming) return previous
+  if (!previous) return incoming
+  return {
+    ...previous,
+    ...incoming,
+    repo_graph: incoming.repo_graph ?? previous.repo_graph ?? null,
+    repo_intelligence: incoming.repo_intelligence ?? previous.repo_intelligence ?? null,
+  }
+}
 
 watch(slashMenuIndex, (idx) => {
   nextTick(() => {
@@ -95,6 +120,29 @@ async function loadSlashCommands() {
         source: w.source || 'global',
       })
     }
+    cmds.push(
+      {
+        type: 'builtin',
+        trigger: '/repo-intelligence',
+        name: 'Repo Intelligence',
+        description: 'Open the dedicated repo intelligence page',
+        source: 'dashboard',
+      },
+      {
+        type: 'builtin',
+        trigger: '/repo-graph-build',
+        name: 'Build Repo Graph',
+        description: 'Build the structural repo graph if missing',
+        source: 'dashboard',
+      },
+      {
+        type: 'builtin',
+        trigger: '/repo-graph-refresh',
+        name: 'Refresh Repo Graph',
+        description: 'Refresh the structural repo graph when stale',
+        source: 'dashboard',
+      },
+    )
     slashCommands.value = cmds.sort((a, b) => a.trigger.localeCompare(b.trigger))
   } catch { slashCommandsLoaded.value = false }
 }
@@ -156,7 +204,7 @@ onUnmounted(() => {
 })
 
 watch(() => props.stats, (v) => {
-  if (v) metrics.value = v
+  if (v) metrics.value = mergeStatsSnapshot(metrics.value, v)
 })
 
 watch(() => props.events?.length, async () => {
@@ -196,8 +244,59 @@ const m = computed(() => metrics.value || {
   feedback_count: 0, prompt_improvements: 0,
   skills_count: 0, workflows_count: 0, personas_count: 0, memory_keys: 0,
   started_at: null, local_execution_available: false, runtime_mode: 'hosted-mcp', model_provider: 'unknown',
+  repo_graph: null,
+  repo_intelligence: null,
   recent_tasks: [], recent_scorecards: [],
 })
+
+const repoIntel = computed(() => m.value.repo_intelligence || null)
+
+function repoGraphState(graph) {
+  if (!graph?.exists) return 'missing'
+  if (graph?.stale) return 'stale'
+  return 'ready'
+}
+
+function repoGraphBadgeClass(graph) {
+  const state = repoGraphState(graph)
+  return {
+    'badge-error': state === 'missing',
+    'badge-warning': state === 'stale',
+    'badge-success': state === 'ready',
+  }
+}
+
+function repoIntelligenceBadgeClass(readiness) {
+  const state = readiness?.state || 'baseline_only'
+  if (state === 'enrichment_active') return 'badge-success'
+  if (state === 'enrichment_available') return 'badge-warning'
+  if (state === 'empty_repo') return 'badge-ghost'
+  return 'badge-neutral'
+}
+
+async function copyText(value) {
+  if (!value) return
+  await navigator.clipboard.writeText(value)
+}
+
+async function runRepoRecommendation(rec) {
+  if (!rec?.id) return
+  repoInstallingId.value = rec.id
+  repoInstallStatus.value = ''
+  try {
+    const result = await api.installRepoIntelligence(rec.id, true)
+    if (result?.ok) {
+      repoInstallStatus.value = `${rec.title} finished`
+    } else {
+      repoInstallStatus.value = result?.stderr || result?.error || `${rec.title} failed`
+    }
+    await refreshDashboardSnapshots()
+  } catch (error) {
+    repoInstallStatus.value = error?.message || String(error)
+  } finally {
+    repoInstallingId.value = ''
+  }
+}
 
 const uptime = computed(() => {
   if (!m.value.started_at) return '—'
@@ -380,6 +479,108 @@ async function renderArtifactMermaid() {
   }
 }
 
+const graphExplorerMermaidSource = computed(() => {
+  const payload = graphExplorerResult.value?.output
+  const tool = graphExplorerResult.value?.tool
+  if (!payload || !tool) return ''
+
+  const esc = (value) => String(value || '').replace(/"/g, '\\"')
+
+  if (tool === 'etr.usage_graph' || tool === 'etr.impact_radius') {
+    const nodes = payload.nodes || []
+    const edges = payload.edges || []
+    if (!nodes.length) return ''
+    const ids = new Map(nodes.map((node, index) => [node.id, `N${index + 1}`]))
+    const lines = ['graph TD']
+    for (const node of nodes) {
+      const nodeId = ids.get(node.id)
+      const label = `${node.name}${node.path ? `\\n${node.path}` : ''}`
+      lines.push(`  ${nodeId}["${esc(label)}"]`)
+    }
+    for (const edge of edges) {
+      const from = ids.get(edge.from)
+      const to = ids.get(edge.to)
+      if (!from || !to) continue
+      lines.push(`  ${from} -->|${esc(edge.kind)}| ${to}`)
+    }
+    return lines.join('\n')
+  }
+
+  if (tool === 'etr.callers') {
+    const rows = payload.callers || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  C${index}["${esc(row.caller)}"] --> T${index}["${esc(row.callee)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.callees') {
+    const rows = payload.callees || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  C${index}["${esc(row.caller)}"] --> T${index}["${esc(row.callee)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.doc_links') {
+    const rows = payload.docs || []
+    if (!rows.length) return ''
+    return ['graph TD', ...rows.map((row, index) =>
+      `  D${index}["${esc(row.doc)}"] -.-> S${index}["${esc(row.symbol)}"]`
+    )].join('\n')
+  }
+
+  if (tool === 'etr.dep_path') {
+    const steps = payload.steps || []
+    if (!steps.length) return ''
+    const lines = ['graph TD']
+    steps.forEach((step, index) => {
+      lines.push(`  P${index}["${esc(step.from_name)}"] -->|${esc(step.edge_kind)}| P${index + 1}["${esc(step.to_name)}"]`)
+    })
+    return lines.join('\n')
+  }
+
+  if (tool === 'etr.context_bundle') {
+    const symbols = payload.matched_symbols || []
+    const docs = payload.related_docs || []
+    if (!symbols.length && !docs.length) return ''
+    const lines = ['graph TD']
+    symbols.forEach((node, index) => {
+      lines.push(`  S${index}["${esc(node.name)}"]`)
+    })
+    docs.forEach((doc, index) => {
+      lines.push(`  D${index}["${esc(doc.name)}"]`)
+      if (symbols.length) lines.push(`  D${index} -.-> S0`)
+    })
+    return lines.join('\n')
+  }
+
+  return ''
+})
+
+watch(graphExplorerMermaidSource, async () => {
+  await renderGraphExplorerMermaid()
+})
+
+async function renderGraphExplorerMermaid() {
+  await nextTick()
+  const root = graphExplorerMermaidRef.value
+  const source = graphExplorerMermaidSource.value
+  if (!root) return
+  root.innerHTML = ''
+  if (!source) return
+  const target = document.createElement('div')
+  target.className = 'artifact-mermaid-block'
+  target.textContent = source
+  root.appendChild(target)
+  try {
+    const mermaid = await ensureMermaid()
+    await mermaid.run({ nodes: [target] })
+  } catch (error) {
+    console.warn('graph explorer mermaid render error:', error)
+  }
+}
+
 function toggleRawStep(stepId) {
   const next = new Set(rawStepView.value)
   if (next.has(stepId)) next.delete(stepId)
@@ -533,10 +734,77 @@ async function refreshDashboardSnapshots() {
     api.getProviderStatus(),
   ])
   if (results[0].status === 'fulfilled' && results[0].value) {
-    metrics.value = results[0].value
+    metrics.value = mergeStatsSnapshot(metrics.value, results[0].value)
   }
   if (results[3].status === 'fulfilled' && results[3].value) {
     providerStatus.value = results[3].value
+  }
+}
+
+function splitGraphPaths(raw) {
+  return (raw || '')
+    .split(/\r?\n|,/)
+    .map(v => v.trim())
+    .filter(Boolean)
+}
+
+async function runGraphExplorer(toolOverride = null) {
+  graphExplorerBusy.value = true
+  graphExplorerStatus.value = ''
+  try {
+    let tool = toolOverride
+    let input = {}
+    if (!tool) {
+      switch (graphExplorerMode.value) {
+        case 'usage':
+          tool = 'etr.usage_graph'
+          input = { symbol: graphExplorerSymbol.value, exact: true, max_depth: Number(graphExplorerDepth.value || 1) }
+          break
+        case 'impact':
+          tool = 'etr.impact_radius'
+          input = { symbol: graphExplorerSymbol.value, exact: true, max_depth: Number(graphExplorerDepth.value || 2) }
+          break
+        case 'callers':
+          tool = 'etr.callers'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'callees':
+          tool = 'etr.callees'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'docs':
+          tool = 'etr.doc_links'
+          input = { symbol: graphExplorerSymbol.value, exact: true }
+          break
+        case 'path':
+          tool = 'etr.dep_path'
+          input = { from_symbol: graphExplorerFrom.value, to_symbol: graphExplorerTo.value, exact: true }
+          break
+        case 'context':
+          tool = 'etr.context_bundle'
+          input = {
+            query: graphExplorerQuery.value,
+            max_symbols: 6,
+            max_neighbors: Math.max(1, Number(graphExplorerDepth.value || 2)),
+          }
+          break
+        default:
+          throw new Error('unknown graph explorer mode')
+      }
+    } else if (tool === 'etr.graph_refresh_paths') {
+      input = { paths: splitGraphPaths(graphExplorerPaths.value) }
+    }
+
+    const output = await api.etrCall(tool, input, false)
+    graphExplorerResult.value = { tool, input, output }
+    graphExplorerStatus.value = `${tool} ok`
+    if (tool.startsWith('etr.graph_')) {
+      await refreshDashboardSnapshots()
+    }
+  } catch (error) {
+    graphExplorerStatus.value = error?.message || String(error)
+  } finally {
+    graphExplorerBusy.value = false
   }
 }
 
@@ -710,6 +978,34 @@ async function cleanupStaleApprovals() {
 async function submitTask() {
   const input = taskInput.value.trim()
   if (!input || chatPending.value) return
+  taskStatus.value = ''
+
+  const normalized = input.toLowerCase()
+  if (normalized === '/repo-intelligence') {
+    taskStatus.value = 'Opening Repo Intelligence…'
+    emit('navigate', 'repo-intelligence')
+    taskInput.value = ''
+    taskPanelOpen.value = false
+    return
+  }
+  if (normalized === '/repo-graph-build') {
+    taskStatus.value = 'Building repo graph…'
+    await api.etrCall('etr.graph_build', {}, false)
+    await refreshDashboardSnapshots()
+    taskStatus.value = 'Repo graph built.'
+    taskInput.value = ''
+    emit('navigate', 'repo-intelligence')
+    return
+  }
+  if (normalized === '/repo-graph-refresh') {
+    taskStatus.value = 'Refreshing repo graph…'
+    await api.etrCall('etr.graph_refresh', {}, false)
+    await refreshDashboardSnapshots()
+    taskStatus.value = 'Repo graph refreshed.'
+    taskInput.value = ''
+    emit('navigate', 'repo-intelligence')
+    return
+  }
 
   chatMessages.value.push({ role: 'user', content: input })
   chatMessages.value.push({ role: 'assistant', content: '', status: 'running', sessionId: null })
@@ -848,6 +1144,78 @@ async function submitTask() {
       </div>
     </div>
 
+    <div v-if="m.repo_graph" class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
+      <div class="rounded-xl border border-base-content/10 bg-base-300/70 px-4 py-3 flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2 mr-2">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Repo Graph</span>
+          <span class="badge badge-xs font-mono" :class="repoGraphBadgeClass(m.repo_graph)">{{ repoGraphState(m.repo_graph) }}</span>
+        </div>
+        <span class="text-[10px] font-mono text-base-content/35">
+          v{{ m.repo_graph.version || '—' }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.symbols || 0 }} sym
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.files || 0 }} files
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          {{ m.repo_graph.counts?.edges || 0 }} edges
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          stale {{ m.repo_graph.stale_files || 0 }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/30">
+          missing {{ m.repo_graph.missing_files || 0 }}
+        </span>
+        <span class="text-[10px] font-mono text-base-content/25 truncate max-w-[32rem]">
+          {{ m.repo_graph.graph_path || 'no graph file yet' }}
+        </span>
+      </div>
+    </div>
+
+    <div v-if="repoIntel" class="shrink-0 px-4 pb-3 border-b border-base-content/8 bg-base-200">
+      <div class="rounded-xl border border-base-content/10 bg-base-300/70 p-4 space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="text-[10px] font-mono font-bold uppercase tracking-widest text-base-content/40">Repo Intelligence</span>
+            <span class="badge badge-xs font-mono" :class="repoIntelligenceBadgeClass(repoIntel)">{{ repoIntel.state }}</span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              {{ repoIntel.languages?.length || 0 }} language{{ (repoIntel.languages?.length || 0) === 1 ? '' : 's' }}
+            </span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              baseline {{ repoIntel.baseline_ready ? 'ready' : 'unknown' }}
+            </span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              tree-sitter {{ repoIntel.tree_sitter?.status || 'unknown' }}
+            </span>
+          </div>
+          <button class="btn btn-xs btn-primary font-mono" @click="emit('navigate', 'repo-intelligence')">open page</button>
+        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_auto] gap-3 items-start">
+          <div class="flex flex-col gap-1">
+            <div v-for="note in (repoIntel.notes || [])" :key="note" class="text-[11px] font-mono text-base-content/55">
+              {{ note }}
+            </div>
+            <div class="text-[11px] font-mono text-base-content/40">
+              {{ m.repo_graph?.exists ? 'Graph is available for analysis and review flows.' : 'Graph is not built yet — use the Repo Intelligence page to build it.' }}
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-if="!m.repo_graph?.exists && repoIntel.state !== 'empty_repo'"
+              class="btn btn-xs btn-ghost font-mono"
+              @click="taskInput = '/repo-graph-build'; taskPanelOpen = true"
+            >build via slash</button>
+            <button
+              v-else-if="m.repo_graph?.stale"
+              class="btn btn-xs btn-ghost font-mono"
+              @click="taskInput = '/repo-graph-refresh'; taskPanelOpen = true"
+            >refresh via slash</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <!-- ── Master-detail body ─────────────────────────────────────────── -->
     <div class="flex-1 flex min-h-0">
 
@@ -1437,7 +1805,19 @@ async function submitTask() {
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.rag_context_chars || 0 }}</div>
               </div>
             </div>
-            <div class="grid grid-cols-3 gap-2.5">
+            <div class="grid grid-cols-3 xl:grid-cols-6 gap-2.5">
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Hits</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_hits || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Files</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_files || 0 }}</div>
+              </div>
+              <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
+                <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Graph Chars</div>
+                <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.graph_context_chars || 0 }}</div>
+              </div>
               <div class="bg-base-200/70 rounded-xl p-3 border border-base-content/8">
                 <div class="text-[9px] font-mono text-base-content/30 uppercase tracking-widest mb-1">Vector Hits</div>
                 <div class="font-mono text-xs text-base-content/70">{{ selectedRetrievalTelemetry.vector_hits || 0 }}</div>
@@ -1977,6 +2357,9 @@ async function submitTask() {
           <div class="flex items-center justify-between mt-2 px-1">
             <span class="text-[10px] font-mono text-base-content/15">↵ send · Shift↵ newline · / for commands</span>
             <span class="text-[10px] font-mono text-base-content/15" v-if="chatMessages.length">{{ chatMessages.filter(m => m.role === 'user').length }} task(s)</span>
+          </div>
+          <div v-if="taskStatus" class="mt-2 px-1 text-[10px] font-mono text-base-content/35">
+            {{ taskStatus }}
           </div>
         </div>
       </div>

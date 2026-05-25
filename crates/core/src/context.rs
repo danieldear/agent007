@@ -9,6 +9,8 @@ use crate::budget::{estimate_tokens, BudgetEstimate, CompactLevel, TokenBudget};
 use crate::compact::compact_command_output;
 use crate::error::CoreError;
 use crate::repo_brain::{RepoBrain, RepoBrainBuilder};
+use crate::repo_graph::{context_bundle_for_query, load_or_build_graph};
+use crate::repo_readiness::{write_repo_intelligence_readiness, RepoIntelligenceOptions};
 use crate::run_store::{RunMetadata, RunStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +36,8 @@ pub struct ContextBundle {
     pub budget: TokenBudget,
     pub recommended_level: CompactLevel,
     pub repo_brain: RepoBrain,
+    pub structural_files: Vec<String>,
+    pub structural_context: String,
     pub relevant_files: Vec<ContextFile>,
     pub memory_notes: Vec<ContextMemoryNote>,
     pub recent_runs: Vec<RunMetadata>,
@@ -69,6 +73,7 @@ impl ContextCompiler {
     ) -> Result<ContextBundle, CoreError> {
         let repo_brain = RepoBrainBuilder::new(&self.root, &self.agent_home).build()?;
         let keywords = extract_keywords(task);
+        let (structural_context, structural_files) = self.collect_structural_context(task);
         let relevant_files = self.select_relevant_files(task, &keywords, max_files)?;
         let memory_notes = self.collect_memory_notes(max_memory_notes)?;
         let recent_runs = RunStore::new(self.agent_home.join("sessions"))
@@ -78,6 +83,7 @@ impl ContextCompiler {
         let preliminary = render_context(
             task,
             &repo_brain,
+            &structural_context,
             &relevant_files,
             &memory_notes,
             &recent_runs,
@@ -107,6 +113,7 @@ impl ContextCompiler {
         let compiled_context = render_context(
             task,
             &repo_brain,
+            &structural_context,
             &relevant_files,
             &memory_notes,
             &recent_runs,
@@ -119,6 +126,8 @@ impl ContextCompiler {
             budget: self.budget.clone(),
             recommended_level,
             repo_brain,
+            structural_files,
+            structural_context,
             relevant_files,
             memory_notes,
             recent_runs,
@@ -184,6 +193,19 @@ impl ContextCompiler {
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(max_notes);
         Ok(scored.into_iter().map(|(_, note)| note).collect())
+    }
+
+    fn collect_structural_context(&self, task: &str) -> (String, Vec<String>) {
+        let _ = write_repo_intelligence_readiness(
+            &self.root,
+            None,
+            &RepoIntelligenceOptions::default(),
+        );
+        let Ok(graph) = load_or_build_graph(&self.root, None) else {
+            return (String::new(), Vec::new());
+        };
+        let bundle = context_bundle_for_query(&graph, task, 6, 2);
+        (bundle.text, bundle.files)
     }
 }
 
@@ -272,6 +294,7 @@ fn score_memory_entry(meta: &MemoryFrontmatterMeta) -> f64 {
 fn render_context(
     task: &str,
     repo_brain: &RepoBrain,
+    structural_context: &str,
     relevant_files: &[ContextFile],
     memory_notes: &[ContextMemoryNote],
     recent_runs: &[RunMetadata],
@@ -290,6 +313,11 @@ fn render_context(
         for command in &repo_brain.recommended_commands {
             out.push_str(&format!("- {}\n", command));
         }
+    }
+    if !structural_context.is_empty() {
+        out.push_str("\nStructural repo graph:\n");
+        out.push_str(structural_context);
+        out.push('\n');
     }
     if !relevant_files.is_empty() {
         out.push_str("\nRelevant files:\n");
@@ -485,11 +513,13 @@ mod tests {
         let compiler = ContextCompiler::new(root.path(), agent_home.path(), TokenBudget::default());
         let bundle = compiler.compile("fix auth token bug", 4, 4).unwrap();
         assert!(!bundle.relevant_files.is_empty());
+        assert!(bundle.structural_context.contains("auth_token"));
         assert!(bundle
             .relevant_files
             .iter()
             .any(|file| file.path.ends_with("src/auth.rs")));
         assert_eq!(bundle.memory_notes.len(), 1);
         assert!(bundle.compiled_context.contains("Repo brain"));
+        assert!(bundle.compiled_context.contains("Structural repo graph"));
     }
 }

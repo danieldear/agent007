@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useWebSocket } from './composables/useWebSocket.js'
 import Sidebar from './components/Sidebar.vue'
 import DashboardView from './views/DashboardView.vue'
+import RepoIntelligenceView from './views/RepoIntelligenceView.vue'
 import AgentsView from './views/AgentsView.vue'
 import SkillsView from './views/SkillsView.vue'
 import WorkflowsView from './views/WorkflowsView.vue'
@@ -19,6 +20,7 @@ const { connected, events, stats } = useWebSocket()
 
 const views = {
   dashboard: DashboardView,
+  'repo-intelligence': RepoIntelligenceView,
   agents: AgentsView,
   skills: SkillsView,
   workflows: WorkflowsView,
@@ -38,7 +40,7 @@ const ActiveView = computed(() => views[currentView.value] || DashboardView)
   <div class="flex h-screen bg-base-300 text-base-content">
     <Sidebar :current="currentView" :connected="connected" @navigate="currentView = $event" />
     <main class="flex-1 overflow-hidden flex flex-col">
-      <component :is="ActiveView" :events="events" :connected="connected" :stats="stats" />
+      <component :is="ActiveView" :events="events" :connected="connected" :stats="stats" @navigate="currentView = $event" />
     </main>
   </div>
 </template>

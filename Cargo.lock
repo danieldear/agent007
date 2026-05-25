@@ -63,6 +63,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -101,6 +102,7 @@ dependencies = [
 name = "agent007-etr"
 version = "0.4.0"
 dependencies = [
+ "agent007-core",
  "anyhow",
  "chrono",
  "csv",
@@ -112,6 +114,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "similar",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "uuid",
@@ -235,6 +238,7 @@ dependencies = [
 name = "agent007-memory"
 version = "0.4.0"
 dependencies = [
+ "agent007-core",
  "agent007-models",
  "arrow-array",
  "arrow-schema",
