@@ -46,6 +46,18 @@ const m = computed(() => metrics.value || {
 
 const repoIntel = computed(() => m.value.repo_intelligence || null)
 const repoGraph = computed(() => m.value.repo_graph || null)
+const installRecommendations = computed(() => repoIntel.value?.recommendations || [])
+const capabilityNotes = computed(() => {
+  const notes = []
+  if (repoIntel.value?.tree_sitter?.note) {
+    notes.push({
+      id: 'tree-sitter',
+      label: 'tree-sitter',
+      body: repoIntel.value.tree_sitter.note,
+    })
+  }
+  return notes
+})
 
 const graphMissing = computed(() => !repoGraph.value?.exists)
 const graphStale = computed(() => !!repoGraph.value?.stale)
@@ -379,7 +391,7 @@ onMounted(async () => {
           <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/30 mb-2">Semantic Enrichment</div>
           <div class="text-[11px] font-mono text-base-content/55">tree-sitter {{ repoIntel?.tree_sitter?.status || 'unknown' }}</div>
           <div class="text-[11px] font-mono text-base-content/35 mt-1">
-            {{ (repoIntel?.recommendations || []).length }} install recommendation{{ (repoIntel?.recommendations || []).length === 1 ? '' : 's' }}
+            {{ installRecommendations.length }} install action{{ installRecommendations.length === 1 ? '' : 's' }}
           </div>
         </div>
         <div class="rounded-xl border border-base-content/10 bg-base-200 p-4">
@@ -427,26 +439,41 @@ onMounted(async () => {
         </div>
 
         <div class="rounded-xl border border-base-content/10 bg-base-200 p-4 space-y-3">
-          <div class="text-[10px] font-mono uppercase tracking-widest text-base-content/30">Install Recommendations</div>
-          <div v-if="!(repoIntel?.recommendations || []).length" class="text-[11px] font-mono text-base-content/40">
-            No install actions needed right now.
-          </div>
-          <div v-for="rec in (repoIntel?.recommendations || [])" :key="rec.id" class="rounded-lg border border-base-content/8 px-3 py-3 space-y-2">
-            <div class="flex items-center gap-2">
-              <span class="text-[11px] font-mono font-bold text-base-content/75">{{ rec.title }}</span>
-              <span class="badge badge-xs font-mono">{{ rec.language }}</span>
+          <div class="text-[10px] font-mono uppercase tracking-widest text-base-content/30">Install Actions</div>
+
+          <div v-if="installRecommendations.length" class="space-y-3">
+            <div v-for="rec in installRecommendations" :key="rec.id" class="rounded-lg border border-base-content/8 px-3 py-3 space-y-2">
+              <div class="flex items-center gap-2">
+                <span class="text-[11px] font-mono font-bold text-base-content/75">{{ rec.title }}</span>
+                <span class="badge badge-xs font-mono">{{ rec.language }}</span>
+              </div>
+              <div class="text-[10px] font-mono text-base-content/35 break-all">{{ rec.command }}</div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button class="btn btn-xs btn-ghost font-mono" @click="copyText(rec.command)">copy</button>
+                <button class="btn btn-xs btn-primary font-mono" :disabled="!rec.can_run || repoInstallingId === rec.id" @click="runRepoRecommendation(rec)">
+                  {{ repoInstallingId === rec.id ? 'installing…' : 'install' }}
+                </button>
+                <span v-if="!rec.can_run" class="text-[10px] font-mono text-warning">manual install required</span>
+              </div>
             </div>
-            <div class="text-[10px] font-mono text-base-content/35 break-all">{{ rec.command }}</div>
-            <div class="flex flex-wrap items-center gap-2">
-              <button class="btn btn-xs btn-ghost font-mono" @click="copyText(rec.command)">copy</button>
-              <button class="btn btn-xs btn-primary font-mono" :disabled="!rec.can_run || repoInstallingId === rec.id" @click="runRepoRecommendation(rec)">
-                {{ repoInstallingId === rec.id ? 'installing…' : 'install' }}
-              </button>
-              <span v-if="!rec.can_run" class="text-[10px] font-mono text-warning">manual install required</span>
+          </div>
+
+          <div v-else class="rounded-lg border border-base-content/8 px-3 py-3">
+            <div class="text-[11px] font-mono text-base-content/55">No remaining install actions.</div>
+          </div>
+
+          <div v-if="repoInstallStatus" class="rounded-lg border border-success/20 bg-success/5 px-3 py-3 space-y-1">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-success/70">Recent Install Result</div>
+            <div class="text-[10px] font-mono text-base-content/60 whitespace-pre-wrap break-words">{{ repoInstallStatus }}</div>
+          </div>
+
+          <div v-if="capabilityNotes.length" class="rounded-lg border border-base-content/8 px-3 py-3 space-y-2">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-base-content/35">Capability Notes</div>
+            <div v-for="note in capabilityNotes" :key="note.id" class="space-y-1">
+              <div class="text-[10px] font-mono text-base-content/55">{{ note.label }}</div>
+              <div class="text-[10px] font-mono text-base-content/40 leading-relaxed">{{ note.body }}</div>
             </div>
           </div>
-          <div class="text-[10px] font-mono text-base-content/45">tree-sitter: {{ repoIntel?.tree_sitter?.note || 'not available' }}</div>
-          <div v-if="repoInstallStatus" class="text-[10px] font-mono text-base-content/55 whitespace-pre-wrap break-words">{{ repoInstallStatus }}</div>
         </div>
       </div>
 
