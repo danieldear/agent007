@@ -54,8 +54,9 @@ repo intelligence stack
 1. **Repo graph is not memory** — the graph models what exists and how it connects; memory records what happened and what was learned.
 2. **Graph retrieval is additive** — vector retrieval, repo brain, and scoped memory remain valid and should compose rather than be replaced.
 3. **Incremental before exhaustive** — patch changed files and their neighboring graph edges instead of rebuilding everything.
-4. **Deterministic extraction first** — prefer structural extraction from parsers/LSP/indexers before LLM inference.
-5. **ETR-first access** — graph queries should be consumable as low-noise ETR tools before broad shell usage.
+4. **Deterministic extraction first** — prefer structural extraction from parsers, tree-sitter, LSP, and indexers before LLM inference.
+5. **Graceful degradation** — repo intelligence must still provide a baseline graph without tree-sitter or LSP; semantic enrichment is additive, not required for basic operation.
+6. **ETR-first access** — graph queries should be consumable as low-noise ETR tools before broad shell usage.
 
 ## Workstreams
 
@@ -235,6 +236,70 @@ Make the structural layer inspectable instead of invisible.
 - graph-backed context is inspectable in the dashboard
 - stale structural state is visible before it causes bad answers
 
+### W7 — LSP Semantic Overlay
+Use LSP as a semantic enrichment and validation layer on top of the base repo graph.
+
+**Scope**
+- candidate crates/files:
+  - `crates/lsp-client/`
+  - `crates/core/src/repo_graph.rs`
+  - `crates/memory/src/retriever.rs`
+  - `crates/etr/src/l1/`
+
+**Deliverables**
+1. Symbol enrichment:
+   - definition/hover/type data where available
+   - workspace symbol resolution
+   - implementation and reference resolution
+2. Semantic relationship overlays:
+   - call hierarchy from LSP when supported
+   - diagnostics attached to graph nodes/files
+   - rename/impact preview support
+3. Retrieval fusion:
+   - graph + vector + LSP evidence ranking
+   - provenance markers that distinguish structural vs semantic evidence
+4. Fallback rules:
+   - if LSP is absent or unhealthy, the baseline graph still works
+   - language-by-language capability reporting
+
+**Acceptance**
+- LSP-capable repos gain more precise symbol/reference/call edges without breaking fallback behavior
+- graph-backed retrieval can surface semantic provenance
+- workflows can request semantic validation before risky edits
+
+### W8 — Dependency Readiness and One-Stop Onboarding
+Make missing structural dependencies visible and easy to install without silently mutating the machine.
+
+**Scope**
+- candidate crates/files:
+  - `crates/cli/src/commands/init.rs`
+  - `crates/web/src/api.rs`
+  - `crates/web/frontend/src/views/`
+  - `crates/lsp-client/`
+
+**Deliverables**
+1. Capability detection at init/startup:
+   - detect repo languages
+   - detect configured/available LSP servers
+   - detect tree-sitter parser coverage
+   - record readiness artifact under project-local agent home
+2. Readiness model:
+   - `baseline_ready` (graph works now)
+   - `semantic_enrichment_missing` (LSP/tree-sitter absent)
+   - `installable` recommendations by language and platform
+3. Operator UX:
+   - dashboard cards for missing LSP/tree-sitter coverage
+   - click-to-copy install command or click-to-run with explicit approval
+   - no silent auto-install by default
+4. Policy and safety:
+   - project chooses whether installs are allowed
+   - every install action is explicit, logged, and reversible where possible
+
+**Acceptance**
+- users can tell exactly why semantic enrichment is partial
+- init gives a one-stop readiness summary instead of failing silently
+- dashboard can guide installation of missing enrichers by repo language
+
 ## Suggested Execution Order
 1. **W1 Structural Repo Graph v1**
 2. **W5 ETR Graph Query Surface**
@@ -242,6 +307,8 @@ Make the structural layer inspectable instead of invisible.
 4. **W2 Incremental Graph Refresh**
 5. **W4 Memory Integration Without Conflation**
 6. **W6 Dashboard and Operator Visibility**
+7. **W7 LSP Semantic Overlay**
+8. **W8 Dependency Readiness and One-Stop Onboarding**
 
 ## Recommended First Slice
 Start with **W1 + the smallest part of W5**.
@@ -258,11 +325,29 @@ Start with **W1 + the smallest part of W5**.
 
 ## Acceptance Criteria for the Milestone
 1. New projects can build and persist a structural repo graph without external generators.
-2. The repo is treated as the default first-class retrieval corpus.
-3. Structural queries (callers, callees, usage paths, impact radius) are available through ETR.
-4. Incremental updates keep structural state reasonably fresh after file changes.
-5. Memory can reference graph-derived evidence without becoming the graph itself.
-6. Dashboard/runtime surfaces can show whether structural intelligence is healthy, stale, or partial.
+2. The baseline graph works without tree-sitter or LSP.
+3. When semantic enrichers are available, agent007 can fuse structural, vector, and LSP evidence.
+4. Missing enrichers are surfaced clearly in init and dashboard readiness UI.
+5. Users can install recommended enrichers through explicit, auditable actions rather than silent background mutation.
+6. Structural queries (callers, callees, usage paths, impact radius) remain available through ETR.
+7. Memory can reference graph-derived evidence without becoming the graph itself.
+
+## Precise Product Stance
+```ascii
+repo intelligence onboarding
+├─ baseline graph
+│  └─ must work out of the box
+├─ semantic enrichment
+│  ├─ tree-sitter = better syntax coverage
+│  └─ LSP = semantic resolution and diagnostics
+└─ install behavior
+   ├─ detect automatically
+   ├─ recommend automatically
+   ├─ allow one-click install with approval
+   └─ do NOT auto-install silently by default
+```
+
+This keeps agent007 a one-stop solution without making unexpected system-level changes behind the user's back.
 
 ## Likely Docs to Update
 - `docs/milestones.md`
@@ -270,12 +355,3 @@ Start with **W1 + the smallest part of W5**.
 - `docs/configuration.md`
 - `docs/features/tool-registry.md`
 - `docs/runtime-and-tui-milestone.md` (cross-reference only if needed)
-- candidate ADR:
-  - `docs/adr/009-repo-native-structural-intelligence.md`
-
-## Deferred
-1. Full graph database dependency decision.
-2. Multi-modal graph ingestion beyond repo/docs/artifacts already local to the project.
-3. Cross-repo/team graph merge semantics.
-4. LLM-extracted weak edges as a default path.
-5. Heavy visualization work beyond compact operator inspection.
