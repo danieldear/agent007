@@ -851,6 +851,178 @@ footer {
 }
 
 /* ─────────────────────────────────────────────
+   Concept card — mechanism line
+───────────────────────────────────────────── */
+.concept-mechanism {
+  margin-top: 0.9rem; padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 0.72rem;
+  color: var(--text3); line-height: 1.55;
+}
+.concept-mechanism .cm-hl { color: var(--amber2); }
+
+/* ─────────────────────────────────────────────
+   Memory Flow (inside #solution)
+───────────────────────────────────────────── */
+.memflow {
+  margin-top: 4rem; padding-top: 3.5rem;
+  border-top: 1px solid var(--border);
+}
+.memflow-header { text-align: center; margin-bottom: 2.5rem; }
+.memflow-header h3 {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: clamp(1.2rem, 2vw, 1.55rem); color: var(--text);
+  letter-spacing: -0.02em; margin-bottom: 0.5rem;
+}
+.memflow-header p {
+  font-size: 0.88rem; color: var(--text2);
+  max-width: 500px; margin: 0 auto;
+}
+.memflow-timeline {
+  display: flex; align-items: flex-start; justify-content: center;
+  gap: 0; max-width: 900px; margin: 0 auto;
+  overflow-x: auto; padding-bottom: 0.5rem;
+}
+.memflow-step {
+  flex: 1; min-width: 120px; max-width: 160px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.memflow-connector {
+  flex: 0 0 36px; display: flex; flex-direction: column;
+  align-items: center; padding-top: 28px;
+}
+.memflow-connector-line {
+  width: 36px; height: 1px;
+  background: linear-gradient(90deg, rgba(245,158,11,0.25), rgba(245,158,11,0.4), rgba(245,158,11,0.25));
+}
+.memflow-node {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 0.9rem 1rem;
+  text-align: center; width: 100%;
+  transition: border-color 350ms, box-shadow 350ms;
+}
+.memflow-node.hub {
+  border-color: rgba(245,158,11,0.35);
+  background: rgba(245,158,11,0.04);
+  box-shadow: 0 0 24px rgba(245,158,11,0.08);
+}
+.memflow-node-icon { font-size: 1.3rem; margin-bottom: 0.3rem; }
+.memflow-node-name {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: 0.78rem; color: var(--text); margin-bottom: 0.15rem;
+}
+.memflow-node-tag {
+  font-family: var(--font-mono); font-size: 0.6rem; color: var(--text3);
+}
+.memflow-bubble {
+  margin-top: 0.75rem;
+  background: var(--bg4); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.45rem 0.65rem;
+  font-family: var(--font-mono); font-size: 0.63rem;
+  color: var(--text2); line-height: 1.4; width: 100%;
+  opacity: 0; transform: translateY(6px);
+  transition: opacity 400ms var(--ease-out), transform 400ms var(--ease-out);
+}
+.memflow-bubble.visible { opacity: 1; transform: translateY(0); }
+.memflow-bubble .mb-hl { color: var(--amber); }
+
+/* ─────────────────────────────────────────────
+   Codebase Brain
+───────────────────────────────────────────── */
+#codebase-brain {
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.cb-header { text-align: center; margin-bottom: 3.5rem; }
+
+.cb-pipeline {
+  display: flex; align-items: center; gap: 0;
+  max-width: 880px; margin: 0 auto 2rem;
+  overflow-x: auto; padding-bottom: 0.5rem;
+}
+.cb-stage {
+  flex: 1; min-width: 100px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.cb-stage-box {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1rem 0.6rem;
+  width: 100%; text-align: center;
+  transition: border-color 400ms var(--ease-out),
+              box-shadow 400ms var(--ease-out),
+              background 400ms;
+}
+.cb-stage-box.lit {
+  border-color: rgba(245,158,11,0.45);
+  background: rgba(245,158,11,0.055);
+  box-shadow: 0 0 28px rgba(245,158,11,0.1);
+}
+.cb-stage-icon {
+  font-size: 1.35rem; margin-bottom: 0.4rem; display: block;
+  filter: grayscale(0.35) opacity(0.65);
+  transition: filter 400ms;
+}
+.cb-stage-box.lit .cb-stage-icon { filter: none; }
+.cb-stage-name {
+  font-family: var(--font-mono); font-size: 0.64rem;
+  color: var(--text2); letter-spacing: 0.03em;
+}
+.cb-stage-sub {
+  font-size: 0.58rem; color: var(--text3); margin-top: 0.12rem;
+}
+.cb-arrow {
+  flex: 0 0 28px; display: flex; align-items: center; justify-content: center;
+  color: var(--text3); font-size: 0.75rem;
+  transition: color 400ms;
+  padding-bottom: 0.5rem;
+}
+.cb-arrow.lit { color: var(--amber); }
+
+.cb-result { text-align: center; margin: 1.5rem 0 0; }
+.cb-result-badge {
+  display: inline-flex; align-items: center; gap: 0.75rem;
+  background: rgba(16,185,129,0.07); border: 1px solid rgba(16,185,129,0.2);
+  border-radius: 99px; padding: 0.5rem 1.4rem;
+  font-family: var(--font-mono); font-size: 0.78rem; color: var(--green);
+}
+.cb-result-num { font-weight: 700; }
+
+.cb-detail-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem; margin-top: 3.5rem;
+}
+.cb-detail-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1.5rem 1.4rem;
+  transition: border-color 200ms, transform 200ms var(--ease-out), box-shadow 200ms;
+}
+@media (hover: hover) and (pointer: fine) {
+  .cb-detail-card:hover {
+    border-color: var(--border2); transform: translateY(-3px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+  }
+}
+.cb-detail-icon { font-size: 1.3rem; margin-bottom: 0.75rem; display: block; }
+.cb-detail-title {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: 0.95rem; color: var(--text); margin-bottom: 0.5rem;
+}
+.cb-detail-desc { font-size: 0.82rem; color: var(--text2); line-height: 1.65; }
+.cb-detail-code {
+  margin-top: 0.85rem; padding: 0.5rem 0.75rem;
+  background: var(--bg4); border-radius: 6px;
+  font-family: var(--font-mono); font-size: 0.67rem;
+  color: var(--amber2); line-height: 1.5;
+}
+@media (max-width: 820px) {
+  .cb-detail-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 540px) {
+  .cb-detail-grid { grid-template-columns: 1fr; }
+}
+
+/* ─────────────────────────────────────────────
    Scroll reveal
 ───────────────────────────────────────────── */
 .reveal {
@@ -902,8 +1074,8 @@ footer {
   </a>
   <ul class="nav-links">
     <li><a href="#solution">How it works</a></li>
-    <li><a href="#phases">Capabilities</a></li>
-    <li><a href="#comparison">Multi-agent</a></li>
+    <li><a href="#codebase-brain">Codebase AI</a></li>
+    <li><a href="#phases">Workflows</a></li>
     <li><a href="#install">Install</a></li>
   </ul>
   <div class="nav-right">
@@ -1098,6 +1270,71 @@ footer {
       </div>
     </div>
     <!-- end network-outer -->
+
+    <!-- Memory Flow subsection -->
+    <div class="memflow reveal" style="--stagger-i:11" id="memflow-section">
+      <div class="memflow-header">
+        <h3>How agents share context — without repeating work</h3>
+        <p>Each agent reads from and writes to one shared memory store. One agent's discovery instantly becomes every agent's knowledge.</p>
+      </div>
+      <div class="memflow-timeline" id="memflow-tl">
+        <!-- Research -->
+        <div class="memflow-step">
+          <div class="memflow-node">
+            <div class="memflow-node-icon">🔬</div>
+            <div class="memflow-node-name">Research</div>
+            <div class="memflow-node-tag">writes</div>
+          </div>
+          <div class="memflow-bubble" id="mfb-0">
+            <span class="mb-hl">auth.rs:47</span> — JWT verify,<br>3 call sites found
+          </div>
+        </div>
+        <div class="memflow-connector">
+          <div class="memflow-connector-line"></div>
+        </div>
+        <!-- Memory Hub -->
+        <div class="memflow-step">
+          <div class="memflow-node hub">
+            <div class="memflow-node-icon">🧠</div>
+            <div class="memflow-node-name">MEMORY</div>
+            <div class="memflow-node-tag">shared store</div>
+          </div>
+          <div class="memflow-bubble" id="mfb-1" style="background:rgba(245,158,11,0.04);border-color:rgba(245,158,11,0.15);">
+            3.2k symbols · session context<br>· full decision log
+          </div>
+        </div>
+        <div class="memflow-connector">
+          <div class="memflow-connector-line"></div>
+        </div>
+        <!-- Implementation -->
+        <div class="memflow-step">
+          <div class="memflow-node">
+            <div class="memflow-node-icon">⚙️</div>
+            <div class="memflow-node-name">Implement</div>
+            <div class="memflow-node-tag">reads</div>
+          </div>
+          <div class="memflow-bubble" id="mfb-2">
+            knows JWT flow,<br>skips re-reading auth.rs
+          </div>
+        </div>
+        <div class="memflow-connector">
+          <div class="memflow-connector-line"></div>
+        </div>
+        <!-- Security -->
+        <div class="memflow-step">
+          <div class="memflow-node">
+            <div class="memflow-node-icon">🛡️</div>
+            <div class="memflow-node-name">Security</div>
+            <div class="memflow-node-tag">reads</div>
+          </div>
+          <div class="memflow-bubble" id="mfb-3">
+            audits JWT at known<br>call sites only
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- end memflow -->
+
   </div>
 </section>
 
@@ -1194,6 +1431,103 @@ footer {
 </section>
 
 <!-- ═══════════════════════════════════════
+     CODEBASE BRAIN
+═══════════════════════════════════════ -->
+<section id="codebase-brain">
+  <div class="container">
+    <div class="cb-header">
+      <p class="eyebrow reveal">Codebase intelligence</p>
+      <h2 class="section-headline reveal" style="--stagger-i:1">Not a chatbot.<br>A codebase expert.</h2>
+      <p class="section-sub reveal" style="--stagger-i:2;margin:0 auto;">
+        Every file parsed, every symbol resolved, every cross-file relationship mapped — before you type a single prompt. Sub-millisecond retrieval, fully offline.
+      </p>
+    </div>
+
+    <!-- Animated pipeline -->
+    <div class="cb-pipeline reveal" style="--stagger-i:3" id="cb-pipe">
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-0">
+          <span class="cb-stage-icon">📁</span>
+          <div class="cb-stage-name">Source Files</div>
+          <div class="cb-stage-sub">Rust · TS · Go · any</div>
+        </div>
+      </div>
+      <div class="cb-arrow" id="cba-0">→</div>
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-1">
+          <span class="cb-stage-icon">🌳</span>
+          <div class="cb-stage-name">tree-sitter</div>
+          <div class="cb-stage-sub">parse → AST</div>
+        </div>
+      </div>
+      <div class="cb-arrow" id="cba-1">→</div>
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-2">
+          <span class="cb-stage-icon">🔭</span>
+          <div class="cb-stage-name">LSP</div>
+          <div class="cb-stage-sub">resolve symbols</div>
+        </div>
+      </div>
+      <div class="cb-arrow" id="cba-2">→</div>
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-3">
+          <span class="cb-stage-icon">✨</span>
+          <div class="cb-stage-name">Embed</div>
+          <div class="cb-stage-sub">vectorize chunks</div>
+        </div>
+      </div>
+      <div class="cb-arrow" id="cba-3">→</div>
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-4">
+          <span class="cb-stage-icon">💾</span>
+          <div class="cb-stage-name">SQLite</div>
+          <div class="cb-stage-sub">vector store</div>
+        </div>
+      </div>
+      <div class="cb-arrow" id="cba-4">→</div>
+      <div class="cb-stage">
+        <div class="cb-stage-box" id="cbs-5">
+          <span class="cb-stage-icon">⚡</span>
+          <div class="cb-stage-name">Query</div>
+          <div class="cb-stage-sub">RAG retrieval</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result badge -->
+    <div class="cb-result reveal" style="--stagger-i:4">
+      <div class="cb-result-badge">
+        <span>retrieval in</span>
+        <span class="cb-result-num">&lt;1ms</span>
+        <span>·&nbsp;3.2k symbols per session&nbsp;·&nbsp;offline-first</span>
+      </div>
+    </div>
+
+    <!-- 3 detail cards -->
+    <div class="cb-detail-grid">
+      <div class="cb-detail-card reveal" style="--stagger-i:5">
+        <span class="cb-detail-icon">🔭</span>
+        <div class="cb-detail-title">Cross-file awareness</div>
+        <p class="cb-detail-desc">LSP resolves what grep can't — callers, implementations, type hierarchies, cross-module imports. Ask about any symbol and every agent knows exactly where it lives and how it's used.</p>
+        <div class="cb-detail-code">find_callers("authenticate") → 14 sites across 7 files</div>
+      </div>
+      <div class="cb-detail-card reveal" style="--stagger-i:6">
+        <span class="cb-detail-icon">🔒</span>
+        <div class="cb-detail-title">Offline &amp; private</div>
+        <p class="cb-detail-desc">Your codebase never leaves your machine. SQLite-backed vector store runs in-process. No cloud indexing service, no API calls for code intelligence.</p>
+        <div class="cb-detail-code">storage: ~/.agent007/memory.db  (local SQLite, ~40MB)</div>
+      </div>
+      <div class="cb-detail-card reveal" style="--stagger-i:7">
+        <span class="cb-detail-icon">🔄</span>
+        <div class="cb-detail-title">Incremental updates</div>
+        <p class="cb-detail-desc">Only re-indexes what changed. Edit one file, the graph updates in under 50ms. Every agent always queries the freshest snapshot of your codebase — no full rescans.</p>
+        <div class="cb-detail-code">file_changed: auth.rs → re-index 1 file  (&lt;50ms)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════
      CORE CONCEPTS
 ═══════════════════════════════════════ -->
 <section id="concepts">
@@ -1207,21 +1541,37 @@ footer {
         <span class="concept-icon">🎯</span>
         <div class="concept-title">Specialized Agents</div>
         <p class="concept-desc">Each agent has a narrow focus and deep expertise. No context drift — every agent knows exactly what it's supposed to do.</p>
+        <div class="concept-mechanism">
+          <span class="cm-hl">Role-bounded system prompts</span> — no bleed between tasks.<br>
+          Rust-native, &lt;100ms cold start per agent.
+        </div>
       </div>
       <div class="concept-card reveal" style="--stagger-i:3">
         <span class="concept-icon">🧠</span>
         <div class="concept-title">Persistent Memory</div>
-        <p class="concept-desc">Every run, every decision, every file touched — remembered across sessions. 3.2k symbols indexed, sub-millisecond RAG retrieval.</p>
+        <p class="concept-desc">Every run, every decision, every file touched — remembered across sessions and shared between all agents in real time.</p>
+        <div class="concept-mechanism">
+          tree-sitter → AST → LSP → symbols → <span class="cm-hl">SQLite vector store</span><br>
+          3.2k symbols · &lt;1ms retrieval · fully offline
+        </div>
       </div>
       <div class="concept-card reveal" style="--stagger-i:4">
         <span class="concept-icon">⚡</span>
         <div class="concept-title">Skills + Workflows</div>
         <p class="concept-desc">Structured playbooks that run the same way every time. No prompt engineering — just repeatable, auditable delivery.</p>
+        <div class="concept-mechanism">
+          Skills = versioned <span class="cm-hl">.toml playbooks</span><br>
+          Workflows = skills + parallel exec + approval gates
+        </div>
       </div>
       <div class="concept-card reveal" style="--stagger-i:5">
         <span class="concept-icon">🔧</span>
         <div class="concept-title">50+ Built-in Tools</div>
-        <p class="concept-desc">File ops, git, web search, LSP, tree-sitter — all native, sub-millisecond. No plugin installation required.</p>
+        <p class="concept-desc">File ops, git, web search, LSP, tree-sitter — all native, sub-millisecond. No plugin installation, no network calls for code ops.</p>
+        <div class="concept-mechanism">
+          git · bash · web-search · LSP · tree-sitter · file-ops<br>
+          All <span class="cm-hl">compiled Rust</span> — zero runtime deps
+        </div>
       </div>
     </div>
   </div>
@@ -1766,6 +2116,48 @@ footer {
   }, { threshold: 0.3 });
   var statsEl = document.getElementById('stats');
   if (statsEl) statsObserver.observe(statsEl);
+
+  /* ── Codebase Brain pipeline animation ── */
+  (function() {
+    var fired = false;
+    var cbObserver = new IntersectionObserver(function(entries) {
+      if (!entries[0].isIntersecting || fired) return;
+      fired = true;
+      cbObserver.disconnect();
+      for (var i = 0; i < 6; i++) {
+        (function(idx) {
+          setTimeout(function() {
+            var box = document.getElementById('cbs-' + idx);
+            if (box) box.classList.add('lit');
+            if (idx < 5) {
+              var arrow = document.getElementById('cba-' + idx);
+              if (arrow) arrow.classList.add('lit');
+            }
+          }, idx * 300);
+        })(i);
+      }
+    }, { threshold: 0.35 });
+    var pipeEl = document.getElementById('cb-pipe');
+    if (pipeEl) cbObserver.observe(pipeEl);
+  })();
+
+  /* ── Memory Flow bubble reveal ── */
+  (function() {
+    var fired = false;
+    var mfObserver = new IntersectionObserver(function(entries) {
+      if (!entries[0].isIntersecting || fired) return;
+      fired = true;
+      mfObserver.disconnect();
+      [0, 1, 2, 3].forEach(function(i) {
+        setTimeout(function() {
+          var b = document.getElementById('mfb-' + i);
+          if (b) b.classList.add('visible');
+        }, 150 + i * 380);
+      });
+    }, { threshold: 0.3 });
+    var mfEl = document.getElementById('memflow-section');
+    if (mfEl) mfObserver.observe(mfEl);
+  })();
 
 })();
 </script>
