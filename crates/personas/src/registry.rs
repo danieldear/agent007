@@ -163,6 +163,41 @@ fn builtin_personas() -> Vec<PersonaSpec> {
             ]),
         },
         PersonaSpec {
+            name: "Analyst".to_string(),
+            description: "Investigation, review, root cause analysis, and evidence synthesis"
+                .to_string(),
+            system_prompt: "You are an Analyst agent. Your role is to investigate systems, code, \
+                logs, and change sets with evidence-first discipline. Route review, debugging, \
+                and audit work to the right specialist paths, separate facts from inferences, \
+                identify root causes, and synthesize prioritized next actions. Prefer workflows \
+                like code-review, security-audit, and log-analysis when the task is multi-step or \
+                parallelizable. Do not hand-wave; always anchor findings in concrete evidence."
+                .to_string(),
+            preferred_model: "claude".to_string(),
+            allowed_tools: vec![
+                "file_read".to_string(),
+                "bash".to_string(),
+                "web_search".to_string(),
+            ],
+            memory_namespace: None,
+            zones: None,
+            skills: vec![
+                "dev-debug".to_string(),
+                "dev-pr-review".to_string(),
+                "code-security-audit".to_string(),
+                "meta-analyze-codebase".to_string(),
+            ],
+            agent_type: Some("orchestrator".to_string()),
+            allowed_workers: Some(vec![
+                "Researcher".to_string(),
+                "DebugAgent".to_string(),
+                "CodeReviewer".to_string(),
+                "SecurityReviewer".to_string(),
+                "PerformanceEngineer".to_string(),
+                "DocumentationWriter".to_string(),
+            ]),
+        },
+        PersonaSpec {
             name: "Planner".to_string(),
             description: "Implementation planning, milestones, dependencies, and delivery sequencing"
                 .to_string(),
@@ -509,9 +544,9 @@ mod tests {
     use agent007_core::PersonaProvider;
 
     #[test]
-    fn built_in_has_exactly_sixteen_personas() {
+    fn built_in_has_exactly_seventeen_personas() {
         let registry = PersonaRegistry::built_in();
-        assert_eq!(registry.list().len(), 16);
+        assert_eq!(registry.list().len(), 17);
     }
 
     #[test]
@@ -520,6 +555,18 @@ mod tests {
         let spec = registry.get("Researcher").expect("Researcher must exist");
         assert_eq!(spec.preferred_model, "claude");
         assert!(!spec.system_prompt.is_empty());
+    }
+
+    #[test]
+    fn analyst_persona_exists_and_is_orchestrator() {
+        let registry = PersonaRegistry::built_in();
+        let spec = registry.get("Analyst").expect("Analyst must exist");
+        assert_eq!(spec.preferred_model, "claude");
+        assert_eq!(spec.agent_type.as_deref(), Some("orchestrator"));
+        assert!(spec
+            .allowed_workers
+            .as_ref()
+            .is_some_and(|workers| workers.contains(&"DebugAgent".to_string())));
     }
 
     #[test]
@@ -568,6 +615,7 @@ mod tests {
         for expected in &[
             "Researcher",
             "Architect",
+            "Analyst",
             "Planner",
             "Coder",
             "TestDesigner",
@@ -621,7 +669,7 @@ mod tests {
     fn load_from_nonexistent_dir_returns_only_builtins() {
         let path = std::path::PathBuf::from("/tmp/does_not_exist_agent007_personas_test");
         let registry = PersonaRegistry::load(&path).unwrap();
-        assert_eq!(registry.list().len(), 16);
+        assert_eq!(registry.list().len(), 17);
     }
 
     #[test]
@@ -641,8 +689,8 @@ allowed_tools = ["bash"]
         .unwrap();
 
         let registry = PersonaRegistry::load(dir.path()).unwrap();
-        // Still 16 because an override replaces, not adds.
-        assert_eq!(registry.list().len(), 16);
+        // Still 17 because an override replaces, not adds.
+        assert_eq!(registry.list().len(), 17);
         let coder = registry.get("Coder").unwrap();
         assert_eq!(coder.preferred_model, "claude"); // overridden
         assert_eq!(coder.description, "Overridden coder");
@@ -714,7 +762,7 @@ allowed_tools = []
         .unwrap();
 
         let registry = PersonaRegistry::load(dir.path()).unwrap();
-        assert_eq!(registry.list().len(), 17); // 16 built-in + 1 custom
+        assert_eq!(registry.list().len(), 18); // 17 built-in + 1 custom
         assert!(registry.get("CustomSpecialist").is_some());
     }
 

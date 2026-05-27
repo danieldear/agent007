@@ -674,6 +674,12 @@ pub async fn execute(
         register_claude_mcp(&binary_path, &claude_scope_dir, &project_dir, global, force)?;
         step += 1;
 
+        if !global {
+            section(&format!("{step}. Writing Claude Code project guidance"));
+            register_claude_project_files(&project_dir, &claude_scope_dir, force)?;
+            step += 1;
+        }
+
         section(&format!(
             "{step}. Installing slash commands for Claude Code"
         ));
@@ -741,18 +747,14 @@ pub async fn execute(
             std::fs::create_dir_all(&agents_dir)?;
             ok("agents/ created");
         }
-        write_file(
-            &agents_dir.join("agent007-architect.md"),
-            CLAUDE_AGENT_ARCHITECT,
-            "agents/agent007-architect.md",
-            force,
-        )?;
-        write_file(
-            &agents_dir.join("agent007-analyst.md"),
-            CLAUDE_AGENT_ANALYST,
-            "agents/agent007-analyst.md",
-            force,
-        )?;
+        for (filename, content) in claude_agent_specs() {
+            write_file(
+                &agents_dir.join(filename),
+                content,
+                &format!("agents/{filename}"),
+                force,
+            )?;
+        }
         step += 1;
     }
 
@@ -760,12 +762,23 @@ pub async fn execute(
         section(&format!("{step}. Registering MCP server with Cursor"));
         register_cursor_mcp(&cursor_scope_dir, &binary_path, force)?;
         step += 1;
+        if !global {
+            section(&format!("{step}. Writing Cursor project rules"));
+            register_cursor_project_files(&project_dir, force)?;
+            step += 1;
+        }
     }
 
     if do_codex {
         section(&format!("{step}. Registering MCP server with Codex"));
         register_codex_mcp(&codex_scope_dir, &binary_path, force)?;
         step += 1;
+
+        if !global {
+            section(&format!("{step}. Writing Codex project guidance"));
+            register_codex_project_files(&project_dir, force)?;
+            step += 1;
+        }
 
         section(&format!("{step}. Installing agent007 skill into Codex"));
         install_codex_skill(&binary_path, force)?;
@@ -778,6 +791,19 @@ pub async fn execute(
         ));
         register_copilot_mcp(&copilot_scope_dir, &binary_path, force)?;
         step += 1;
+        if !global {
+            section(&format!(
+                "{step}. Writing shared workspace MCP config for Copilot CLI"
+            ));
+            register_workspace_mcp_json(&binary_path, &project_dir, force)?;
+            step += 1;
+
+            section(&format!(
+                "{step}. Writing GitHub Copilot project instructions"
+            ));
+            register_copilot_project_files(&project_dir, force)?;
+            step += 1;
+        }
     }
 
     if do_zed {
@@ -787,7 +813,7 @@ pub async fn execute(
         } else {
             project_dir.join(".zed")
         };
-        register_zed(&zed_scope_dir, &project_dir, force)?;
+        register_zed(&zed_scope_dir, &project_dir, global, force)?;
         step += 1;
     }
 
@@ -1064,6 +1090,39 @@ fn register_claude_mcp(
     Ok(())
 }
 
+fn register_workspace_mcp_json(cmd: &str, project_dir: &Path, force: bool) -> Result<()> {
+    let mcp_path = project_dir.join(".mcp.json");
+    let mut root = load_json_root(&mcp_path, ".mcp.json")?;
+    let servers = root
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .unwrap();
+
+    if servers.contains_key("agent007") && !force {
+        ok(&format!(
+            "agent007 already registered in {}",
+            mcp_path.display()
+        ));
+    } else {
+        servers.insert(
+            "agent007".to_string(),
+            serde_json::json!({
+                "command": cmd,
+                "args": ["serve"]
+            }),
+        );
+    }
+
+    if let Some(parent) = mcp_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    write_json_root(&mcp_path, &root, &format!("mcpServers.agent007 → {cmd}"))?;
+    Ok(())
+}
+
 /// Write the agent007 MCP server entry into <cursor_dir>/mcp.json.
 fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     let mcp_path = cursor_dir.join("mcp.json");
@@ -1100,7 +1159,8 @@ fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> 
     Ok(())
 }
 
-/// Write the agent007 MCP server entry into <vscode_dir>/mcp.json for GitHub Copilot.
+/// Write the agent007 MCP server entry into <vscode_dir>/mcp.json for
+/// VS Code / Copilot Chat.
 ///
 /// VS Code MCP config uses a top-level "servers" map:
 /// {
@@ -1112,6 +1172,10 @@ fn register_cursor_mcp(cursor_dir: &Path, cmd: &str, force: bool) -> Result<()> 
 ///     }
 ///   }
 /// }
+///
+/// Note: GitHub Copilot CLI now prefers project `.mcp.json` / `.github/mcp.json`
+/// and user `~/.copilot/mcp-config.json`. Project-level `.mcp.json` is already
+/// written by the Claude/Copilot shared MCP path in project init.
 fn register_copilot_mcp(vscode_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     let mcp_path = vscode_dir.join("mcp.json");
 
@@ -1193,7 +1257,7 @@ fn register_codex_mcp(codex_dir: &Path, cmd: &str, force: bool) -> Result<()> {
     )?;
     println!();
     warn("Restart Codex to activate the MCP server");
-    info("agent007 agents (architect, analyst) are described in the `instructions` field");
+    info("agent007 coordinator + worker guidance is described in the `instructions` field");
     Ok(())
 }
 
@@ -1258,9 +1322,9 @@ fn which_agent007() -> String {
 /// Write Zed integration into <zed_dir>/:
 ///   settings.json — LSP binary + MCP context_server + agent tool permissions
 ///   tasks.json    — agent007 command palette tasks
-///   AGENTS.md     — rules file wiring Zed AI to agent007 workflows (project root)
+///   .rules        — native Zed rules file (project root)
 /// Project-local: .zed/ — Global: ~/.config/zed/
-fn register_zed(zed_dir: &Path, project_dir: &Path, force: bool) -> Result<()> {
+fn register_zed(zed_dir: &Path, project_dir: &Path, global: bool, force: bool) -> Result<()> {
     if let Some(parent) = zed_dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1268,7 +1332,9 @@ fn register_zed(zed_dir: &Path, project_dir: &Path, force: bool) -> Result<()> {
 
     register_zed_settings(zed_dir, force)?;
     register_zed_tasks(zed_dir, force)?;
-    register_zed_rules(project_dir, force)?;
+    if !global {
+        register_zed_rules(project_dir, force)?;
+    }
     Ok(())
 }
 
@@ -1372,37 +1438,110 @@ fn register_zed_settings(zed_dir: &Path, force: bool) -> Result<()> {
 }
 
 fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
-    // Zed checks AGENTS.md before CLAUDE.md, so this takes precedence.
-    let rules_path = project_dir.join("AGENTS.md");
-    let generated_rules_path = project_dir.join("AGENTS.agent007.generated.md");
-    if rules_path.exists() {
+    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
+    let rules_path = project_dir.join(".rules");
+    let content = zed_rules_md(&canonical_target);
+    write_file(&rules_path, &content, ".rules", force)?;
+    info("Zed auto-loads .rules into every Agent Panel interaction");
+    Ok(())
+}
+
+fn ensure_canonical_instruction_files(project_dir: &Path, force: bool) -> Result<String> {
+    let agents_path = project_dir.join("AGENTS.md");
+    let generated_path = project_dir.join("AGENTS.agent007.generated.md");
+
+    if agents_path.exists() {
         if force {
             write_file(
-                &generated_rules_path,
-                ZED_AGENTS_MD,
+                &generated_path,
+                AGENT007_AGENTS_MD,
                 "AGENTS.agent007.generated.md",
                 true,
             )?;
             ok(&format!(
                 "Preserved existing AGENTS.md → {}",
-                rules_path.display()
+                agents_path.display()
             ));
             info(&format!(
-                "Refreshed generated scaffold → {}",
-                generated_rules_path.display()
+                "Refreshed generated agent007 guidance → {}",
+                generated_path.display()
             ));
         } else {
+            write_file(
+                &generated_path,
+                AGENT007_AGENTS_MD,
+                "AGENTS.agent007.generated.md",
+                false,
+            )?;
             ok(&format!(
                 "AGENTS.md already exists — preserved ({})",
-                rules_path.display()
+                agents_path.display()
             ));
-            info("Use --force to refresh AGENTS.agent007.generated.md without replacing AGENTS.md");
+            info("Generated agent007 companion guidance without overwriting AGENTS.md");
         }
-        return Ok(());
+        return Ok("AGENTS.agent007.generated.md".to_string());
     }
-    write_file(&rules_path, ZED_AGENTS_MD, "AGENTS.md", true)?;
-    ok(&format!("Wrote AGENTS.md → {}", rules_path.display()));
-    info("Zed auto-loads AGENTS.md into every Agent Panel interaction");
+
+    write_file(&agents_path, AGENT007_AGENTS_MD, "AGENTS.md", true)?;
+    Ok("AGENTS.md".to_string())
+}
+
+fn register_claude_project_files(project_dir: &Path, claude_dir: &Path, force: bool) -> Result<()> {
+    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
+    let claude_md_path = project_dir.join("CLAUDE.md");
+    let claude_md = claude_md_wrapper(&canonical_target);
+    write_file(&claude_md_path, &claude_md, "CLAUDE.md", force)?;
+
+    let agents_dir = claude_dir.join("agents");
+    let created_agents_dir = !agents_dir.exists();
+    std::fs::create_dir_all(&agents_dir)?;
+    if created_agents_dir {
+        ok("agents/ created");
+    }
+    for (filename, content) in claude_agent_specs() {
+        write_file(
+            &agents_dir.join(filename),
+            content,
+            &format!("agents/{filename}"),
+            force,
+        )?;
+    }
+    Ok(())
+}
+
+fn register_cursor_project_files(project_dir: &Path, force: bool) -> Result<()> {
+    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
+    let rules_dir = project_dir.join(".cursor").join("rules");
+    std::fs::create_dir_all(&rules_dir)?;
+    let content = cursor_rule_mdc(&canonical_target);
+    write_file(
+        &rules_dir.join("agent007.mdc"),
+        &content,
+        ".cursor/rules/agent007.mdc",
+        force,
+    )?;
+    Ok(())
+}
+
+fn register_copilot_project_files(project_dir: &Path, force: bool) -> Result<()> {
+    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
+    let github_dir = project_dir.join(".github");
+    std::fs::create_dir_all(&github_dir)?;
+    let content = copilot_instructions_md(&canonical_target);
+    write_file(
+        &github_dir.join("copilot-instructions.md"),
+        &content,
+        ".github/copilot-instructions.md",
+        force,
+    )?;
+    Ok(())
+}
+
+fn register_codex_project_files(project_dir: &Path, force: bool) -> Result<()> {
+    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
+    let codex_note_path = project_dir.join("AGENT007-CODEX.md");
+    let content = codex_project_note_md(&canonical_target);
+    write_file(&codex_note_path, &content, "AGENT007-CODEX.md", force)?;
     Ok(())
 }
 
@@ -3195,7 +3334,163 @@ steps:
     depends_on: [write-docs]
 "#;
 
-// ── Claude Code sub-agent definitions ──────────────────────────────────────
+// ── Host instruction templates and Claude Code sub-agent definitions ──────
+
+const AGENT007_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
+
+You have access to the **agent007** MCP server.
+
+**Rule #1:** For any non-trivial task, route through agent007 before doing broad
+free-form reasoning, broad file reads, or ad-hoc shell/Python parsing.
+
+agent007 is the control plane. Use it for workflows, personas, repo intelligence,
+memory, and deterministic extraction.
+
+## Coordinator model
+
+Top-level coordinators:
+- **Architect** — design, decomposition, delivery planning, workflow choice
+- **Analyst** — investigation, review, root cause analysis, evidence synthesis
+
+Specialist workers underneath them include:
+- **Planner**
+- **Coder** / **ExpertCoder**
+- **CodeReviewer**
+- **SecurityReviewer**
+- **PerformanceEngineer**
+- **DocumentationWriter** / **DocsManager**
+- **UIUXDesigner**
+- **DebugAgent**
+- **Researcher**
+- **DevOpsEngineer**
+
+Keep the top-level small. Prefer richer workers underneath rather than adding many peer coordinators.
+
+## Routing ladder
+
+1. **Quick single-step work** → `agent007_run`
+2. **Repeatable expert pattern** → `agent007_skill_run`
+3. **Multi-step / approval-gated / parallel work** → `agent007_workflow_run`
+4. **Exact extraction or structured analysis** → ETR first
+5. **Execution of builds/tests/scripts** → shell/build/test tools are fine
+
+## Skills to prefer
+
+- `/dev-architect`
+- `/dev-debug`
+- `/dev-pr-review`
+- `/dev-tdd`
+- `/code-refactor`
+- `/code-optimize`
+- `/code-security-audit`
+- `/code-test-gen`
+- `/code-document`
+- `/meta-analyze-codebase`
+- `/project-prd`
+- `/project-plan`
+- `/project-release`
+- `/project-changelog`
+- `/brainstorm`
+- `/frontend-designer`
+
+## Workflows to prefer
+
+- `feature`
+- `code-review`
+- `security-audit`
+- `sparc`
+- `tdd`
+- `ideation`
+- `brainstorm`
+- `log-analysis`
+
+## Context and memory
+
+Before broad edits on an unfamiliar codebase:
+
+```text
+agent007_context_compile(task="<what you are about to do>")
+```
+
+Persist high-signal findings:
+
+```text
+agent007_memory_write(scope="project", key="<topic>", value="<finding>")
+```
+
+Review prior work:
+
+```text
+agent007_run_history()
+```
+
+## Execution vs interpretation
+
+Use shell/build/test tools for **execution**:
+- `cargo test`
+- `cargo build`
+- `npm run build`
+- `pytest`
+- existing repo scripts
+
+Use agent007 / ETR for **interpretation and extraction**:
+- summarize build warnings
+- inspect JSON or tables
+- query workflow state
+- compare artifacts or metrics
+- grep/glob/status tasks
+- repo graph callers/callees/context
+
+Do **not** default to custom Python or shell parsing if ETR can do the job.
+
+## ETR-first rule
+
+Prefer ETR built-ins first for deterministic tasks:
+- `etr.grep`
+- `etr.glob`
+- `etr.file_stat`
+- `etr.diff`
+- `etr.csv_slice`
+- `etr.json_extract`
+- `etr.graph_build`
+- `etr.graph_status`
+- `etr.symbol_lookup`
+- `etr.callers`
+- `etr.callees`
+- `etr.impact_radius`
+- `etr.context_bundle`
+
+If unsure:
+
+```text
+agent007_etr_list()
+```
+
+## Anti-patterns
+
+Avoid:
+- writing throwaway Python to parse JSON/logs/tables when ETR exists
+- broad-reading many files before trying `agent007_context_compile`
+- improvising on a task that clearly fits a skill or workflow
+- treating hosted-MCP mode as if the host should ignore agent007
+- pasting raw shell output as the final answer when synthesis is needed
+
+## Hosted-MCP reality
+
+In hosted-MCP mode, the host LLM is still the planner. That means it must deliberately
+choose agent007 surfaces:
+- workflows for multi-step delivery
+- skills for repeatable expert work
+- personas for role-specific tasks
+- ETR for deterministic extraction
+
+## Examples
+
+- **Build warning analysis:** run the build with shell, then use agent007 / ETR to interpret it
+- **Large feature request:** route to `feature` or `sparc`, do not broad-plan it by hand
+- **Code review or audit:** use `code-review` or `security-audit`
+- **Repo structure question:** use Repo Intelligence / graph tools first, then read only pointed files
+"#;
 
 const CLAUDE_AGENT_ARCHITECT: &str = r#"---
 name: agent007-architect
@@ -3332,6 +3627,209 @@ Ordered list of 3–5 specific actions the user should take right now.
 - **Actionable over academic** — every finding needs a concrete next step
 "#;
 
+const CLAUDE_AGENT_BUILDER: &str = r#"---
+name: agent007-builder
+description: >
+  Delivery specialist for implementation-heavy work. Uses feature, sparc, or tdd
+  workflows and builder personas to turn plans into shippable code.
+---
+
+You are the **agent007 Builder** — an implementation-focused delivery agent.
+
+Use this agent when:
+- the user wants a feature built or refactored
+- the task is implementation-first rather than analysis-first
+- there is already enough clarity to start coding
+
+Preferred routing:
+1. multi-step implementation → `feature`, `sparc`, or `tdd`
+2. focused implementation slice → `agent007_task_submit` with `Coder` or `ExpertCoder`
+3. broad codebase edit → `agent007_context_compile` first
+
+Use shell for build/test execution, but prefer ETR or repo graph tools for interpretation.
+"#;
+
+const CLAUDE_AGENT_REVIEWER: &str = r#"---
+name: agent007-reviewer
+description: >
+  Quality gate specialist for correctness, maintainability, security, and test coverage.
+  Uses code-review or security-audit workflows and synthesizes actionable findings.
+---
+
+You are the **agent007 Reviewer** — a quality and risk gate.
+
+Use this agent when:
+- the user asks for review, audit, critique, or validation
+- a change set needs correctness, maintainability, or security feedback
+- a task finished and now needs a quality pass
+
+Routing:
+- general review → `code-review`
+- security-heavy review → `security-audit`
+- focused direct review → `agent007_task_submit` with `CodeReviewer` or `SecurityReviewer`
+"#;
+
+const CLAUDE_AGENT_FRONTEND_DESIGNER: &str = r#"---
+name: agent007-frontend-designer
+description: >
+  Frontend and UX specialist for dashboard/UI changes, interaction design,
+  accessibility, and implementation-ready component direction.
+---
+
+You are the **agent007 Frontend Designer** — a UI delivery specialist.
+
+Use this agent when:
+- the task touches dashboard/UI/frontend flows
+- interaction, accessibility, or visual hierarchy matters
+- the user wants a frontend surface critiqued, redesigned, or implemented
+
+Routing:
+- focused frontend work → `/frontend-designer`
+- direct persona routing → `agent007_task_submit` with `UIUXDesigner`
+- broad surface → `agent007_context_compile` before editing
+"#;
+
+const CLAUDE_AGENT_RELEASE_MANAGER: &str = r#"---
+name: agent007-release-manager
+description: >
+  Release and rollout specialist for versioning, changelogs, validation gates,
+  release notes, and rollback planning.
+---
+
+You are the **agent007 Release Manager** — a controlled ship/no-ship operator.
+
+Use this agent when:
+- preparing a release
+- deciding patch/minor release scope
+- producing release notes or changelog summaries
+- checking rollout or rollback readiness
+
+Routing:
+- release strategy → `/project-release`
+- changelog generation → `/project-changelog`
+- direct implementation-adjacent release prep → `agent007_task_submit` with `DevOpsEngineer`
+"#;
+
+const CLAUDE_AGENT_PLANNER: &str = r#"---
+name: agent007-planner
+description: >
+  Planning specialist for milestones, execution slices, dependencies, and acceptance criteria.
+---
+
+You are the **agent007 Planner** — a planning and sequencing specialist.
+
+Use this agent when:
+- the work is underspecified
+- a feature needs slicing into milestones
+- you need explicit dependencies, validation, and acceptance criteria
+
+Routing:
+- `/project-plan`
+- `/project-prd`
+- direct persona `Planner`
+"#;
+
+fn claude_md_wrapper(canonical_target: &str) -> String {
+    let shared_refs = if canonical_target == "AGENTS.md" {
+        "@AGENTS.md".to_string()
+    } else {
+        format!("@AGENTS.md\n@{canonical_target}")
+    };
+    format!(
+        r#"# Claude Code project guidance
+
+{shared_refs}
+
+## Claude Code
+
+- Use `CLAUDE.md` as the Claude-native entry file and treat `{canonical_target}` as the detailed shared operating contract.
+- For non-trivial work, route through agent007 before broad free-form reasoning.
+- In hosted-MCP mode, Claude is still the planner, so it must deliberately choose agent007 workflows, skills, personas, and ETR tools.
+- Use shell for execution; use agent007 / ETR for interpretation and structured extraction.
+"#
+    )
+}
+
+fn cursor_rule_mdc(canonical_target: &str) -> String {
+    let shared_refs = if canonical_target == "AGENTS.md" {
+        "@AGENTS.md".to_string()
+    } else {
+        format!("@AGENTS.md\n@{canonical_target}")
+    };
+    format!(
+        r#"---
+description: agent007 routing and repo-intelligence rules
+alwaysApply: true
+---
+
+{shared_refs}
+
+- Prefer agent007 for non-trivial work.
+- Prefer ETR for deterministic extraction and repo graph queries.
+- Use shell/build/test tools for execution, not ad-hoc parsing.
+"#
+    )
+}
+
+fn copilot_instructions_md(canonical_target: &str) -> String {
+    format!(
+        r#"# agent007 guidance for GitHub Copilot
+
+Also honor `{canonical_target}` as the primary shared operating contract for this repository.
+
+- Route non-trivial tasks through agent007 first.
+- Prefer skills and workflows before broad free-form planning.
+- Use ETR for deterministic extraction/query/status tasks before custom shell/Python parsing.
+- Use shell for execution of builds/tests/scripts, then synthesize results through agent007.
+"#
+    )
+}
+
+fn zed_rules_md(canonical_target: &str) -> String {
+    format!(
+        r#"# agent007 rules for Zed
+
+Use `{canonical_target}` as the detailed shared operating contract for this repository.
+
+- Prefer agent007 for non-trivial work.
+- Prefer Repo Intelligence and ETR before broad file reads or ad-hoc parsing.
+- Use workflows for multi-step delivery and skills for repeatable specialist work.
+"#
+    )
+}
+
+fn codex_project_note_md(canonical_target: &str) -> String {
+    format!(
+        r#"# Codex + agent007 project note
+
+Codex should load `{canonical_target}` as the detailed shared operating contract for this repository.
+
+Use agent007 first for:
+- multi-step features
+- code review / security review
+- repo intelligence / graph interrogation
+- deterministic extraction via ETR
+
+Use shell for execution and verification, not as the default interpretation layer.
+"#
+    )
+}
+
+fn claude_agent_specs() -> [(&'static str, &'static str); 7] {
+    [
+        ("agent007-architect.md", CLAUDE_AGENT_ARCHITECT),
+        ("agent007-analyst.md", CLAUDE_AGENT_ANALYST),
+        ("agent007-planner.md", CLAUDE_AGENT_PLANNER),
+        ("agent007-builder.md", CLAUDE_AGENT_BUILDER),
+        ("agent007-reviewer.md", CLAUDE_AGENT_REVIEWER),
+        (
+            "agent007-frontend-designer.md",
+            CLAUDE_AGENT_FRONTEND_DESIGNER,
+        ),
+        ("agent007-release-manager.md", CLAUDE_AGENT_RELEASE_MANAGER),
+    ]
+}
+
 #[allow(dead_code)]
 const EXAMPLE_AGENT: &str = r#"# Example custom agent persona
 # Save to ~/.agent007/personas/<name>.toml
@@ -3360,6 +3858,24 @@ const CODEX_INSTRUCTIONS: &str = r#"# agent007 — AI Orchestration Agents
 You have access to the **agent007** MCP server. Use `mcp__agent007__*` tools for complex,
 multi-step, or analytical tasks. Always prefer agent007 tools over ad-hoc generation.
 For any non-trivial coding task, route through `agent007_dispatch` first.
+
+Top-level coordinators:
+- `Architect` — design, decomposition, delivery planning
+- `Analyst` — investigation, review, evidence synthesis
+
+Specialist workers exist underneath them:
+- `Planner`
+- `Coder` / `ExpertCoder`
+- `CodeReviewer`
+- `SecurityReviewer`
+- `PerformanceEngineer`
+- `DocumentationWriter`
+- `UIUXDesigner`
+- `DebugAgent`
+- `Researcher`
+
+Use shell/build/test tools for **execution**.  
+Use agent007 / ETR for **interpretation, extraction, status, and repo graph queries**.
 
 ## Simple Command Mode (Recommended in Codex)
 
@@ -3432,131 +3948,6 @@ mcp__agent007__agent007_task_submit  persona="Analyst"   → direct analysis
 | `feature` | Full-cycle feature delivery with approval gates |
 | `ideation` | Research → PRD → architecture → project plan |
 | `brainstorm` | Free-form ideation → PRD + ideation doc (lightweight) |
-"#;
-
-const ZED_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
-
-You have access to the **agent007** MCP server (`context_servers.agent007` in Zed,
-`mcpServers.agent007` in Claude Code / Cursor, `servers.agent007` in VS Code).
-
-**Rule #1:** For any task that is non-trivial, route through agent007 before generating
-free-form code or answers. It has memory, workflows, and specialist agents — use them.
-
----
-
-## When to use agent007 (and how)
-
-### Quick task → `agent007_run`
-Single-step work: summarize, explain, rename, small refactor.
-```
-agent007_run("refactor the UserService class to use dependency injection")
-```
-
-### Skill (focused prompt) → `agent007_skill_run`
-Repeatable expert patterns. Call `agent007_skill_list` to discover what's installed.
-
-| Trigger | What it does |
-|---------|-------------|
-| `/dev-architect` | Design system architecture from requirements |
-| `/dev-debug` | Systematic hypothesis-driven debugging |
-| `/dev-pr-review` | Thorough PR review — bugs, security, logic |
-| `/dev-tdd` | TDD red-green-refactor coaching |
-| `/code-refactor` | Identify code smells, propose improvements |
-| `/code-optimize` | Profile analysis, performance suggestions |
-| `/code-security-audit` | OWASP, secrets scan, threat modeling |
-| `/code-test-gen` | Generate test suites with edge cases |
-| `/code-document` | API docs, architecture docs, inline comments |
-| `/meta-analyze-codebase` | Tech stack, patterns, architecture overview |
-| `/project-prd` | Product requirements with user stories |
-| `/project-plan` | Break features into tasks with estimates |
-| `/project-changelog` | Changelog from git history |
-| `/brainstorm` | Explore a problem, generate 3–5 approaches |
-
-### Workflow (multi-agent pipeline) → `agent007_workflow_run`
-Parallel specialist agents for complex work. Call `agent007_workflow_list` to see all.
-
-| Workflow | Use when |
-|----------|----------|
-| `tdd` | Writing a feature test-first (Red → Green → Refactor) |
-| `code-review` | Need security + performance + style reviewed in parallel |
-| `security-audit` | Deep OWASP + secrets + dependency + threat model audit |
-| `feature` | Full delivery: spec → arch → implement → review → docs |
-| `sparc` | Greenfield feature: Spec → Pseudocode → Arch → Refine → Complete |
-| `ideation` | Research → PRD → architecture → project plan |
-| `brainstorm` | Lightweight ideation → PRD (stops before architecture) |
-| `log-analysis` | Analyze logs / traces / errors for root cause |
-
----
-
-## Context and memory
-
-Before broad edits on an unfamiliar codebase:
-```
-agent007_context_compile(task="<what you're about to do>")
-```
-This pulls repo brain + relevant files + memory notes into a compact context block.
-
-To persist a high-signal finding for future sessions:
-```
-agent007_memory_write(scope="project", key="<topic>", value="<finding>")
-```
-
-To review prior work on this repo:
-```
-agent007_run_history()
-```
-
----
-
-## Hosted workflow execution
-
-When running hosted workflows (`agent007_workflow_start` / `agent007_workflow_next`):
-
-1. Fetch next steps with `agent007_workflow_next`
-2. Execute each step's prompt using your normal tools (read files, run commands, edit code)
-3. Submit output with `agent007_workflow_submit_step`
-4. At approval gates, call `agent007_workflow_approve` (decision: approve/deny/edit)
-5. When a step requests token recording, call `agent007_record_tokens` with the output —
-   this keeps dashboard metrics accurate and saves the output to memory
-
----
-
-## Hard rules
-
-- **Never ignore approval gates** — workflows pause at `approval_required` steps intentionally
-- **Prefer `agent007_context_compile` over broad file reads** when context is large
-- **If unsure what's available**, call `agent007_skill_list` or `agent007_workflow_list`
-- **Do not add `--no-dashboard`** to `agent007 serve` — the dashboard is always on
-- **MCP server:** `agent007 serve`  |  **Dashboard:** `http://localhost:8007`
-
----
-
-## MCP efficiency rules (all agents)
-
-When interacting with `agent007` MCP tools:
-
-1. **Call MCP tools directly** (`agent007_workflow_status`, `agent007_workflow_next`, etc.).
-2. **Do not generate Python/temp-file JSON parsing scripts** unless explicitly required.
-3. **Do not dump full JSON by default**; provide compact status summaries:
-   - completed/total
-   - running step IDs
-   - ready step IDs
-   - pending approval step
-   - last error
-4. **Only show full prompts/outputs when requested** by the user.
-5. **Avoid repeating unchanged workflow state** across polls.
-6. **Prefer concise structured updates** over verbose logs to reduce token/context bloat.
-7. **Prefer ETR tools over shell tooling** for data/query/extract operations when an ETR tool is available (`agent007_etr_list` / `agent007_etr_call`).
-8. **Prefer ETR built-in tools first** for extraction/query/status/log tasks:
-   - `etr.json_extract`, `etr.json_query`, `etr.json_query_v2`
-   - `etr.text_extract`, `etr.table_select`, `etr.table_stats`, `etr.group_count`
-   - `etr.time_window_filter`, `etr.join_on_key`, `etr.metrics_summary`, `etr.delta_compare`
-   - `etr.workflow_status_summary`, `etr.workflow_outputs_index`, `etr.workflow_step_health`
-   - `etr.artifact_read`, `etr.logs_slice`, `etr.logs_correlate`
-   - `etr.glob`, `etr.file_stat`, `etr.grep`, `etr.diff`, `etr.csv_slice`, `etr.math`
-   - `etr.semantic_search_local`, `etr.policy_check`
-9. **Use shell scripts only as fallback** when no suitable ETR tool exists.
-10. **Keep agent007 domain-agnostic**: domain-specific analysis logic must live in plugins/optional packs, not core built-ins.
 "#;
 
 #[cfg(test)]
@@ -3694,19 +4085,92 @@ name = "night"
     fn zed_rules_force_preserves_existing_agents_and_writes_generated_companion() {
         let temp = tempfile::tempdir().unwrap();
         let project_dir = temp.path();
-        let rules_path = project_dir.join("AGENTS.md");
-        std::fs::write(&rules_path, "local custom guidance").unwrap();
+        let agents_path = project_dir.join("AGENTS.md");
+        std::fs::write(&agents_path, "local custom guidance").unwrap();
 
         register_zed_rules(project_dir, true).unwrap();
 
-        let content = std::fs::read_to_string(&rules_path).unwrap();
+        let content = std::fs::read_to_string(&agents_path).unwrap();
         assert_eq!(content, "local custom guidance");
+
+        let rules_path = project_dir.join(".rules");
+        let rules = std::fs::read_to_string(&rules_path).unwrap();
+        assert!(rules.contains("AGENTS.agent007.generated.md"));
 
         let generated_path = project_dir.join("AGENTS.agent007.generated.md");
         let generated = std::fs::read_to_string(&generated_path).unwrap();
-        assert!(generated.contains("## When to use agent007"));
-        assert!(generated.contains("agent007_record_tokens"));
-        assert!(generated.contains("agent007_workflow_run"));
+        assert!(generated.contains("## Routing ladder"));
+        assert!(generated.contains("Hosted-MCP reality"));
+        assert!(generated.contains("agent007_context_compile"));
+    }
+
+    #[test]
+    fn claude_project_files_write_wrapper_and_all_subagents() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_dir = temp.path();
+        let claude_dir = project_dir.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        register_claude_project_files(project_dir, &claude_dir, false).unwrap();
+
+        let claude_md = std::fs::read_to_string(project_dir.join("CLAUDE.md")).unwrap();
+        assert!(claude_md.contains("@AGENTS.md"));
+
+        let agent_names = [
+            "agent007-architect.md",
+            "agent007-analyst.md",
+            "agent007-planner.md",
+            "agent007-builder.md",
+            "agent007-reviewer.md",
+            "agent007-frontend-designer.md",
+            "agent007-release-manager.md",
+        ];
+        for filename in agent_names {
+            assert!(
+                claude_dir.join("agents").join(filename).exists(),
+                "missing generated Claude sub-agent {filename}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_and_copilot_project_files_use_host_native_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_dir = temp.path();
+
+        register_cursor_project_files(project_dir, false).unwrap();
+        register_copilot_project_files(project_dir, false).unwrap();
+        register_workspace_mcp_json("/opt/agent007", project_dir, false).unwrap();
+
+        let cursor_rule =
+            std::fs::read_to_string(project_dir.join(".cursor/rules/agent007.mdc")).unwrap();
+        assert!(cursor_rule.contains("alwaysApply: true"));
+        assert!(cursor_rule.contains("@AGENTS.md"));
+
+        let copilot =
+            std::fs::read_to_string(project_dir.join(".github/copilot-instructions.md")).unwrap();
+        assert!(copilot.contains("GitHub Copilot"));
+        assert!(copilot.contains("AGENTS.agent007.generated.md"));
+
+        let workspace_mcp: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(project_dir.join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            workspace_mcp["mcpServers"]["agent007"]["command"],
+            "/opt/agent007"
+        );
+    }
+
+    #[test]
+    fn global_zed_registration_skips_project_rule_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_dir = temp.path();
+        let zed_dir = temp.path().join("zed-global");
+
+        register_zed(&zed_dir, project_dir, true, false).unwrap();
+
+        assert!(!project_dir.join(".rules").exists());
+        assert!(!project_dir.join("AGENTS.md").exists());
     }
 
     #[tokio::test]

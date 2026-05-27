@@ -88,7 +88,7 @@ mod tests {
     fn list_output_covers_all_builtins() {
         let registry = PersonaRegistry::built_in();
         let personas = registry.list();
-        assert_eq!(personas.len(), 16);
+        assert_eq!(personas.len(), 17);
         let names: Vec<&str> = personas.iter().map(|p| p.name.as_str()).collect();
         for expected in &[
             "Researcher",
@@ -107,6 +107,7 @@ mod tests {
             "DocsManager",
             "DevOpsEngineer",
             "DataEngineer",
+            "Analyst",
         ] {
             assert!(
                 names.contains(expected),
