@@ -199,12 +199,7 @@ fn parse_source_with_tree_sitter(
         extract_tailwind_tokens(text, &mut parsed.imports);
     }
     if matches!(language, "html" | "vue" | "xml") {
-        extract_markup_symbols_from_text(
-            text,
-            rel_path,
-            &mut parsed.symbols,
-            language == "xml",
-        );
+        extract_markup_symbols_from_text(text, rel_path, &mut parsed.symbols, language == "xml");
     }
     Ok(parsed)
 }
@@ -833,10 +828,8 @@ fn extract_rust_imports(text: &str, imports: &mut Vec<String>) {
 }
 
 fn extract_js_like_imports(text: &str, imports: &mut Vec<String>) {
-    let import_re = Regex::new(
-        r#"(?m)^\s*(?:import|export)\b[^"'`\n]*["']([^"']+)["']"#,
-    )
-    .expect("valid js import regex");
+    let import_re = Regex::new(r#"(?m)^\s*(?:import|export)\b[^"'`\n]*["']([^"']+)["']"#)
+        .expect("valid js import regex");
     let mut seen: BTreeSet<String> = imports.iter().cloned().collect();
     for caps in import_re.captures_iter(text) {
         let import_path = caps[1].to_string();
@@ -847,8 +840,8 @@ fn extract_js_like_imports(text: &str, imports: &mut Vec<String>) {
 }
 
 fn extract_jvm_imports(text: &str, imports: &mut Vec<String>) {
-    let import_re =
-        Regex::new(r"(?m)^\s*(?:package|import)\s+([A-Za-z0-9_.*]+)").expect("valid jvm import regex");
+    let import_re = Regex::new(r"(?m)^\s*(?:package|import)\s+([A-Za-z0-9_.*]+)")
+        .expect("valid jvm import regex");
     let mut seen: BTreeSet<String> = imports.iter().cloned().collect();
     for caps in import_re.captures_iter(text) {
         let import_path = caps[0].trim().to_string();
@@ -1002,7 +995,12 @@ const cls = <div className="px-4 text-sm md:flex"></div>;
     #[test]
     fn tree_sitter_enrichment_extracts_json_and_yaml_keys() {
         let mut json = ParsedRustFile::default();
-        enrich_parsed_file_with_tree_sitter("json", r#"{ "name": "demo", "scripts": {} }"#, "package.json", &mut json);
+        enrich_parsed_file_with_tree_sitter(
+            "json",
+            r#"{ "name": "demo", "scripts": {} }"#,
+            "package.json",
+            &mut json,
+        );
         assert!(json.symbols.iter().any(|symbol| symbol.name == "name"));
         assert!(json.symbols.iter().any(|symbol| symbol.name == "scripts"));
 
@@ -1050,7 +1048,10 @@ const cls = <div className="px-4 text-sm md:flex"></div>;
             "Demo.java",
             &mut java,
         );
-        assert!(java.imports.iter().any(|import| import.contains("package demo")));
+        assert!(java
+            .imports
+            .iter()
+            .any(|import| import.contains("package demo")));
         assert!(java.symbols.iter().any(|symbol| symbol.name == "Demo"));
 
         let mut kotlin = ParsedRustFile::default();
@@ -1060,7 +1061,10 @@ const cls = <div className="px-4 text-sm md:flex"></div>;
             "Demo.kt",
             &mut kotlin,
         );
-        assert!(kotlin.imports.iter().any(|import| import.contains("import foo.bar")));
+        assert!(kotlin
+            .imports
+            .iter()
+            .any(|import| import.contains("import foo.bar")));
         assert!(kotlin.symbols.iter().any(|symbol| symbol.name == "Demo"));
     }
 
