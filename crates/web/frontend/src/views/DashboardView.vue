@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useApi } from '../composables/useApi.js'
+import { graphExplorerPayloadFromResult } from '../composables/graphExplorer.js'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -493,8 +494,9 @@ async function renderArtifactMermaid() {
   }
 }
 
+
 const graphExplorerMermaidSource = computed(() => {
-  const payload = graphExplorerResult.value?.output
+  const payload = graphExplorerPayloadFromResult(graphExplorerResult.value)
   const tool = graphExplorerResult.value?.tool
   if (!payload || !tool) return ''
 
