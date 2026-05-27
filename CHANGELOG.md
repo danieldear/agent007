@@ -8,6 +8,20 @@ for public releases.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-27
+
+### Added
+
+- Tree-sitter semantic overlay for structural repo intelligence, with Rust-first depth and multi-language support across Python, TypeScript/JavaScript, C/C++, Java, Kotlin, HTML, Vue, XML, JSON, and YAML.
+- Expanded Repo Intelligence readiness reporting to distinguish structural graph, LSP, and tree-sitter semantic sources.
+
+### Changed
+
+- Repo graph extraction now uses tree-sitter-backed enrichment where available while preserving baseline parser fallbacks.
+- Dashboard and Repo Intelligence surfaces now present semantic-source status more clearly and reduce misleading install/recommendation states.
+- Homepage and product messaging on main were refreshed to better match the shipped runtime and repo-intelligence capabilities.
+
+
 ## [0.5.0] - 2026-05-25
 
 ### Added
