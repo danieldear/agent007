@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::tree_sitter_support::enrich_parsed_rust_file_with_tree_sitter;
 
 const GRAPH_VERSION: u32 = 1;
 const GRAPH_FILENAME: &str = "repo_graph_v1.json";
@@ -316,24 +317,24 @@ impl RepoGraphBuilder {
 }
 
 #[derive(Debug, Clone)]
-struct RustSymbol {
-    name: String,
-    kind: String,
-    line: usize,
-    signature: String,
-    calls: Vec<RustCall>,
+pub(crate) struct RustSymbol {
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) line: usize,
+    pub(crate) signature: String,
+    pub(crate) calls: Vec<RustCall>,
 }
 
 #[derive(Debug, Clone)]
-struct RustCall {
-    name: String,
-    line: usize,
+pub(crate) struct RustCall {
+    pub(crate) name: String,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, Default)]
-struct ParsedRustFile {
-    imports: Vec<String>,
-    symbols: Vec<RustSymbol>,
+pub(crate) struct ParsedRustFile {
+    pub(crate) imports: Vec<String>,
+    pub(crate) symbols: Vec<RustSymbol>,
 }
 
 pub fn default_graph_path_for_root(root: &Path) -> PathBuf {
@@ -862,6 +863,12 @@ fn relative_path(root: &Path, path: &Path) -> PathBuf {
 
 fn parse_rust_file(path: &Path, rel_path: &str) -> Result<ParsedRustFile, CoreError> {
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
+    let mut parsed = parse_rust_file_fallback(&text, rel_path);
+    enrich_parsed_rust_file_with_tree_sitter(&text, rel_path, &mut parsed);
+    Ok(parsed)
+}
+
+fn parse_rust_file_fallback(text: &str, rel_path: &str) -> ParsedRustFile {
     let import_re = Regex::new(r"^\s*use\s+([^;]+);").expect("valid regex");
     let fn_re = Regex::new(
         r#"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|extern\s+"[^"]+")\s+)*fn\s+([A-Za-z_][A-Za-z0-9_]*)"#,
@@ -949,10 +956,10 @@ fn parse_rust_file(path: &Path, rel_path: &str) -> Result<ParsedRustFile, CoreEr
     if let Some(symbol) = current.take() {
         parsed.symbols.push(symbol);
     }
-    Ok(parsed)
+    parsed
 }
 
-fn should_skip_call_name(name: &str) -> bool {
+pub(crate) fn should_skip_call_name(name: &str) -> bool {
     matches!(
         name,
         "if" | "for"

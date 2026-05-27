@@ -7045,6 +7045,8 @@ fn repo_intelligence_readiness_for_project(
                 installable: false,
                 status: "unknown".to_string(),
                 note: "readiness detection failed".to_string(),
+                supported_languages: Vec::new(),
+                active_languages: Vec::new(),
             },
             recommendations: Vec::new(),
             notes: vec!["repo intelligence readiness detection failed".to_string()],

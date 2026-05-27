@@ -47,6 +47,28 @@ const m = computed(() => metrics.value || {
 const repoIntel = computed(() => m.value.repo_intelligence || null)
 const repoGraph = computed(() => m.value.repo_graph || null)
 const installRecommendations = computed(() => repoIntel.value?.recommendations || [])
+const lspSummary = computed(() => {
+  const languages = repoIntel.value?.languages || []
+  let active = 0
+  let installed = 0
+  for (const lang of languages) {
+    if (lang.lsp?.active) active += 1
+    else if (lang.lsp?.installed) installed += 1
+  }
+  return {
+    active,
+    installed,
+    total: languages.filter(lang => !!lang.lsp).length,
+  }
+})
+const treeSitterSummary = computed(() => {
+  const info = repoIntel.value?.tree_sitter
+  return {
+    status: info?.status || 'unknown',
+    active: info?.active_languages || [],
+    supported: info?.supported_languages || [],
+  }
+})
 const capabilityNotes = computed(() => {
   const notes = []
   if (repoIntel.value?.tree_sitter?.note) {
@@ -388,8 +410,15 @@ onMounted(async () => {
           <div class="text-[11px] font-mono text-base-content/35 mt-1">baseline {{ repoIntel?.baseline_ready ? 'ready' : 'unknown' }}</div>
         </div>
         <div class="rounded-xl border border-base-content/10 bg-base-200 p-4">
-          <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/30 mb-2">Semantic Enrichment</div>
-          <div class="text-[11px] font-mono text-base-content/55">tree-sitter {{ repoIntel?.tree_sitter?.status || 'unknown' }}</div>
+          <div class="text-[9px] font-mono uppercase tracking-widest text-base-content/30 mb-2">Semantic Sources</div>
+          <div class="text-[11px] font-mono text-base-content/55">
+            lsp {{ lspSummary.active ? 'active' : (lspSummary.installed ? 'available' : 'missing') }}
+            <span class="text-base-content/35">({{ lspSummary.active }}/{{ lspSummary.total }} active)</span>
+          </div>
+          <div class="text-[11px] font-mono text-base-content/55">
+            tree-sitter {{ treeSitterSummary.status }}
+            <span v-if="treeSitterSummary.active.length" class="text-base-content/35">({{ treeSitterSummary.active.join(', ') }})</span>
+          </div>
           <div class="text-[11px] font-mono text-base-content/35 mt-1">
             {{ installRecommendations.length }} install action{{ installRecommendations.length === 1 ? '' : 's' }}
           </div>

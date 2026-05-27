@@ -10,6 +10,7 @@ use crate::error::CoreError;
 use crate::repo_graph::{
     build_and_save_graph, default_graph_path_for_root, graph_status, RepoGraphStatus,
 };
+use crate::tree_sitter_support::support_summary_for_languages;
 
 const READINESS_VERSION: u32 = 1;
 const READINESS_FILENAME: &str = "repo_intelligence_readiness_v1.json";
@@ -94,6 +95,8 @@ pub struct TreeSitterReadiness {
     pub installable: bool,
     pub status: String,
     pub note: String,
+    pub supported_languages: Vec<String>,
+    pub active_languages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,11 +211,19 @@ pub fn detect_repo_intelligence_readiness(
         });
     }
 
+    let detected_language_kinds: Vec<LanguageKind> = enriched_languages
+        .iter()
+        .filter_map(|lang| language_kind_from_str(&lang.language))
+        .collect();
+    let tree_sitter = tree_sitter_readiness_for_languages(&detected_language_kinds);
+    let has_tree_sitter = !tree_sitter.active_languages.is_empty();
+    let has_tree_sitter_available = !tree_sitter.supported_languages.is_empty();
+
     let state = if enriched_languages.is_empty() {
         RepoIntelligenceState::EmptyRepo
-    } else if has_active_lsp {
+    } else if has_active_lsp || has_tree_sitter {
         RepoIntelligenceState::EnrichmentActive
-    } else if has_installed_lsp {
+    } else if has_installed_lsp || has_tree_sitter_available {
         RepoIntelligenceState::EnrichmentAvailable
     } else {
         RepoIntelligenceState::BaselineOnly
@@ -227,7 +238,7 @@ pub fn detect_repo_intelligence_readiness(
             "Source files were detected, but no semantic enrichers are currently installed or configured.".to_string(),
         ),
         RepoIntelligenceState::EnrichmentAvailable => notes.push(
-            "Semantic enrichers are installed on this machine, but agent007 is still operating in baseline structural mode for at least one detected language.".to_string(),
+            "Semantic enrichers are available on this machine or in the current build, but agent007 is still operating in baseline structural mode for at least one detected language.".to_string(),
         ),
         RepoIntelligenceState::EnrichmentActive => notes.push(
             "Semantic enrichment is active for at least one detected language.".to_string(),
@@ -247,13 +258,7 @@ pub fn detect_repo_intelligence_readiness(
         baseline_ready: true,
         graph,
         languages: enriched_languages,
-        tree_sitter: TreeSitterReadiness {
-            wired: false,
-            available: false,
-            installable: false,
-            status: "not_wired".to_string(),
-            note: "Tree-sitter semantic enrichment is not wired into the current build yet; do not auto-install it as if it were already active.".to_string(),
-        },
+        tree_sitter,
         recommendations,
         notes,
     })
@@ -521,6 +526,56 @@ fn default_lsp_server_for(kind: &LanguageKind) -> Option<(&'static str, &'static
     }
 }
 
+fn language_kind_from_str(value: &str) -> Option<LanguageKind> {
+    match value {
+        "rust" => Some(LanguageKind::Rust),
+        "python" => Some(LanguageKind::Python),
+        "typescript" => Some(LanguageKind::TypeScript),
+        "javascript" => Some(LanguageKind::JavaScript),
+        "go" => Some(LanguageKind::Go),
+        "c" => Some(LanguageKind::C),
+        "cpp" => Some(LanguageKind::Cpp),
+        _ => None,
+    }
+}
+
+fn tree_sitter_readiness_for_languages(languages: &[LanguageKind]) -> TreeSitterReadiness {
+    let summary = support_summary_for_languages(languages.iter().cloned());
+    let status = if languages.is_empty() {
+        "deferred"
+    } else if summary.active_languages.is_empty() {
+        "unsupported"
+    } else if summary.active_languages.len() == languages.len() {
+        "active"
+    } else {
+        "partial"
+    };
+    let note = if languages.is_empty() {
+        "Built-in tree-sitter enrichment is wired and will activate automatically when supported source files appear.".to_string()
+    } else if summary.active_languages.is_empty() {
+        "No built-in tree-sitter grammar is wired for the currently detected languages in this build; baseline graph + LSP remain available.".to_string()
+    } else if summary.active_languages.len() == languages.len() {
+        format!(
+            "Built-in tree-sitter enrichment is active for all detected supported languages: {}.",
+            summary.active_languages.join(", ")
+        )
+    } else {
+        format!(
+            "Built-in tree-sitter enrichment is active for {}. Other detected languages continue with the baseline graph and optional LSP until more grammars are added.",
+            summary.active_languages.join(", ")
+        )
+    };
+    TreeSitterReadiness {
+        wired: summary.wired,
+        available: !summary.supported_languages.is_empty(),
+        installable: false,
+        status: status.to_string(),
+        note,
+        supported_languages: summary.supported_languages,
+        active_languages: summary.active_languages,
+    }
+}
+
 fn default_install_recommendation(
     kind: &LanguageKind,
     configured: bool,
@@ -606,6 +661,9 @@ mod tests {
         let rust_lsp = readiness.languages[0].lsp.as_ref().unwrap();
         assert_eq!(rust_lsp.language, "rust");
         assert!(rust_lsp.command.contains("rust-analyzer"));
+        assert!(readiness.tree_sitter.wired);
+        assert_eq!(readiness.tree_sitter.status, "active");
+        assert_eq!(readiness.tree_sitter.active_languages, vec!["rust"]);
     }
 
     #[test]
