@@ -89,6 +89,14 @@ pub(crate) fn enrich_parsed_file_with_tree_sitter(
     }
 }
 
+pub(crate) fn parse_source_with_tree_sitter_only(
+    language: &str,
+    text: &str,
+    rel_path: &str,
+) -> Result<ParsedRustFile, ()> {
+    parse_source_with_tree_sitter(language, text, rel_path)
+}
+
 fn merge_calls(existing: &mut Vec<RustCall>, incoming: Vec<RustCall>) {
     let mut seen: BTreeSet<(String, usize)> = existing
         .iter()

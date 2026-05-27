@@ -104,12 +104,19 @@ pub struct LanguageReadiness {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeSitterReadiness {
+    #[serde(default)]
     pub wired: bool,
+    #[serde(default)]
     pub available: bool,
+    #[serde(default)]
     pub installable: bool,
+    #[serde(default)]
     pub status: String,
+    #[serde(default)]
     pub note: String,
+    #[serde(default)]
     pub supported_languages: Vec<String>,
+    #[serde(default)]
     pub active_languages: Vec<String>,
 }
 

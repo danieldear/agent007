@@ -7,7 +7,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
-use crate::tree_sitter_support::enrich_parsed_file_with_tree_sitter;
+use crate::tree_sitter_support::{
+    enrich_parsed_file_with_tree_sitter, parse_source_with_tree_sitter_only,
+};
 
 const GRAPH_VERSION: u32 = 1;
 const GRAPH_FILENAME: &str = "repo_graph_v1.json";
@@ -892,11 +894,14 @@ fn parse_source_file(
     language: &str,
 ) -> Result<ParsedRustFile, CoreError> {
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
-    let mut parsed = if language == "rust" {
-        parse_rust_file_fallback(&text, rel_path)
-    } else {
-        ParsedRustFile::default()
-    };
+    if language == "rust" {
+        if let Ok(parsed) = parse_source_with_tree_sitter_only(language, &text, rel_path) {
+            return Ok(parsed);
+        }
+        return Ok(parse_rust_file_fallback(&text, rel_path));
+    }
+
+    let mut parsed = ParsedRustFile::default();
     enrich_parsed_file_with_tree_sitter(language, &text, rel_path, &mut parsed);
     Ok(parsed)
 }
