@@ -7,6 +7,7 @@ pub mod repo_brain;
 pub mod repo_graph;
 pub mod repo_readiness;
 pub mod tool_executor;
+pub mod tree_sitter_support;
 pub mod types;
 pub use tool_executor::ToolExecutor;
 pub mod agent;
@@ -48,4 +49,7 @@ pub use run_store::{
     RunStore, TOKEN_PRICE_PER_TOKEN_USD,
 };
 pub use task::{Task, TaskQueue, TaskResult};
+pub use tree_sitter_support::{
+    language_is_supported as tree_sitter_language_is_supported, TreeSitterSupportSummary,
+};
 pub use types::{AgentId, MemoryRef, PromptRef, PromptStore};

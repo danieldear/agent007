@@ -250,6 +250,20 @@ const m = computed(() => metrics.value || {
 })
 
 const repoIntel = computed(() => m.value.repo_intelligence || null)
+const repoLspSummary = computed(() => {
+  const languages = repoIntel.value?.languages || []
+  let active = 0
+  let installed = 0
+  for (const lang of languages) {
+    if (lang.lsp?.active) active += 1
+    else if (lang.lsp?.installed) installed += 1
+  }
+  return { active, installed, total: languages.filter(lang => !!lang.lsp).length }
+})
+const repoTreeSitterSummary = computed(() => ({
+  status: repoIntel.value?.tree_sitter?.status || 'unknown',
+  active: repoIntel.value?.tree_sitter?.active_languages || [],
+}))
 
 function repoGraphState(graph) {
   if (!graph?.exists) return 'missing'
@@ -1187,7 +1201,10 @@ async function submitTask() {
               baseline {{ repoIntel.baseline_ready ? 'ready' : 'unknown' }}
             </span>
             <span class="text-[10px] font-mono text-base-content/35">
-              tree-sitter {{ repoIntel.tree_sitter?.status || 'unknown' }}
+              lsp {{ repoLspSummary.active ? 'active' : (repoLspSummary.installed ? 'available' : 'missing') }}
+            </span>
+            <span class="text-[10px] font-mono text-base-content/35">
+              tree-sitter {{ repoTreeSitterSummary.status }}<template v-if="repoTreeSitterSummary.active.length"> ({{ repoTreeSitterSummary.active.join(', ') }})</template>
             </span>
           </div>
           <button class="btn btn-xs btn-primary font-mono" @click="emit('navigate', 'repo-intelligence')">open page</button>

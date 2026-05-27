@@ -7,6 +7,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::tree_sitter_support::{
+    enrich_parsed_file_with_tree_sitter, parse_source_with_tree_sitter_only,
+};
 
 const GRAPH_VERSION: u32 = 1;
 const GRAPH_FILENAME: &str = "repo_graph_v1.json";
@@ -165,14 +168,16 @@ impl RepoGraphBuilder {
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
         let mut pending_calls = Vec::new();
 
-        // ── Pass 1: Rust files — build symbol_index first so doc links work ──
+        // ── Pass 1: Source files — build symbol_index first so doc links work ──
         let all_files = walk_repo_files(&root)?;
         for path in &all_files {
             let rel = relative_path(&root, path);
             let path_str = rel.to_string_lossy().to_string();
-            if is_rust_file(path) {
-                counts.rust_files += 1;
-                let parsed = parse_rust_file(path, &path_str)?;
+            if let Some(language) = detect_source_language(path) {
+                if language == "rust" {
+                    counts.rust_files += 1;
+                }
+                let parsed = parse_source_file(path, &path_str, language)?;
                 counts.files += 1;
                 let file_id = format!("file:{path_str}");
                 nodes.push(RepoGraphNode {
@@ -184,7 +189,7 @@ impl RepoGraphBuilder {
                         .unwrap_or(&path_str)
                         .to_string(),
                     path: Some(path_str.clone()),
-                    language: Some("rust".into()),
+                    language: Some(language.into()),
                     symbol_kind: None,
                     line: None,
                     signature: None,
@@ -196,7 +201,7 @@ impl RepoGraphBuilder {
                         kind: RepoGraphNodeKind::Module,
                         name: import_path.clone(),
                         path: None,
-                        language: Some("rust".into()),
+                        language: Some(language.into()),
                         symbol_kind: None,
                         line: None,
                         signature: None,
@@ -218,7 +223,7 @@ impl RepoGraphBuilder {
                         kind: RepoGraphNodeKind::Symbol,
                         name: symbol.name.clone(),
                         path: Some(path_str.clone()),
-                        language: Some("rust".into()),
+                        language: Some(language.into()),
                         symbol_kind: Some(symbol.kind.clone()),
                         line: Some(symbol.line),
                         signature: Some(symbol.signature.clone()),
@@ -316,24 +321,24 @@ impl RepoGraphBuilder {
 }
 
 #[derive(Debug, Clone)]
-struct RustSymbol {
-    name: String,
-    kind: String,
-    line: usize,
-    signature: String,
-    calls: Vec<RustCall>,
+pub(crate) struct RustSymbol {
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) line: usize,
+    pub(crate) signature: String,
+    pub(crate) calls: Vec<RustCall>,
 }
 
 #[derive(Debug, Clone)]
-struct RustCall {
-    name: String,
-    line: usize,
+pub(crate) struct RustCall {
+    pub(crate) name: String,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, Default)]
-struct ParsedRustFile {
-    imports: Vec<String>,
-    symbols: Vec<RustSymbol>,
+pub(crate) struct ParsedRustFile {
+    pub(crate) imports: Vec<String>,
+    pub(crate) symbols: Vec<RustSymbol>,
 }
 
 pub fn default_graph_path_for_root(root: &Path) -> PathBuf {
@@ -462,10 +467,11 @@ pub fn refresh_graph_for_paths(
         if !abs_path.exists() {
             continue;
         }
-        if is_rust_file(&abs_path) {
-            patch_rust_file(
+        if let Some(language) = detect_source_language(&abs_path) {
+            patch_source_file(
                 &abs_path,
                 rel_path,
+                language,
                 &mut nodes,
                 &mut edges,
                 &mut symbol_index,
@@ -700,18 +706,21 @@ fn normalize_requested_paths(root: &Path, requested_paths: &[PathBuf]) -> BTreeS
         .collect()
 }
 
-fn patch_rust_file(
+fn patch_source_file(
     abs_path: &Path,
     rel_path: &str,
+    language: &str,
     nodes: &mut Vec<RepoGraphNode>,
     edges: &mut Vec<RepoGraphEdge>,
     symbol_index: &mut HashMap<String, Vec<String>>,
     pending_calls: &mut Vec<PendingCall>,
     counts: &mut RepoGraphCounts,
 ) -> Result<(), CoreError> {
-    counts.rust_files += 1;
+    if language == "rust" {
+        counts.rust_files += 1;
+    }
     counts.files += 1;
-    let parsed = parse_rust_file(abs_path, rel_path)?;
+    let parsed = parse_source_file(abs_path, rel_path, language)?;
     let file_id = format!("file:{rel_path}");
     nodes.push(RepoGraphNode {
         id: file_id.clone(),
@@ -722,7 +731,7 @@ fn patch_rust_file(
             .unwrap_or(rel_path)
             .to_string(),
         path: Some(rel_path.to_string()),
-        language: Some("rust".into()),
+        language: Some(language.into()),
         symbol_kind: None,
         line: None,
         signature: None,
@@ -734,7 +743,7 @@ fn patch_rust_file(
             kind: RepoGraphNodeKind::Module,
             name: import_path.clone(),
             path: None,
-            language: Some("rust".into()),
+            language: Some(language.into()),
             symbol_kind: None,
             line: None,
             signature: None,
@@ -755,7 +764,7 @@ fn patch_rust_file(
             kind: RepoGraphNodeKind::Symbol,
             name: symbol.name.clone(),
             path: Some(rel_path.to_string()),
-            language: Some("rust".into()),
+            language: Some(language.into()),
             symbol_kind: Some(symbol.kind.clone()),
             line: Some(symbol.line),
             signature: Some(symbol.signature.clone()),
@@ -845,10 +854,6 @@ fn should_skip_name(name: &str) -> bool {
     )
 }
 
-fn is_rust_file(path: &Path) -> bool {
-    path.extension().and_then(|s| s.to_str()) == Some("rs")
-}
-
 fn is_doc_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()),
@@ -856,12 +861,52 @@ fn is_doc_file(path: &Path) -> bool {
     )
 }
 
+fn detect_source_language(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+    {
+        "rs" => Some("rust"),
+        "py" => Some("python"),
+        "ts" | "tsx" => Some("typescript"),
+        "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
+        "c" | "h" => Some("c"),
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some("cpp"),
+        "java" => Some("java"),
+        "kt" | "kts" => Some("kotlin"),
+        "html" | "htm" => Some("html"),
+        "vue" => Some("vue"),
+        "xml" => Some("xml"),
+        "json" => Some("json"),
+        "yaml" | "yml" => Some("yaml"),
+        _ => None,
+    }
+}
+
 fn relative_path(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
 
-fn parse_rust_file(path: &Path, rel_path: &str) -> Result<ParsedRustFile, CoreError> {
+fn parse_source_file(
+    path: &Path,
+    rel_path: &str,
+    language: &str,
+) -> Result<ParsedRustFile, CoreError> {
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
+    if language == "rust" {
+        if let Ok(parsed) = parse_source_with_tree_sitter_only(language, &text, rel_path) {
+            return Ok(parsed);
+        }
+        return Ok(parse_rust_file_fallback(&text, rel_path));
+    }
+
+    let mut parsed = ParsedRustFile::default();
+    enrich_parsed_file_with_tree_sitter(language, &text, rel_path, &mut parsed);
+    Ok(parsed)
+}
+
+fn parse_rust_file_fallback(text: &str, rel_path: &str) -> ParsedRustFile {
     let import_re = Regex::new(r"^\s*use\s+([^;]+);").expect("valid regex");
     let fn_re = Regex::new(
         r#"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|extern\s+"[^"]+")\s+)*fn\s+([A-Za-z_][A-Za-z0-9_]*)"#,
@@ -949,10 +994,10 @@ fn parse_rust_file(path: &Path, rel_path: &str) -> Result<ParsedRustFile, CoreEr
     if let Some(symbol) = current.take() {
         parsed.symbols.push(symbol);
     }
-    Ok(parsed)
+    parsed
 }
 
-fn should_skip_call_name(name: &str) -> bool {
+pub(crate) fn should_skip_call_name(name: &str) -> bool {
     matches!(
         name,
         "if" | "for"

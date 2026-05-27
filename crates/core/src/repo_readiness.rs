@@ -10,6 +10,7 @@ use crate::error::CoreError;
 use crate::repo_graph::{
     build_and_save_graph, default_graph_path_for_root, graph_status, RepoGraphStatus,
 };
+use crate::tree_sitter_support::support_summary_for_languages;
 
 const READINESS_VERSION: u32 = 1;
 const READINESS_FILENAME: &str = "repo_intelligence_readiness_v1.json";
@@ -33,6 +34,13 @@ pub enum LanguageKind {
     Go,
     C,
     Cpp,
+    Java,
+    Kotlin,
+    Html,
+    Vue,
+    Xml,
+    Json,
+    Yaml,
 }
 
 impl LanguageKind {
@@ -45,6 +53,13 @@ impl LanguageKind {
             Self::Go => "go",
             Self::C => "c",
             Self::Cpp => "cpp",
+            Self::Java => "java",
+            Self::Kotlin => "kotlin",
+            Self::Html => "html",
+            Self::Vue => "vue",
+            Self::Xml => "xml",
+            Self::Json => "json",
+            Self::Yaml => "yaml",
         }
     }
 }
@@ -89,11 +104,20 @@ pub struct LanguageReadiness {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeSitterReadiness {
+    #[serde(default)]
     pub wired: bool,
+    #[serde(default)]
     pub available: bool,
+    #[serde(default)]
     pub installable: bool,
+    #[serde(default)]
     pub status: String,
+    #[serde(default)]
     pub note: String,
+    #[serde(default)]
+    pub supported_languages: Vec<String>,
+    #[serde(default)]
+    pub active_languages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,11 +232,19 @@ pub fn detect_repo_intelligence_readiness(
         });
     }
 
+    let detected_language_kinds: Vec<LanguageKind> = enriched_languages
+        .iter()
+        .filter_map(|lang| language_kind_from_str(&lang.language))
+        .collect();
+    let tree_sitter = tree_sitter_readiness_for_languages(&detected_language_kinds);
+    let has_tree_sitter = !tree_sitter.active_languages.is_empty();
+    let has_tree_sitter_available = !tree_sitter.supported_languages.is_empty();
+
     let state = if enriched_languages.is_empty() {
         RepoIntelligenceState::EmptyRepo
-    } else if has_active_lsp {
+    } else if has_active_lsp || has_tree_sitter {
         RepoIntelligenceState::EnrichmentActive
-    } else if has_installed_lsp {
+    } else if has_installed_lsp || has_tree_sitter_available {
         RepoIntelligenceState::EnrichmentAvailable
     } else {
         RepoIntelligenceState::BaselineOnly
@@ -227,7 +259,7 @@ pub fn detect_repo_intelligence_readiness(
             "Source files were detected, but no semantic enrichers are currently installed or configured.".to_string(),
         ),
         RepoIntelligenceState::EnrichmentAvailable => notes.push(
-            "Semantic enrichers are installed on this machine, but agent007 is still operating in baseline structural mode for at least one detected language.".to_string(),
+            "Semantic enrichers are available on this machine or in the current build, but agent007 is still operating in baseline structural mode for at least one detected language.".to_string(),
         ),
         RepoIntelligenceState::EnrichmentActive => notes.push(
             "Semantic enrichment is active for at least one detected language.".to_string(),
@@ -247,13 +279,7 @@ pub fn detect_repo_intelligence_readiness(
         baseline_ready: true,
         graph,
         languages: enriched_languages,
-        tree_sitter: TreeSitterReadiness {
-            wired: false,
-            available: false,
-            installable: false,
-            status: "not_wired".to_string(),
-            note: "Tree-sitter semantic enrichment is not wired into the current build yet; do not auto-install it as if it were already active.".to_string(),
-        },
+        tree_sitter,
         recommendations,
         notes,
     })
@@ -447,6 +473,11 @@ fn manifest_language(name: &str) -> Option<LanguageKind> {
         "package.json" | "tsconfig.json" => Some(LanguageKind::TypeScript),
         "go.mod" => Some(LanguageKind::Go),
         "CMakeLists.txt" | "compile_commands.json" => Some(LanguageKind::Cpp),
+        "pom.xml" | "build.gradle" | "build.gradle.kts" => Some(LanguageKind::Java),
+        "tailwind.config.js"
+        | "tailwind.config.ts"
+        | "tailwind.config.cjs"
+        | "tailwind.config.mjs" => Some(LanguageKind::Html),
         _ => None,
     }
 }
@@ -464,6 +495,13 @@ fn extension_language(path: &Path) -> Option<LanguageKind> {
         "go" => Some(LanguageKind::Go),
         "c" | "h" => Some(LanguageKind::C),
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some(LanguageKind::Cpp),
+        "java" => Some(LanguageKind::Java),
+        "kt" | "kts" => Some(LanguageKind::Kotlin),
+        "html" | "htm" => Some(LanguageKind::Html),
+        "vue" => Some(LanguageKind::Vue),
+        "xml" => Some(LanguageKind::Xml),
+        "json" => Some(LanguageKind::Json),
+        "yaml" | "yml" => Some(LanguageKind::Yaml),
         _ => None,
     }
 }
@@ -518,6 +556,70 @@ fn default_lsp_server_for(kind: &LanguageKind) -> Option<(&'static str, &'static
         )),
         LanguageKind::Go => Some(("gopls", "gopls")),
         LanguageKind::C | LanguageKind::Cpp => Some(("clangd", "clangd")),
+        LanguageKind::Java
+        | LanguageKind::Kotlin
+        | LanguageKind::Html
+        | LanguageKind::Vue
+        | LanguageKind::Xml
+        | LanguageKind::Json
+        | LanguageKind::Yaml => None,
+    }
+}
+
+fn language_kind_from_str(value: &str) -> Option<LanguageKind> {
+    match value {
+        "rust" => Some(LanguageKind::Rust),
+        "python" => Some(LanguageKind::Python),
+        "typescript" => Some(LanguageKind::TypeScript),
+        "javascript" => Some(LanguageKind::JavaScript),
+        "go" => Some(LanguageKind::Go),
+        "c" => Some(LanguageKind::C),
+        "cpp" => Some(LanguageKind::Cpp),
+        "java" => Some(LanguageKind::Java),
+        "kotlin" => Some(LanguageKind::Kotlin),
+        "html" => Some(LanguageKind::Html),
+        "vue" => Some(LanguageKind::Vue),
+        "xml" => Some(LanguageKind::Xml),
+        "json" => Some(LanguageKind::Json),
+        "yaml" => Some(LanguageKind::Yaml),
+        _ => None,
+    }
+}
+
+fn tree_sitter_readiness_for_languages(languages: &[LanguageKind]) -> TreeSitterReadiness {
+    let summary = support_summary_for_languages(languages.iter().cloned());
+    let status = if languages.is_empty() {
+        "deferred"
+    } else if summary.active_languages.is_empty() {
+        "unsupported"
+    } else if summary.active_languages.len() == languages.len() {
+        "active"
+    } else {
+        "partial"
+    };
+    let note = if languages.is_empty() {
+        "Built-in tree-sitter enrichment is wired and will activate automatically when supported source files appear.".to_string()
+    } else if summary.active_languages.is_empty() {
+        "No built-in tree-sitter grammar is wired for the currently detected languages in this build; baseline graph + LSP remain available.".to_string()
+    } else if summary.active_languages.len() == languages.len() {
+        format!(
+            "Built-in tree-sitter enrichment is active for all detected supported languages: {}.",
+            summary.active_languages.join(", ")
+        )
+    } else {
+        format!(
+            "Built-in tree-sitter enrichment is active for {}. Other detected languages continue with the baseline graph and optional LSP until more grammars are added.",
+            summary.active_languages.join(", ")
+        )
+    };
+    TreeSitterReadiness {
+        wired: summary.wired,
+        available: !summary.supported_languages.is_empty(),
+        installable: false,
+        status: status.to_string(),
+        note,
+        supported_languages: summary.supported_languages,
+        active_languages: summary.active_languages,
     }
 }
 
@@ -556,6 +658,13 @@ fn default_install_recommendation(
                 "sudo apt-get install -y clangd"
             },
         ),
+        LanguageKind::Java
+        | LanguageKind::Kotlin
+        | LanguageKind::Html
+        | LanguageKind::Vue
+        | LanguageKind::Xml
+        | LanguageKind::Json
+        | LanguageKind::Yaml => return None,
     };
     Some(InstallRecommendation {
         id: format!("lsp:{}", kind.as_str()),
@@ -606,6 +715,9 @@ mod tests {
         let rust_lsp = readiness.languages[0].lsp.as_ref().unwrap();
         assert_eq!(rust_lsp.language, "rust");
         assert!(rust_lsp.command.contains("rust-analyzer"));
+        assert!(readiness.tree_sitter.wired);
+        assert_eq!(readiness.tree_sitter.status, "active");
+        assert_eq!(readiness.tree_sitter.active_languages, vec!["rust"]);
     }
 
     #[test]
