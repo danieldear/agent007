@@ -144,6 +144,12 @@ async function runRepoRecommendation(rec) {
   }
 }
 
+function graphExplorerPayloadFromResult(result) {
+  const payload = result?.output
+  if (!payload || typeof payload !== 'object') return payload || null
+  return Object.prototype.hasOwnProperty.call(payload, 'output') ? payload.output : payload
+}
+
 async function runGraphAction(tool) {
   graphActionBusy.value = true
   graphActionStatus.value = ''
@@ -186,7 +192,7 @@ async function ensureMermaid() {
 }
 
 const graphExplorerMermaidSource = computed(() => {
-  const payload = graphExplorerResult.value?.output
+  const payload = graphExplorerPayloadFromResult(graphExplorerResult.value)
   const tool = graphExplorerResult.value?.tool
   if (!payload || !tool) return ''
 
@@ -290,7 +296,7 @@ async function renderGraphExplorerMermaid() {
 const graphResultSummary = computed(() => {
   const result = graphExplorerResult.value
   if (!result?.output) return []
-  const payload = result.output
+  const payload = graphExplorerPayloadFromResult(result)
   const tool = result.tool
   if (tool === 'etr.impact_radius' || tool === 'etr.usage_graph') {
     return [

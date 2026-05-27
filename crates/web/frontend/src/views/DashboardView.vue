@@ -493,8 +493,14 @@ async function renderArtifactMermaid() {
   }
 }
 
+function graphExplorerPayloadFromResult(result) {
+  const payload = result?.output
+  if (!payload || typeof payload !== 'object') return payload || null
+  return Object.prototype.hasOwnProperty.call(payload, 'output') ? payload.output : payload
+}
+
 const graphExplorerMermaidSource = computed(() => {
-  const payload = graphExplorerResult.value?.output
+  const payload = graphExplorerPayloadFromResult(graphExplorerResult.value)
   const tool = graphExplorerResult.value?.tool
   if (!payload || !tool) return ''
 
