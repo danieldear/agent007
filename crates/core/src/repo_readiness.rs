@@ -34,6 +34,13 @@ pub enum LanguageKind {
     Go,
     C,
     Cpp,
+    Java,
+    Kotlin,
+    Html,
+    Vue,
+    Xml,
+    Json,
+    Yaml,
 }
 
 impl LanguageKind {
@@ -46,6 +53,13 @@ impl LanguageKind {
             Self::Go => "go",
             Self::C => "c",
             Self::Cpp => "cpp",
+            Self::Java => "java",
+            Self::Kotlin => "kotlin",
+            Self::Html => "html",
+            Self::Vue => "vue",
+            Self::Xml => "xml",
+            Self::Json => "json",
+            Self::Yaml => "yaml",
         }
     }
 }
@@ -452,6 +466,11 @@ fn manifest_language(name: &str) -> Option<LanguageKind> {
         "package.json" | "tsconfig.json" => Some(LanguageKind::TypeScript),
         "go.mod" => Some(LanguageKind::Go),
         "CMakeLists.txt" | "compile_commands.json" => Some(LanguageKind::Cpp),
+        "pom.xml" | "build.gradle" | "build.gradle.kts" => Some(LanguageKind::Java),
+        "tailwind.config.js"
+        | "tailwind.config.ts"
+        | "tailwind.config.cjs"
+        | "tailwind.config.mjs" => Some(LanguageKind::Html),
         _ => None,
     }
 }
@@ -469,6 +488,13 @@ fn extension_language(path: &Path) -> Option<LanguageKind> {
         "go" => Some(LanguageKind::Go),
         "c" | "h" => Some(LanguageKind::C),
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some(LanguageKind::Cpp),
+        "java" => Some(LanguageKind::Java),
+        "kt" | "kts" => Some(LanguageKind::Kotlin),
+        "html" | "htm" => Some(LanguageKind::Html),
+        "vue" => Some(LanguageKind::Vue),
+        "xml" => Some(LanguageKind::Xml),
+        "json" => Some(LanguageKind::Json),
+        "yaml" | "yml" => Some(LanguageKind::Yaml),
         _ => None,
     }
 }
@@ -523,6 +549,13 @@ fn default_lsp_server_for(kind: &LanguageKind) -> Option<(&'static str, &'static
         )),
         LanguageKind::Go => Some(("gopls", "gopls")),
         LanguageKind::C | LanguageKind::Cpp => Some(("clangd", "clangd")),
+        LanguageKind::Java
+        | LanguageKind::Kotlin
+        | LanguageKind::Html
+        | LanguageKind::Vue
+        | LanguageKind::Xml
+        | LanguageKind::Json
+        | LanguageKind::Yaml => None,
     }
 }
 
@@ -535,6 +568,13 @@ fn language_kind_from_str(value: &str) -> Option<LanguageKind> {
         "go" => Some(LanguageKind::Go),
         "c" => Some(LanguageKind::C),
         "cpp" => Some(LanguageKind::Cpp),
+        "java" => Some(LanguageKind::Java),
+        "kotlin" => Some(LanguageKind::Kotlin),
+        "html" => Some(LanguageKind::Html),
+        "vue" => Some(LanguageKind::Vue),
+        "xml" => Some(LanguageKind::Xml),
+        "json" => Some(LanguageKind::Json),
+        "yaml" => Some(LanguageKind::Yaml),
         _ => None,
     }
 }
@@ -611,6 +651,13 @@ fn default_install_recommendation(
                 "sudo apt-get install -y clangd"
             },
         ),
+        LanguageKind::Java
+        | LanguageKind::Kotlin
+        | LanguageKind::Html
+        | LanguageKind::Vue
+        | LanguageKind::Xml
+        | LanguageKind::Json
+        | LanguageKind::Yaml => return None,
     };
     Some(InstallRecommendation {
         id: format!("lsp:{}", kind.as_str()),
