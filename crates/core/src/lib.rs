@@ -45,8 +45,8 @@ pub use repo_readiness::{
     RepoIntelligenceState, TreeSitterReadiness,
 };
 pub use run_store::{
-    AgentMessage, AgentMessageKind, RunDetail, RunLogEntry, RunMetadata, RunScorecard, RunStatus,
-    RunStore, TOKEN_PRICE_PER_TOKEN_USD,
+    AgentMessage, AgentMessageKind, RunCostMode, RunDetail, RunLogEntry, RunMetadata, RunScorecard,
+    RunStatus, RunStore, RunTokenSummary, TOKEN_PRICE_PER_TOKEN_USD,
 };
 pub use task::{Task, TaskQueue, TaskResult};
 pub use tree_sitter_support::{

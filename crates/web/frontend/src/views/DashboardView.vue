@@ -1414,6 +1414,9 @@ async function submitTask() {
                     <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="provider.available ? 'bg-success' : provider.configured ? 'bg-warning' : 'bg-base-content/20'"></span>
                     <span class="text-base-content/40">{{ provider.selected ? 'selected' : provider.available ? 'available' : provider.configured ? 'configured' : 'not configured' }}</span>
                   </div>
+                  <div v-if="provider.prompt_caching" class="text-[10px] font-mono text-base-content/28 truncate" :title="`prompt caching: ${provider.prompt_caching}`">
+                    prompt cache · {{ provider.prompt_caching }}
+                  </div>
                   <div class="text-[10px] font-mono text-base-content/30 line-clamp-2" :title="provider.hint">{{ provider.hint }}</div>
                 </div>
               </div>

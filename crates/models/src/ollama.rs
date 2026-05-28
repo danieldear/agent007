@@ -129,6 +129,9 @@ impl ModelProvider for OllamaProvider {
             input_tokens: None,
             output_tokens: None,
             cached_tokens: None,
+            cache_write_tokens: None,
+            total_tokens: None,
+            estimated_cost_usd: None,
         })
     }
 }

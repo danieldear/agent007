@@ -10,6 +10,8 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use agent007_models::CompletionResponse;
+
 use crate::dispatcher::Dispatcher;
 use crate::error::CoreError;
 use crate::events::AgentEvent;
@@ -135,10 +137,31 @@ pub struct RunDetail {
     pub artifacts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunCostMode {
+    #[default]
+    FallbackEstimate,
+    ProviderEstimate,
+    HostReported,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RunTokenSummary {
     pub tokens: u64,
     pub requests: u32,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub estimated_usd: f64,
+    #[serde(default)]
+    pub cost_mode: RunCostMode,
 }
 
 const TOKEN_SUMMARY_ARTIFACT: &str = "token-summary.json";
@@ -163,7 +186,17 @@ pub struct RunScorecard {
     pub duration_ms: Option<i64>,
     pub tokens: u64,
     pub requests: u32,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub estimated_usd: f64,
+    #[serde(default)]
+    pub cost_mode: RunCostMode,
     pub retry_count: u32,
     pub tool_calls: u32,
     pub tool_errors: u32,
@@ -658,6 +691,53 @@ impl RunStore {
             .unwrap_or_default();
         summary.tokens += token_estimate as u64;
         summary.requests += 1;
+        summary.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        summary.cost_mode = RunCostMode::FallbackEstimate;
+        self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
+    }
+
+    pub fn overwrite_token_summary(
+        &self,
+        run_id: &str,
+        summary: &RunTokenSummary,
+    ) -> Result<(), CoreError> {
+        let _guard = self
+            .token_summary_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, summary)
+    }
+
+    pub fn add_token_summary(
+        &self,
+        run_id: &str,
+        delta: &RunTokenSummary,
+    ) -> Result<(), CoreError> {
+        let _guard = self
+            .token_summary_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut summary = self
+            .read_json_artifact_optional::<RunTokenSummary>(run_id, TOKEN_SUMMARY_ARTIFACT)?
+            .unwrap_or_default();
+        summary.tokens = summary.tokens.saturating_add(delta.tokens);
+        summary.requests = summary.requests.saturating_add(delta.requests);
+        summary.input_tokens = summary.input_tokens.saturating_add(delta.input_tokens);
+        summary.output_tokens = summary.output_tokens.saturating_add(delta.output_tokens);
+        summary.cache_read_tokens = summary
+            .cache_read_tokens
+            .saturating_add(delta.cache_read_tokens);
+        summary.cache_write_tokens = summary
+            .cache_write_tokens
+            .saturating_add(delta.cache_write_tokens);
+        summary.estimated_usd += delta.estimated_usd;
+        summary.cost_mode = match (&summary.cost_mode, &delta.cost_mode) {
+            (_, RunCostMode::ProviderEstimate) => RunCostMode::ProviderEstimate,
+            (_, RunCostMode::HostReported) => RunCostMode::HostReported,
+            (RunCostMode::ProviderEstimate, _) => RunCostMode::ProviderEstimate,
+            (RunCostMode::HostReported, _) => RunCostMode::HostReported,
+            _ => RunCostMode::FallbackEstimate,
+        };
         self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
     }
 
@@ -760,6 +840,11 @@ impl RunStore {
             tokens: summary.tokens,
             requests: summary.requests,
             estimated_usd: summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD,
+            input_tokens: summary.input_tokens,
+            output_tokens: summary.output_tokens,
+            cache_read_tokens: summary.cache_read_tokens,
+            cache_write_tokens: summary.cache_write_tokens,
+            cost_mode: summary.cost_mode.clone(),
             retry_count,
             tool_calls,
             tool_errors,
@@ -790,7 +875,16 @@ impl RunStore {
         scorecard.duration_ms = run_duration_ms(metadata.started_at, metadata.finished_at);
         scorecard.tokens = summary.tokens;
         scorecard.requests = summary.requests;
-        scorecard.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        scorecard.input_tokens = summary.input_tokens;
+        scorecard.output_tokens = summary.output_tokens;
+        scorecard.cache_read_tokens = summary.cache_read_tokens;
+        scorecard.cache_write_tokens = summary.cache_write_tokens;
+        scorecard.estimated_usd = if summary.estimated_usd > 0.0 {
+            summary.estimated_usd
+        } else {
+            summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD
+        };
+        scorecard.cost_mode = summary.cost_mode.clone();
         scorecard.quality_score = compute_quality_score(scorecard);
         scorecard.updated_at = Utc::now();
     }
@@ -873,6 +967,8 @@ impl RunStore {
                 summary.requests += 1;
             }
         }
+        summary.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        summary.cost_mode = RunCostMode::FallbackEstimate;
         Ok(summary)
     }
 
@@ -932,6 +1028,38 @@ impl RunStore {
             .open(&log_path)
             .map_err(|error| CoreError::io(&log_path, error))?;
         writeln!(file, "{encoded}").map_err(|error| CoreError::io(&log_path, error))
+    }
+}
+
+impl RunTokenSummary {
+    pub fn from_completion_response(
+        response: &CompletionResponse,
+        fallback_tokens: Option<u64>,
+    ) -> Option<Self> {
+        let tokens = response.total_tokens_with_fallback().or(fallback_tokens)?;
+        let input_tokens = response.input_tokens.unwrap_or(0) as u64;
+        let output_tokens = response.output_tokens.unwrap_or(0) as u64;
+        let cache_read_tokens = response.cached_tokens.unwrap_or(0) as u64;
+        let cache_write_tokens = response.cache_write_tokens.unwrap_or(0) as u64;
+        let cost_mode = if response.estimated_cost_usd.is_some() {
+            RunCostMode::ProviderEstimate
+        } else {
+            RunCostMode::FallbackEstimate
+        };
+        let estimated_usd = response
+            .estimated_cost_usd
+            .unwrap_or(tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD);
+
+        Some(Self {
+            tokens,
+            requests: 1,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            estimated_usd,
+            cost_mode,
+        })
     }
 }
 

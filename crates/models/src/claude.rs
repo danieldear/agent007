@@ -4,6 +4,66 @@ use crate::types::{CompletionRequest, CompletionResponse, Message, Role};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+#[derive(Debug, Clone, Copy)]
+struct ClaudePricing {
+    input_per_mtok: f64,
+    cache_read_per_mtok: f64,
+    cache_write_per_mtok: f64,
+    output_per_mtok: f64,
+}
+
+fn claude_pricing_for_model(model: &str) -> Option<ClaudePricing> {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.contains("haiku-3-5") || normalized.contains("haiku 3.5") {
+        return Some(ClaudePricing {
+            input_per_mtok: 0.80,
+            cache_read_per_mtok: 0.08,
+            cache_write_per_mtok: 1.0,
+            output_per_mtok: 4.0,
+        });
+    }
+    if normalized.contains("haiku") {
+        return Some(ClaudePricing {
+            input_per_mtok: 0.25,
+            cache_read_per_mtok: 0.03,
+            cache_write_per_mtok: 0.30,
+            output_per_mtok: 1.25,
+        });
+    }
+    if normalized.contains("opus") {
+        return Some(ClaudePricing {
+            input_per_mtok: 15.0,
+            cache_read_per_mtok: 1.50,
+            cache_write_per_mtok: 18.75,
+            output_per_mtok: 75.0,
+        });
+    }
+    if normalized.contains("sonnet") {
+        return Some(ClaudePricing {
+            input_per_mtok: 3.0,
+            cache_read_per_mtok: 0.30,
+            cache_write_per_mtok: 3.75,
+            output_per_mtok: 15.0,
+        });
+    }
+    None
+}
+
+fn claude_estimated_cost_usd(
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+    cache_read_tokens: u32,
+    cache_write_tokens: u32,
+) -> Option<f64> {
+    let pricing = claude_pricing_for_model(model)?;
+    let input_cost = input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
+    let output_cost = output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
+    let cache_read_cost = cache_read_tokens as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
+    let cache_write_cost = cache_write_tokens as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
+    Some(input_cost + output_cost + cache_read_cost + cache_write_cost)
+}
+
 pub struct ClaudeProvider {
     api_key: String,
     model: String,
@@ -123,14 +183,45 @@ impl ModelProvider for ClaudeProvider {
             })?
             .to_string();
 
+        let input_tokens = json["usage"]["input_tokens"].as_u64().map(|x| x as u32);
+        let output_tokens = json["usage"]["output_tokens"].as_u64().map(|x| x as u32);
+        let cache_read_tokens = json["usage"]["cache_read_input_tokens"]
+            .as_u64()
+            .map(|x| x as u32);
+        let cache_write_tokens = json["usage"]["cache_creation_input_tokens"]
+            .as_u64()
+            .map(|x| x as u32);
+        let total_tokens = Some(
+            input_tokens.unwrap_or(0) as u64
+                + output_tokens.unwrap_or(0) as u64
+                + cache_read_tokens.unwrap_or(0) as u64
+                + cache_write_tokens.unwrap_or(0) as u64,
+        );
+        let estimated_cost_usd = match (
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+        ) {
+            (Some(input), Some(output), read, write) => claude_estimated_cost_usd(
+                model,
+                input,
+                output,
+                read.unwrap_or(0),
+                write.unwrap_or(0),
+            ),
+            _ => None,
+        };
+
         Ok(CompletionResponse {
             content,
             model: model.to_string(),
-            input_tokens: json["usage"]["input_tokens"].as_u64().map(|x| x as u32),
-            output_tokens: json["usage"]["output_tokens"].as_u64().map(|x| x as u32),
-            cached_tokens: json["usage"]["cache_read_input_tokens"]
-                .as_u64()
-                .map(|x| x as u32),
+            input_tokens,
+            output_tokens,
+            cached_tokens: cache_read_tokens,
+            cache_write_tokens,
+            total_tokens,
+            estimated_cost_usd,
         })
     }
 }
@@ -217,5 +308,13 @@ mod tests {
         // Claude system is a top-level field, not in messages array
         assert_eq!(v["messages"].as_array().unwrap().len(), 1);
         assert_eq!(v["messages"][0]["role"], "user");
+    }
+
+    #[test]
+    fn claude_cost_estimate_handles_cache_read_and_write() {
+        let estimate = claude_estimated_cost_usd("claude-sonnet-4-6", 1000, 200, 3000, 4000)
+            .expect("known sonnet pricing");
+        let expected = (1000.0 * 3.0 + 200.0 * 15.0 + 3000.0 * 0.30 + 4000.0 * 3.75) / 1_000_000.0;
+        assert!((estimate - expected).abs() < f64::EPSILON);
     }
 }

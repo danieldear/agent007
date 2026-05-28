@@ -398,7 +398,8 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
     // Active agents are tasks currently executing.
     // Approval-paused runs are tracked separately in awaiting_approvals.
     metrics.active_agents = metrics.running_tasks;
-    metrics.estimated_usd = metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+    metrics.estimated_usd =
+        total_cost_usd.max(metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD);
 }
 
 fn load_run_token_totals(store: &RunStore, run_id: &str) -> (u64, u32) {
@@ -472,7 +473,12 @@ fn load_or_synthesize_scorecard(
         duration_ms,
         tokens,
         requests,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
         estimated_usd: tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD,
+        cost_mode: agent007_core::RunCostMode::FallbackEstimate,
         retry_count: 0,
         tool_calls: 0,
         tool_errors: 0,

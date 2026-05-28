@@ -177,6 +177,8 @@ pub struct ProviderReadinessCard {
     pub model: Option<String>,
     pub source: String,
     pub hint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_caching: Option<String>,
 }
 
 fn increment_patch_version(raw: Option<&str>) -> Option<String> {
@@ -307,6 +309,7 @@ impl ProviderReadinessResponse {
                 "Available as fallback for editor-hosted workflows."
             }
             .to_string(),
+            prompt_caching: Some("host-managed".to_string()),
         });
         if runtime_mode == "dry-run" {
             providers.push(ProviderReadinessCard {
@@ -319,6 +322,7 @@ impl ProviderReadinessResponse {
                 model: Some("mock".to_string()),
                 source: "AGENT007_DRY_RUN".to_string(),
                 hint: "Offline dry-run provider is active.".to_string(),
+                prompt_caching: Some("not-applicable".to_string()),
             });
         } else if standalone_available {
             providers.push(ProviderReadinessCard {
@@ -334,6 +338,7 @@ impl ProviderReadinessResponse {
                 source: "config/env".to_string(),
                 hint: "Dashboard can execute tasks directly with the selected provider."
                     .to_string(),
+                prompt_caching: Some("standalone-only".to_string()),
             });
         }
         let hints = if standalone_available {

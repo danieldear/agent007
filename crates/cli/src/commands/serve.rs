@@ -303,11 +303,31 @@ impl Agent007Server {
                         },
                         "tokens": {
                             "type": "integer",
-                            "description": "Actual total tokens used (input + output)"
+                            "description": "Actual total tokens used. For host-reported runs this should be the provider-normalized total (e.g. include Anthropic cache read/write tokens when the host exposes them)."
                         },
                         "model": {
                             "type": "string",
                             "description": "Model name that was used, e.g. 'claude-sonnet-4-6'"
+                        },
+                        "input_tokens": {
+                            "type": "integer",
+                            "description": "Optional: actual input tokens reported by the host/provider."
+                        },
+                        "output_tokens": {
+                            "type": "integer",
+                            "description": "Optional: actual output tokens reported by the host/provider."
+                        },
+                        "cache_read_tokens": {
+                            "type": "integer",
+                            "description": "Optional: prompt-cache read/hit tokens when the host/provider exposes them."
+                        },
+                        "cache_write_tokens": {
+                            "type": "integer",
+                            "description": "Optional: prompt-cache creation/write tokens when the host/provider exposes them."
+                        },
+                        "estimated_cost_usd": {
+                            "type": "number",
+                            "description": "Optional: exact or provider-computed USD cost for the call when the host knows it."
                         },
                         "output": {
                             "type": "string",
@@ -1415,13 +1435,52 @@ impl ServerHandler for Agent007Server {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
                 let model = extract_string(request.arguments.as_ref(), "model")?;
+                let input_tokens = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("input_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|value| value as u64);
+                let output_tokens = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("output_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|value| value as u64);
+                let cache_read_tokens = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("cache_read_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|value| value as u64);
+                let cache_write_tokens = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("cache_write_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|value| value as u64);
+                let estimated_cost_usd = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("estimated_cost_usd"))
+                    .and_then(|v| v.as_f64());
                 let output = request
                     .arguments
                     .as_ref()
                     .and_then(|a| a.get("output"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                match record_actual_tokens(&run_id, tokens, &model, output.as_deref()) {
+                match record_actual_tokens(
+                    &run_id,
+                    tokens,
+                    &model,
+                    output.as_deref(),
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                    estimated_cost_usd,
+                ) {
                     Ok(message) => {
                         let skill_hint =
                             load_run_store().load_run(&run_id).ok().and_then(|detail| {
@@ -3030,6 +3089,11 @@ fn record_actual_tokens(
     tokens: usize,
     model: &str,
     output: Option<&str>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    estimated_cost_usd: Option<f64>,
 ) -> Result<String> {
     let store = load_run_store();
     let detail = store
@@ -3082,13 +3146,36 @@ fn record_actual_tokens(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Persist exact host-reported token totals (overwriting stale fallback estimates).
+    let provided_tokens = input_tokens
+        .zip(output_tokens)
+        .map(|(input, output)| {
+            input + output + cache_read_tokens.unwrap_or(0) + cache_write_tokens.unwrap_or(0)
+        })
+        .unwrap_or(tokens as u64);
     store
-        .write_json_artifact(
+        .overwrite_token_summary(
             run_id,
-            "token-summary.json",
             &agent007_core::run_store::RunTokenSummary {
-                tokens: tokens as u64,
+                tokens: provided_tokens.max(tokens as u64),
                 requests: 1,
+                input_tokens: input_tokens.unwrap_or(0),
+                output_tokens: output_tokens.unwrap_or(0),
+                cache_read_tokens: cache_read_tokens.unwrap_or(0),
+                cache_write_tokens: cache_write_tokens.unwrap_or(0),
+                estimated_usd: estimated_cost_usd.unwrap_or(
+                    (provided_tokens.max(tokens as u64)) as f64
+                        * agent007_core::TOKEN_PRICE_PER_TOKEN_USD,
+                ),
+                cost_mode: if estimated_cost_usd.is_some()
+                    || input_tokens.is_some()
+                    || output_tokens.is_some()
+                    || cache_read_tokens.is_some()
+                    || cache_write_tokens.is_some()
+                {
+                    agent007_core::run_store::RunCostMode::HostReported
+                } else {
+                    agent007_core::run_store::RunCostMode::FallbackEstimate
+                },
             },
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -3165,10 +3252,6 @@ fn record_actual_tokens(
         ))
     }
 }
-
-/// Cost per token in USD (blended input+output at Claude Sonnet rates).
-// Keep in sync with TOKEN_PRICE_PER_TOKEN_USD in crates/web/src/metrics.rs
-const STATUSLINE_PRICE_PER_TOKEN: f64 = 0.000_002;
 
 /// Load a HookExecutor by trying the project-local hooks.toml first, then the global one.
 /// Returns None if neither file exists or both fail to parse.
@@ -3253,15 +3336,24 @@ fn write_statusline() {
         .filter(|r| matches!(r.status, RunStatus::AwaitingApproval))
         .count();
 
-    // ── Token + model scan (20 most recent runs) ──────────────────────────────
+    // ── Token + cost + model scan (20 most recent runs) ───────────────────────
     let mut total_tokens: u64 = 0;
+    let mut total_cost_usd: f64 = 0.0;
     let mut last_model = std::env::var("AGENT007_HOST_MODEL")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "hosted-mcp".to_string());
 
     for run in runs.iter().take(20) {
-        if let Ok(detail) = store.load_run(&run.id) {
+        if let Ok(Some(summary)) = store
+            .read_json_artifact_optional::<agent007_core::RunTokenSummary>(
+                &run.id,
+                "token-summary.json",
+            )
+        {
+            total_tokens += summary.tokens;
+            total_cost_usd += summary.estimated_usd;
+        } else if let Ok(detail) = store.load_run(&run.id) {
             for entry in &detail.entries {
                 if entry.kind != "agent-event" {
                     continue;
@@ -3273,10 +3365,17 @@ fn write_statusline() {
                 }) = serde_json::from_value::<AgentEvent>(entry.payload.clone())
                 {
                     total_tokens += token_estimate as u64;
+                    total_cost_usd +=
+                        token_estimate as f64 * agent007_core::TOKEN_PRICE_PER_TOKEN_USD;
                     if !provider.is_empty() && provider != "hosted-mcp" {
                         last_model = provider;
                     }
                 }
+            }
+        }
+        if let Some(provider) = &run.provider {
+            if !provider.is_empty() && provider != "hosted-mcp" {
+                last_model = provider.clone();
             }
         }
     }
@@ -3324,11 +3423,10 @@ fn write_statusline() {
     } else {
         total_tokens.to_string()
     };
-    let cost_usd = total_tokens as f64 * STATUSLINE_PRICE_PER_TOKEN;
-    let cost_display = if cost_usd >= 1.0 {
-        format!("${:.2}", cost_usd)
-    } else if cost_usd >= 0.01 {
-        format!("${:.3}", cost_usd)
+    let cost_display = if total_cost_usd >= 1.0 {
+        format!("${:.2}", total_cost_usd)
+    } else if total_cost_usd >= 0.01 {
+        format!("${:.3}", total_cost_usd)
     } else {
         format!("<$0.01")
     };
@@ -3412,7 +3510,10 @@ async fn run_task(config: &Config, task: String) -> Result<String> {
              Use agent007_memory_write to persist results, agent007_workflow_plan to decompose \
              complex tasks into multi-agent workflows. \
              IMPORTANT: After you finish, call agent007_record_tokens with run_id={run_id}, \
-             the actual total tokens you used (input+output), your model name, and the output field set to your full final response text — this records real token counts in the dashboard and persists the result back into agent007 memory.\",\
+             the actual total tokens you used, your model name, and the output field set to your full final response text. \
+             If your host exposes token breakdowns, also pass input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, \
+             and estimated_cost_usd — this lets agent007 record prompt-caching economics accurately instead of using flat estimates. \
+             In hosted-MCP mode, prompt caching is managed by the host/editor rather than by agent007 directly.\",\
              \"memory\":{{\"project\":{project:?},\"user\":{user:?},\"global\":{global:?},\"repo_brain\":{repo_brain:?},\"rag_context\":{rag:?}}}}}",
             project = mem_ctx.project,
             user = mem_ctx.user,
@@ -3440,15 +3541,41 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
                 // Use actual LLM token counts when available; fall back to char estimate.
                 let tokens = report
                     .metrics
-                    .input_tokens
-                    .zip(report.metrics.output_tokens)
-                    .map(|(i, o)| (i + o) as usize)
+                    .total_tokens
+                    .map(|value| value as usize)
+                    .or_else(|| {
+                        report
+                            .metrics
+                            .input_tokens
+                            .zip(report.metrics.output_tokens)
+                            .map(|(i, o)| (i + o) as usize)
+                    })
                     .unwrap_or_else(|| output.len() / 4);
                 let telemetry = RetrievalTelemetryArtifact::from_skill_report(
                     stack.rag_warmup_indexed_docs,
                     &report,
                 );
                 let _ = write_retrieval_telemetry(&stack.run_store, &run_id, &telemetry);
+                let token_summary = agent007_core::run_store::RunTokenSummary {
+                    tokens: report.metrics.total_tokens.unwrap_or(tokens as u64),
+                    requests: 1,
+                    input_tokens: report.metrics.input_tokens.unwrap_or(0) as u64,
+                    output_tokens: report.metrics.output_tokens.unwrap_or(0) as u64,
+                    cache_read_tokens: report.metrics.cache_read_tokens.unwrap_or(0) as u64,
+                    cache_write_tokens: report.metrics.cache_write_tokens.unwrap_or(0) as u64,
+                    estimated_usd: report
+                        .metrics
+                        .estimated_cost_usd
+                        .unwrap_or(tokens as f64 * agent007_core::TOKEN_PRICE_PER_TOKEN_USD),
+                    cost_mode: if report.metrics.estimated_cost_usd.is_some() {
+                        agent007_core::run_store::RunCostMode::ProviderEstimate
+                    } else {
+                        agent007_core::run_store::RunCostMode::FallbackEstimate
+                    },
+                };
+                let _ = stack
+                    .run_store
+                    .overwrite_token_summary(&run_id, &token_summary);
                 let _ = stack.run_store.finish_run(&run_id, true, &output);
                 Ok((output, tokens))
             }
@@ -3486,9 +3613,10 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
              {}\n\n\
              ---\n\
              After completing this skill, call agent007_record_tokens with run_id={}, \
-             the actual total tokens you used (input+output), your model name, \
-             and the output field set to your full response text (this saves it to project memory \
-             so future invocations have context and use fewer tokens).\n",
+             the actual total tokens you used, your model name, and the output field set to your full response text. \
+             If your host exposes token breakdowns, also pass input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, \
+             and estimated_cost_usd so agent007 can account for prompt-cache reads/writes accurately. \
+             Hosted-MCP prompt caching is managed by the host/editor, not by agent007 directly.\n",
             skill.name(),
             trigger,
             run_id,
@@ -6186,8 +6314,18 @@ output = "notes"
         let run_id = create_delegate_run("workflow", "recover me").unwrap();
         assert_eq!(load_run_store().cleanup_stale_runs(), 1);
 
-        let message =
-            record_actual_tokens(&run_id, 2800, "host-llm", Some("final output")).unwrap();
+        let message = record_actual_tokens(
+            &run_id,
+            2800,
+            "host-llm",
+            Some("final output"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(message.contains("Recovered stale run"));
 
         let detail = load_run_store().load_run(&run_id).unwrap();
@@ -6229,8 +6367,18 @@ output = "notes"
             Some("delegated to host LLM")
         );
 
-        let message =
-            record_actual_tokens(&run_id, 512, "host-llm", Some("final hosted output")).unwrap();
+        let message = record_actual_tokens(
+            &run_id,
+            512,
+            "host-llm",
+            Some("final hosted output"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(message.contains("Recorded 512 tokens"));
 
         let detail = load_run_store().load_run(&run_id).unwrap();
@@ -6265,6 +6413,58 @@ output = "notes"
     }
 
     #[test]
+    fn record_actual_tokens_persists_host_reported_breakdown_and_cost() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+
+        let run_id = create_delegate_run("skill", "report exact hosted usage").unwrap();
+        mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
+
+        record_actual_tokens(
+            &run_id,
+            321,
+            "claude-sonnet-4-6",
+            Some("exact output"),
+            Some(120),
+            Some(80),
+            Some(30),
+            Some(20),
+            Some(0.0125),
+        )
+        .unwrap();
+
+        let summary: agent007_core::run_store::RunTokenSummary = load_run_store()
+            .read_json_artifact(&run_id, "token-summary.json")
+            .unwrap();
+        assert_eq!(summary.tokens, 321);
+        assert_eq!(summary.requests, 1);
+        assert_eq!(summary.input_tokens, 120);
+        assert_eq!(summary.output_tokens, 80);
+        assert_eq!(summary.cache_read_tokens, 30);
+        assert_eq!(summary.cache_write_tokens, 20);
+        assert_eq!(summary.estimated_usd, 0.0125);
+        assert_eq!(
+            summary.cost_mode,
+            agent007_core::run_store::RunCostMode::HostReported
+        );
+
+        let scorecard = load_run_store().read_run_scorecard(&run_id).unwrap();
+        assert_eq!(scorecard.tokens, 321);
+        assert_eq!(scorecard.input_tokens, 120);
+        assert_eq!(scorecard.output_tokens, 80);
+        assert_eq!(scorecard.cache_read_tokens, 30);
+        assert_eq!(scorecard.cache_write_tokens, 20);
+        assert_eq!(scorecard.estimated_usd, 0.0125);
+        assert_eq!(
+            scorecard.cost_mode,
+            agent007_core::run_store::RunCostMode::HostReported
+        );
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
     fn record_actual_tokens_uses_kind_specific_memory_keys_for_delegate_runs() {
         let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
@@ -6273,7 +6473,18 @@ output = "notes"
         let run_id = create_delegate_run("workflow", "finish hosted workflow").unwrap();
         mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
 
-        record_actual_tokens(&run_id, 42, "host-llm", Some("workflow final output")).unwrap();
+        record_actual_tokens(
+            &run_id,
+            42,
+            "host-llm",
+            Some("workflow final output"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let workflow_key = format!("workflow_{}", &run_id[..8.min(run_id.len())]);
         let stored = memory_store()
@@ -6295,7 +6506,18 @@ output = "notes"
         let run_id = create_delegate_run("workflow", "ship release").unwrap();
         mark_delegate_run_handed_off(&run_id, "delegated to host LLM", "handoff").unwrap();
 
-        record_actual_tokens(&run_id, 77, "host-llm", Some("workflow result")).unwrap();
+        record_actual_tokens(
+            &run_id,
+            77,
+            "host-llm",
+            Some("workflow result"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let scoped = memory_store().scoped("project");
         let by_run = scoped
@@ -6338,7 +6560,7 @@ output = "notes"
             .write_text_artifact(&run_id, "output.txt", "captured output")
             .unwrap();
 
-        record_actual_tokens(&run_id, 19, "host-llm", None).unwrap();
+        record_actual_tokens(&run_id, 19, "host-llm", None, None, None, None, None, None).unwrap();
 
         let detail = load_run_store().load_run(&run_id).unwrap();
         assert_eq!(
@@ -6368,7 +6590,18 @@ output = "notes"
             .finish_run(&run_id, false, "actual failure")
             .unwrap();
 
-        let message = record_actual_tokens(&run_id, 42, "host-llm", Some("ignored")).unwrap();
+        let message = record_actual_tokens(
+            &run_id,
+            42,
+            "host-llm",
+            Some("ignored"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(message.contains("already finalized"));
         assert!(message.contains("failed"));
 

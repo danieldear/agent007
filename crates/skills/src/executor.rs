@@ -22,6 +22,10 @@ pub struct SkillExecutionMetrics {
     /// Actual token counts from the LLM API response, if available.
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    pub cache_read_tokens: Option<u32>,
+    pub cache_write_tokens: Option<u32>,
+    pub total_tokens: Option<u64>,
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +199,10 @@ impl SkillExecutor {
         let mut metrics = metrics_from_retrieval(&rag_context, &retrieval_stats);
         metrics.input_tokens = response.input_tokens;
         metrics.output_tokens = response.output_tokens;
+        metrics.cache_read_tokens = response.cached_tokens;
+        metrics.cache_write_tokens = response.cache_write_tokens;
+        metrics.total_tokens = response.total_tokens_with_fallback();
+        metrics.estimated_cost_usd = response.estimated_cost_usd;
 
         Ok(SkillExecutionReport {
             output: response.content,
@@ -218,6 +226,10 @@ fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> Skill
         mock_embedding: retrieval.mock_embedding,
         input_tokens: None,
         output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        total_tokens: None,
+        estimated_cost_usd: None,
     }
 }
 
@@ -269,6 +281,9 @@ mod tests {
                 input_tokens: None,
                 output_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
+                total_tokens: None,
+                estimated_cost_usd: None,
             })
         }
         fn name(&self) -> &str {
