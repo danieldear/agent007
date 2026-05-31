@@ -69,6 +69,36 @@ pub fn is_lazy_stub(value: &str) -> bool {
     value.starts_with(LAZY_STUB_PREFIX)
 }
 
+fn stable_context_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn dedupe_ready_step_system_prompts(mut steps: Vec<HostedWorkflowStep>) -> Vec<HostedWorkflowStep> {
+    let mut seen: HashMap<u64, (String, usize)> = HashMap::new();
+    for step in &mut steps {
+        let Some(prompt) = step.system_prompt.as_ref() else {
+            continue;
+        };
+        if prompt.trim().is_empty() {
+            continue;
+        }
+        let hash = stable_context_hash(prompt);
+        if let Some((first_agent, chars)) = seen.get(&hash) {
+            step.system_prompt = Some(format!(
+                "[agent007-persona-ref: same system prompt as agent '{first_agent}'; hash={hash:016x}; chars={chars}. Reuse the earlier system prompt from this workflow_next response.]"
+            ));
+        } else {
+            seen.insert(hash, (step.agent.clone(), prompt.chars().count()));
+        }
+    }
+    steps
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostedWorkflowProgressStatus {
@@ -367,11 +397,13 @@ impl HostedWorkflowEngine {
                 // submitting (e.g. it missed the original dispatch response or is
                 // polling), we re-deliver the step prompts so it can continue without
                 // being permanently stuck. This is an idempotent lease renewal.
-                let ready_steps = running_steps
-                    .iter()
-                    .filter_map(|step_id| step_map.get(step_id).cloned())
-                    .map(|step| self.hosted_step(def, state, &step))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let ready_steps = dedupe_ready_step_system_prompts(
+                    running_steps
+                        .iter()
+                        .filter_map(|step_id| step_map.get(step_id).cloned())
+                        .map(|step| self.hosted_step(def, state, &step))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
                 return Ok(HostedWorkflowProgress {
                     workflow: state.workflow.clone(),
                     task: state.task.clone(),
@@ -586,11 +618,13 @@ impl HostedWorkflowEngine {
             return self.progress(def, state, dispatch_ready);
         }
 
-        let ready_steps = non_extract_ids
-            .into_iter()
-            .filter_map(|step_id| step_map.get(&step_id).cloned())
-            .map(|step| self.hosted_step(def, state, &step))
-            .collect::<Result<Vec<_>, _>>()?;
+        let ready_steps = dedupe_ready_step_system_prompts(
+            non_extract_ids
+                .into_iter()
+                .filter_map(|step_id| step_map.get(&step_id).cloned())
+                .map(|step| self.hosted_step(def, state, &step))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
 
         Ok(HostedWorkflowProgress {
             workflow: state.workflow.clone(),
@@ -1264,6 +1298,39 @@ mod tests {
 
     fn hosted_engine() -> HostedWorkflowEngine {
         HostedWorkflowEngine::new(Arc::new(NoOpPersonaProvider))
+    }
+
+    #[test]
+    fn dedupe_ready_step_system_prompts_replaces_repeated_persona_blocks() {
+        let base = HostedWorkflowStep {
+            id: "a".to_string(),
+            agent: "Reviewer".to_string(),
+            model_hint: "host-llm".to_string(),
+            system_prompt: Some("You are a careful reviewer.".repeat(20)),
+            prompt: "review A".to_string(),
+            output_key: Some("a".to_string()),
+            inputs: HashMap::new(),
+            depends_on: Vec::new(),
+            step_type: StepType::Execute,
+            requires_approval: false,
+            session_id: "s".to_string(),
+        };
+        let mut second = base.clone();
+        second.id = "b".to_string();
+        second.prompt = "review B".to_string();
+
+        let deduped = dedupe_ready_step_system_prompts(vec![base, second]);
+
+        assert!(deduped[0]
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains("careful reviewer"));
+        assert!(deduped[1]
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains("agent007-persona-ref"));
     }
 
     fn single_step_def() -> WorkflowDef {
