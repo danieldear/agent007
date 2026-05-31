@@ -294,11 +294,15 @@ impl WorkflowRunner {
 
                     if let Some(existing_content) = pending_approval_content {
                         step_futures.push(tokio::spawn(async move {
-                            Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>((
+                            Ok::<
+                                (crate::types::StepDef, String, String, usize, Option<f64>),
+                                WorkflowError,
+                            >((
                                 step,
                                 existing_content,
                                 String::new(),
                                 0,
+                                None,
                             ))
                         }));
                         continue;
@@ -307,7 +311,7 @@ impl WorkflowRunner {
                     // Sub-workflow steps run inline (not in tokio::spawn) to avoid Send bounds
                     if step.r#type == StepType::SubWorkflow {
                         let sub_result: Result<
-                            (crate::types::StepDef, String, String, usize),
+                            (crate::types::StepDef, String, String, usize, Option<f64>),
                             WorkflowError,
                         > = async {
                             let wf_name =
@@ -352,7 +356,13 @@ impl WorkflowRunner {
                                 .collect::<Vec<_>>()
                                 .join("\n\n");
                             let tokens = result.budget_used.tokens as usize;
-                            Ok((step, content, format!("sub-workflow/{wf_name}"), tokens))
+                            Ok((
+                                step,
+                                content,
+                                format!("sub-workflow/{wf_name}"),
+                                tokens,
+                                None,
+                            ))
                         }
                         .await;
                         step_futures.push(tokio::spawn(async move { sub_result }));
@@ -396,7 +406,13 @@ impl WorkflowRunner {
                         };
 
                         let multi_result: Result<
-                            (crate::types::StepDef, String, String, usize),
+                            (
+                                crate::types::StepDef,
+                                String,
+                                String,
+                                usize,
+                                Option<f64>,
+                            ),
                             WorkflowError,
                         > = async {
                             // Resolve the orchestrator persona.
@@ -507,6 +523,7 @@ impl WorkflowRunner {
                                 result.output,
                                 format!("multi-agent/{persona_name}"),
                                 result.token_estimate,
+                                None,
                             ))
                         }
                         .await;
@@ -583,26 +600,31 @@ impl WorkflowRunner {
 
                         // Use actual API token counts when available; fall back to char estimate.
                         let tokens = resp
-                            .input_tokens
-                            .and_then(|i| resp.output_tokens.map(|o| (i + o) as usize))
+                            .total_tokens_with_fallback()
+                            .map(|value| value as usize)
                             .unwrap_or_else(|| rendered.len() / 4 + resp.content.len() / 4);
+                        let cost_usd = resp.estimated_cost_usd;
                         let actual_model = if resp.model.is_empty() {
                             model_name
                         } else {
                             resp.model.clone()
                         };
 
-                        Ok::<(crate::types::StepDef, String, String, usize), WorkflowError>((
+                        Ok::<
+                            (crate::types::StepDef, String, String, usize, Option<f64>),
+                            WorkflowError,
+                        >((
                             step,
                             resp.content,
                             actual_model,
                             tokens,
+                            cost_usd,
                         ))
                     }));
                 }
 
                 for fut in step_futures {
-                    let (step, content, step_model, step_tokens) = match fut.await {
+                    let (step, content, step_model, step_tokens, step_cost_usd) = match fut.await {
                         Ok(Ok(result)) => result,
                         Ok(Err(error)) => {
                             let step_id = workflow_error_step_id(&error);
@@ -777,8 +799,10 @@ impl WorkflowRunner {
                     // Enforce budget and apply graceful degradation when configured.
                     if let Some(budget) = &def.budget {
                         let mut used = budget_used.lock().await;
-                        let token_estimate = estimate_tokens(&final_content);
-                        let usd_estimate = token_estimate as f64 * 0.000_002; // $2 per 1M tokens placeholder
+                        let token_estimate =
+                            (step_tokens as u64).max(estimate_tokens(&final_content));
+                        let usd_estimate =
+                            step_cost_usd.unwrap_or(token_estimate as f64 * 0.000_002); // fallback placeholder
 
                         match evaluate_budget_decision(
                             budget,
@@ -1824,6 +1848,9 @@ mod tests {
                 input_tokens: None,
                 output_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
+                total_tokens: None,
+                estimated_cost_usd: None,
             })
         }
     }
@@ -2016,7 +2043,12 @@ mod tests {
             duration_ms: Some(500),
             tokens: 0,
             requests: 1,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
             estimated_usd: cost_usd,
+            cost_mode: agent007_core::RunCostMode::FallbackEstimate,
             retry_count: 0,
             tool_calls: 1,
             tool_errors: 0,
@@ -2723,7 +2755,12 @@ mod tests {
                 duration_ms: Some(100),
                 tokens: 0,
                 requests: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
                 estimated_usd: 0.0,
+                cost_mode: agent007_core::RunCostMode::FallbackEstimate,
                 retry_count,
                 tool_calls: 0,
                 tool_errors: 0,

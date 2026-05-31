@@ -4,6 +4,58 @@ use crate::types::{CompletionRequest, CompletionResponse, Message, Role};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+#[derive(Debug, Clone, Copy)]
+struct OpenAiPricing {
+    input_per_mtok: f64,
+    cached_input_per_mtok: f64,
+    output_per_mtok: f64,
+}
+
+fn openai_pricing_for_model(model: &str) -> Option<OpenAiPricing> {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.contains("codex-mini") {
+        return Some(OpenAiPricing {
+            input_per_mtok: 1.50,
+            cached_input_per_mtok: 0.375,
+            output_per_mtok: 6.0,
+        });
+    }
+    if normalized.contains("gpt-5.2-codex") || normalized.contains("gpt-5.2") {
+        return Some(OpenAiPricing {
+            input_per_mtok: 1.75,
+            cached_input_per_mtok: 0.175,
+            output_per_mtok: 14.0,
+        });
+    }
+    if normalized.contains("gpt-5.1-codex")
+        || normalized.contains("gpt-5.1")
+        || normalized.contains("gpt-5-codex")
+        || normalized == "gpt-5"
+    {
+        return Some(OpenAiPricing {
+            input_per_mtok: 1.25,
+            cached_input_per_mtok: 0.125,
+            output_per_mtok: 10.0,
+        });
+    }
+    None
+}
+
+fn openai_estimated_cost_usd(
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+    cached_input_tokens: u32,
+) -> Option<f64> {
+    let pricing = openai_pricing_for_model(model)?;
+    let uncached_input = input_tokens.saturating_sub(cached_input_tokens);
+    let input_cost = uncached_input as f64 * pricing.input_per_mtok / 1_000_000.0;
+    let cached_input_cost =
+        cached_input_tokens as f64 * pricing.cached_input_per_mtok / 1_000_000.0;
+    let output_cost = output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
+    Some(input_cost + cached_input_cost + output_cost)
+}
+
 pub struct CodexProvider {
     api_key: String,
     model: String,
@@ -106,14 +158,29 @@ impl ModelProvider for CodexProvider {
             message: "missing or invalid content field".to_string(),
         })?;
 
+        let input_tokens = json["usage"]["input_tokens"].as_u64().map(|x| x as u32);
+        let output_tokens = json["usage"]["output_tokens"].as_u64().map(|x| x as u32);
+        let cached_tokens = json["usage"]["input_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .map(|x| x as u32);
+        let estimated_cost_usd = match (input_tokens, output_tokens) {
+            (Some(input), Some(output)) => {
+                openai_estimated_cost_usd(model, input, output, cached_tokens.unwrap_or(0))
+            }
+            _ => None,
+        };
+
         Ok(CompletionResponse {
             content,
             model: model.to_string(),
-            input_tokens: json["usage"]["input_tokens"].as_u64().map(|x| x as u32),
-            output_tokens: json["usage"]["output_tokens"].as_u64().map(|x| x as u32),
-            cached_tokens: json["usage"]["input_tokens_details"]["cached_tokens"]
-                .as_u64()
-                .map(|x| x as u32),
+            input_tokens,
+            output_tokens,
+            cached_tokens,
+            cache_write_tokens: None,
+            total_tokens: input_tokens
+                .zip(output_tokens)
+                .map(|(input, output)| input as u64 + output as u64),
+            estimated_cost_usd,
         })
     }
 }
@@ -210,5 +277,13 @@ mod tests {
             extract_output_text(&response).as_deref(),
             Some("hello\nworld")
         );
+    }
+
+    #[test]
+    fn codex_cost_estimate_splits_cached_input() {
+        let estimate =
+            openai_estimated_cost_usd("gpt-5-codex", 1000, 200, 300).expect("known codex pricing");
+        let expected = (700.0 * 1.25 + 300.0 * 0.125 + 200.0 * 10.0) / 1_000_000.0;
+        assert!((estimate - expected).abs() < f64::EPSILON);
     }
 }

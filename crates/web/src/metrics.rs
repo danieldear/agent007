@@ -398,7 +398,11 @@ fn hydrate_from_run_store(metrics: &mut DashboardMetrics, store: &RunStore) {
     // Active agents are tasks currently executing.
     // Approval-paused runs are tracked separately in awaiting_approvals.
     metrics.active_agents = metrics.running_tasks;
-    metrics.estimated_usd = metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+    metrics.estimated_usd = if metrics.scorecard_run_count > 0 {
+        total_cost_usd
+    } else {
+        metrics.total_tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD
+    };
 }
 
 fn load_run_token_totals(store: &RunStore, run_id: &str) -> (u64, u32) {
@@ -472,7 +476,12 @@ fn load_or_synthesize_scorecard(
         duration_ms,
         tokens,
         requests,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
         estimated_usd: tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD,
+        cost_mode: agent007_core::RunCostMode::FallbackEstimate,
         retry_count: 0,
         tool_calls: 0,
         tool_errors: 0,
@@ -676,5 +685,41 @@ mod tests {
             .recent_tasks
             .iter()
             .any(|task| task.status == "awaiting-approval"));
+    }
+
+    #[test]
+    fn shared_snapshot_prefers_scorecard_costs_over_flat_token_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path().join("sessions"));
+
+        let run = store
+            .create_run("task", "cached provider call", "standalone", Some("claude"))
+            .unwrap();
+        store
+            .overwrite_token_summary(
+                &run.id,
+                &RunTokenSummary {
+                    tokens: 5_500_000,
+                    requests: 1,
+                    input_tokens: 1_900,
+                    output_tokens: 11_800,
+                    cache_read_tokens: 5_100_000,
+                    cache_write_tokens: 387_100,
+                    estimated_usd: 3.17,
+                    cost_mode: agent007_core::RunCostMode::ProviderEstimate,
+                },
+            )
+            .unwrap();
+        store
+            .finish_run_with_status(&run.id, RunStatus::Succeeded, "done")
+            .unwrap();
+
+        let snapshot = snapshot_with_shared_state(
+            DashboardMetrics::with_runtime(false, "standalone", "claude"),
+            dir.path(),
+        );
+
+        assert_eq!(snapshot.total_tokens, 5_500_000);
+        assert!((snapshot.estimated_usd - 3.17).abs() < f64::EPSILON);
     }
 }

@@ -37,6 +37,26 @@ pub struct CompletionResponse {
     /// Tokens served from provider cache (prompt caching hit). None if not reported or not cached.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_tokens: Option<u32>,
+    /// Tokens written into provider-side prompt cache on this request, when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u32>,
+    /// Provider-normalized total tokens for this request. This avoids double-counting cache
+    /// read tokens on APIs where cached tokens are already included in input_tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Provider-specific cost estimate in USD when the provider can calculate it precisely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+}
+
+impl CompletionResponse {
+    pub fn total_tokens_with_fallback(&self) -> Option<u64> {
+        self.total_tokens.or_else(|| {
+            self.input_tokens
+                .zip(self.output_tokens)
+                .map(|(input, output)| (input as u64) + (output as u64))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -69,12 +89,18 @@ mod tests {
             input_tokens: Some(5),
             output_tokens: Some(1),
             cached_tokens: Some(3),
+            cache_write_tokens: Some(2),
+            total_tokens: Some(11),
+            estimated_cost_usd: Some(0.000123),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: CompletionResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.content, "world");
         assert_eq!(back.input_tokens, Some(5));
         assert_eq!(back.cached_tokens, Some(3));
+        assert_eq!(back.cache_write_tokens, Some(2));
+        assert_eq!(back.total_tokens, Some(11));
+        assert_eq!(back.estimated_cost_usd, Some(0.000123));
     }
 
     #[test]

@@ -278,6 +278,7 @@ pub fn provider_readiness_response(
             "Available as fallback when using an editor-hosted MCP client."
         }
         .to_string(),
+        prompt_caching: Some("host-managed".to_string()),
     });
 
     let dry_run = is_dry_run();
@@ -296,6 +297,7 @@ pub fn provider_readiness_response(
             "Set AGENT007_DRY_RUN=1 for offline smoke tests."
         }
         .to_string(),
+        prompt_caching: Some("not-applicable".to_string()),
     });
 
     let claude_configured = has_anthropic_api_key();
@@ -314,11 +316,16 @@ pub fn provider_readiness_response(
         model: Some(config.models.default_model_for_provider("claude")),
         source: "ANTHROPIC_API_KEY".to_string(),
         hint: if claude_configured {
-            "ANTHROPIC_API_KEY is present; secret value is not exposed."
+            "ANTHROPIC_API_KEY is present; secret value is not exposed. Standalone Claude calls can use agent007-managed prompt caching for long system prompts."
         } else {
             "Set ANTHROPIC_API_KEY to enable Claude standalone execution."
         }
         .to_string(),
+        prompt_caching: Some(if claude_configured {
+            "standalone-only".to_string()
+        } else {
+            "unavailable".to_string()
+        }),
     });
 
     let codex_configured = has_openai_api_key();
@@ -337,11 +344,16 @@ pub fn provider_readiness_response(
         model: Some(config.models.default_model_for_provider("codex")),
         source: "OPENAI_API_KEY".to_string(),
         hint: if codex_configured {
-            "OPENAI_API_KEY is present; secret value is not exposed."
+            "OPENAI_API_KEY is present; secret value is not exposed. Cached-input pricing applies only on direct standalone API calls, not hosted-MCP delegation."
         } else {
             "Set OPENAI_API_KEY to enable OpenAI/Codex standalone execution."
         }
         .to_string(),
+        prompt_caching: Some(if codex_configured {
+            "standalone-only".to_string()
+        } else {
+            "unavailable".to_string()
+        }),
     });
 
     let ollama_configured = config.models.ollama.is_some();
@@ -380,6 +392,7 @@ pub fn provider_readiness_response(
             "Add [models.ollama] to config to use local models."
         }
         .to_string(),
+        prompt_caching: Some("not-applicable".to_string()),
     });
 
     let mut hints = Vec::new();
@@ -392,6 +405,10 @@ pub fn provider_readiness_response(
                 .to_string(),
         );
     }
+    hints.push(
+        "Prompt caching shown in provider cards applies to standalone provider calls; hosted-MCP runs rely on host/editor-managed caching behavior."
+            .to_string(),
+    );
 
     agent007_web::api::ProviderReadinessResponse {
         generated_at: chrono::Utc::now().to_rfc3339(),
@@ -1747,6 +1764,12 @@ mod tests {
             .providers
             .iter()
             .any(|p| p.id == "hosted-mcp" && p.available));
+        let hosted = status
+            .providers
+            .iter()
+            .find(|p| p.id == "hosted-mcp")
+            .unwrap();
+        assert_eq!(hosted.prompt_caching.as_deref(), Some("host-managed"));
         assert!(status
             .providers
             .iter()
@@ -1773,6 +1796,7 @@ mod tests {
         assert_eq!(codex.status, "ready");
         assert!(codex.configured);
         assert!(codex.available);
+        assert_eq!(codex.prompt_caching.as_deref(), Some("standalone-only"));
         let encoded = serde_json::to_string(&status).unwrap();
         assert!(!encoded.contains("sk-test-secret-value"));
         std::env::remove_var("OPENAI_API_KEY");
@@ -1795,6 +1819,7 @@ mod tests {
         let status = provider_readiness_response(&config);
         let ollama = status.providers.iter().find(|p| p.id == "ollama").unwrap();
         assert_eq!(ollama.source, "[models.ollama].base_url (redacted)");
+        assert_eq!(ollama.prompt_caching.as_deref(), Some("not-applicable"));
         let encoded = serde_json::to_string(&status).unwrap();
         assert!(!encoded.contains("secret-token"));
         assert!(!encoded.contains("user:"));
