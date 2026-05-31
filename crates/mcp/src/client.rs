@@ -14,7 +14,11 @@ use tokio::{
 use crate::{config::McpServerConfig, error::McpError};
 
 /// Timeout for the initial MCP handshake (`ClientInfo::serve`).
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+///
+/// 10s proved too tight for heavier local servers under CI load; use a more
+/// forgiving default so smoke tests and real project startups do not fail
+/// spuriously while still surfacing genuinely stuck servers.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for listing tools from a server.
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for a single tool call. 60 s gives long-running tools room while
