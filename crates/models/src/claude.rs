@@ -14,7 +14,18 @@ struct ClaudePricing {
 
 fn claude_pricing_for_model(model: &str) -> Option<ClaudePricing> {
     let normalized = model.trim().to_ascii_lowercase();
-    if normalized.contains("haiku-3-5") || normalized.contains("haiku 3.5") {
+    if normalized.contains("haiku-4-5") || normalized.contains("haiku 4.5") {
+        return Some(ClaudePricing {
+            input_per_mtok: 1.0,
+            cache_read_per_mtok: 0.10,
+            cache_write_per_mtok: 1.25,
+            output_per_mtok: 5.0,
+        });
+    }
+    if normalized.contains("3-5-haiku")
+        || normalized.contains("haiku-3-5")
+        || normalized.contains("haiku 3.5")
+    {
         return Some(ClaudePricing {
             input_per_mtok: 0.80,
             cache_read_per_mtok: 0.08,
@@ -22,20 +33,44 @@ fn claude_pricing_for_model(model: &str) -> Option<ClaudePricing> {
             output_per_mtok: 4.0,
         });
     }
-    if normalized.contains("haiku") {
+    if normalized.contains("opus-4-8")
+        || normalized.contains("opus 4.8")
+        || normalized.contains("opus-4-7")
+        || normalized.contains("opus 4.7")
+        || normalized.contains("opus-4-6")
+        || normalized.contains("opus 4.6")
+        || normalized.contains("opus-4-5")
+        || normalized.contains("opus 4.5")
+    {
         return Some(ClaudePricing {
-            input_per_mtok: 0.25,
-            cache_read_per_mtok: 0.03,
-            cache_write_per_mtok: 0.30,
-            output_per_mtok: 1.25,
+            input_per_mtok: 5.0,
+            cache_read_per_mtok: 0.50,
+            cache_write_per_mtok: 6.25,
+            output_per_mtok: 25.0,
         });
     }
-    if normalized.contains("opus") {
+    if normalized.contains("opus-4-1") || normalized.contains("opus 4.1") {
         return Some(ClaudePricing {
             input_per_mtok: 15.0,
             cache_read_per_mtok: 1.50,
             cache_write_per_mtok: 18.75,
             output_per_mtok: 75.0,
+        });
+    }
+    if normalized.contains("haiku") {
+        return Some(ClaudePricing {
+            input_per_mtok: 1.0,
+            cache_read_per_mtok: 0.10,
+            cache_write_per_mtok: 1.25,
+            output_per_mtok: 5.0,
+        });
+    }
+    if normalized.contains("opus") {
+        return Some(ClaudePricing {
+            input_per_mtok: 5.0,
+            cache_read_per_mtok: 0.50,
+            cache_write_per_mtok: 6.25,
+            output_per_mtok: 25.0,
         });
     }
     if normalized.contains("sonnet") {
@@ -316,5 +351,26 @@ mod tests {
             .expect("known sonnet pricing");
         let expected = (1000.0 * 3.0 + 200.0 * 15.0 + 3000.0 * 0.30 + 4000.0 * 3.75) / 1_000_000.0;
         assert!((estimate - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn claude_pricing_matches_real_haiku_model_ids() {
+        let haiku_35 = claude_estimated_cost_usd("claude-3-5-haiku-20241022", 1_000_000, 0, 0, 0)
+            .expect("known haiku 3.5 pricing");
+        assert!((haiku_35 - 0.80).abs() < f64::EPSILON);
+
+        let haiku_45 = claude_estimated_cost_usd("claude-haiku-4-5-20251001", 1_000_000, 0, 0, 0)
+            .expect("known haiku 4.5 pricing");
+        assert!((haiku_45 - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn claude_pricing_distinguishes_opus_46_from_41() {
+        let opus_46 = claude_estimated_cost_usd("claude-opus-4-6", 1_000_000, 0, 0, 0)
+            .expect("known opus 4.6 pricing");
+        let opus_41 = claude_estimated_cost_usd("claude-opus-4-1", 1_000_000, 0, 0, 0)
+            .expect("known opus 4.1 pricing");
+        assert!((opus_46 - 5.0).abs() < f64::EPSILON);
+        assert!((opus_41 - 15.0).abs() < f64::EPSILON);
     }
 }

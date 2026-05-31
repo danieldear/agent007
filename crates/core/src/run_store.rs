@@ -691,8 +691,11 @@ impl RunStore {
             .unwrap_or_default();
         summary.tokens += token_estimate as u64;
         summary.requests += 1;
-        summary.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
-        summary.cost_mode = RunCostMode::FallbackEstimate;
+        if summary.cost_mode == RunCostMode::FallbackEstimate {
+            summary.estimated_usd = summary.tokens as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        } else {
+            summary.estimated_usd += token_estimate as f64 * TOKEN_PRICE_PER_TOKEN_USD;
+        }
         self.write_json_artifact(run_id, TOKEN_SUMMARY_ARTIFACT, &summary)
     }
 
@@ -1382,6 +1385,50 @@ mod tests {
             .unwrap();
         assert_eq!(summary.tokens, 42);
         assert_eq!(summary.requests, 1);
+    }
+
+    #[test]
+    fn append_event_preserves_host_reported_cost_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("task", "preserve exact cost", "hosted-mcp", Some("claude"))
+            .unwrap();
+
+        store
+            .overwrite_token_summary(
+                &run.id,
+                &RunTokenSummary {
+                    tokens: 300,
+                    requests: 1,
+                    input_tokens: 100,
+                    output_tokens: 80,
+                    cache_read_tokens: 70,
+                    cache_write_tokens: 50,
+                    estimated_usd: 0.0125,
+                    cost_mode: RunCostMode::HostReported,
+                },
+            )
+            .unwrap();
+
+        store
+            .append_event(
+                &run.id,
+                &AgentEvent::ModelRequest {
+                    provider: "claude".to_string(),
+                    prompt_ref: PromptRef::new(),
+                    token_estimate: 25,
+                },
+            )
+            .unwrap();
+
+        let summary: RunTokenSummary = store
+            .read_json_artifact(&run.id, TOKEN_SUMMARY_ARTIFACT)
+            .unwrap();
+        assert_eq!(summary.tokens, 325);
+        assert_eq!(summary.requests, 2);
+        assert_eq!(summary.cost_mode, RunCostMode::HostReported);
+        assert!(summary.estimated_usd >= 0.0125);
     }
 
     #[test]
