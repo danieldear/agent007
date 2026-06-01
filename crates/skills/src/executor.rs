@@ -7,12 +7,21 @@ use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Ro
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+const MAX_SKILL_RAG_CONTEXT_CHARS: usize = 8_000;
+const MAX_SKILL_MEMORY_CONTEXT_CHARS: usize = 6_000;
+const MAX_SKILL_LSP_CONTEXT_CHARS: usize = 6_000;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillExecutionMetrics {
     pub retrieval_queries: u32,
     pub retrieval_hits: u32,
     pub retrieval_hit_rate: f64,
     pub rag_context_chars: usize,
+    pub memory_context_chars: usize,
+    pub lsp_context_chars: usize,
+    pub rendered_prompt_chars: usize,
+    pub skipped_context_sections: Vec<String>,
+    pub context_policy: String,
     pub graph_hits: usize,
     pub graph_files: usize,
     pub graph_context_chars: usize,
@@ -87,48 +96,82 @@ impl SkillExecutor {
         skill: &Skill,
         args: &str,
     ) -> Result<SkillExecutionReport, SkillError> {
-        // 1. RAG context
-        let (rag_context, retrieval_stats) = self
-            .retriever
-            .retrieve_with_stats(args)
-            .await
-            .map_err(|e| SkillError::Memory {
-                name: skill.name().to_string(),
-                source: e,
-            })?;
+        let needs = TemplateContextNeeds::from_template(skill.template());
+        let mut skipped_context_sections = Vec::new();
 
-        // 2. Read memory values — data lives at <scope>/<key>.md, so read the full scope
-        let memory_user =
-            self.memory
-                .inner
-                .scoped("user")
-                .read_all()
+        // 1. RAG context: load lazily only when the template actually asks for it.
+        let (rag_context, retrieval_stats) = if needs.rag_context {
+            let (context, stats) = self
+                .retriever
+                .retrieve_with_stats(args)
+                .await
                 .map_err(|e| SkillError::Memory {
                     name: skill.name().to_string(),
                     source: e,
                 })?;
-        let memory_project = self
-            .memory
-            .inner
-            .scoped("project")
-            .read_all()
-            .map_err(|e| SkillError::Memory {
-                name: skill.name().to_string(),
-                source: e,
-            })?;
-        let memory_global = match &self.global_memory {
-            Some(store) => store.read_all().map_err(|e| SkillError::Memory {
-                name: skill.name().to_string(),
-                source: e,
-            })?,
-            None => String::new(),
+            (
+                cap_context_block("rag_context", &context, MAX_SKILL_RAG_CONTEXT_CHARS),
+                stats,
+            )
+        } else {
+            skipped_context_sections.push("rag_context".to_string());
+            (String::new(), RetrieveStats::default())
         };
 
-        // 3. LSP context — auto-detect language server and inject diagnostics/symbols
-        let lsp_context_str = if self
-            .lsp_inject_categories
-            .iter()
-            .any(|c| c == skill.category())
+        // 2. Read memory lazily and cap each block. This avoids paying for full
+        // memory scopes on skills that only need args/task or only need one scope.
+        let memory_user = if needs.memory_user {
+            let scoped = self.memory.inner.scoped("user");
+            cap_context_block(
+                "memory.user",
+                &scoped.read_top_n(4).map_err(|e| SkillError::Memory {
+                    name: skill.name().to_string(),
+                    source: e,
+                })?,
+                MAX_SKILL_MEMORY_CONTEXT_CHARS,
+            )
+        } else {
+            skipped_context_sections.push("memory.user".to_string());
+            String::new()
+        };
+        let memory_project = if needs.memory_project {
+            let scoped = self.memory.inner.scoped("project");
+            cap_context_block(
+                "memory.project",
+                &scoped.read_top_n(8).map_err(|e| SkillError::Memory {
+                    name: skill.name().to_string(),
+                    source: e,
+                })?,
+                MAX_SKILL_MEMORY_CONTEXT_CHARS,
+            )
+        } else {
+            skipped_context_sections.push("memory.project".to_string());
+            String::new()
+        };
+        let memory_global = if needs.memory_global {
+            match &self.global_memory {
+                Some(store) => cap_context_block(
+                    "memory.global",
+                    &store.read_top_n(4).map_err(|e| SkillError::Memory {
+                        name: skill.name().to_string(),
+                        source: e,
+                    })?,
+                    MAX_SKILL_MEMORY_CONTEXT_CHARS,
+                ),
+                None => String::new(),
+            }
+        } else {
+            skipped_context_sections.push("memory.global".to_string());
+            String::new()
+        };
+
+        // 3. LSP context — only query when the template asks for it and the skill
+        // category is configured for LSP enrichment.
+        let lsp_context_str = if needs.lsp_context
+            && self
+                .lsp_inject_categories
+                .iter()
+                .any(|c| c == skill.category())
         {
             let cwd = std::env::current_dir().unwrap_or_default();
             if let Some((_lang, server_cmd)) = LspClient::detect_language(&cwd) {
@@ -136,12 +179,19 @@ impl SkillExecutor {
                 client
                     .query(&cwd, &[])
                     .await
-                    .map(|ctx| ctx.to_prompt_string())
+                    .map(|ctx| {
+                        cap_context_block(
+                            "lsp_context",
+                            &ctx.to_prompt_string(),
+                            MAX_SKILL_LSP_CONTEXT_CHARS,
+                        )
+                    })
                     .unwrap_or_default()
             } else {
                 String::new()
             }
         } else {
+            skipped_context_sections.push("lsp_context".to_string());
             String::new()
         };
 
@@ -173,6 +223,7 @@ impl SkillExecutor {
             }
         })?;
 
+        let rendered_prompt_chars = rendered.chars().count();
         let request = CompletionRequest {
             model: skill.model().to_string(),
             messages: vec![Message {
@@ -197,6 +248,13 @@ impl SkillExecutor {
         })?;
 
         let mut metrics = metrics_from_retrieval(&rag_context, &retrieval_stats);
+        metrics.memory_context_chars = memory_user.chars().count()
+            + memory_project.chars().count()
+            + memory_global.chars().count();
+        metrics.lsp_context_chars = lsp_context_str.chars().count();
+        metrics.rendered_prompt_chars = rendered_prompt_chars;
+        metrics.skipped_context_sections = skipped_context_sections;
+        metrics.context_policy = "placeholder-aware-capped".to_string();
         metrics.input_tokens = response.input_tokens;
         metrics.output_tokens = response.output_tokens;
         metrics.cache_read_tokens = response.cached_tokens;
@@ -211,13 +269,58 @@ impl SkillExecutor {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct TemplateContextNeeds {
+    rag_context: bool,
+    memory_user: bool,
+    memory_project: bool,
+    memory_global: bool,
+    lsp_context: bool,
+}
+
+impl TemplateContextNeeds {
+    fn from_template(template: &str) -> Self {
+        let compact: String = template.chars().filter(|c| !c.is_whitespace()).collect();
+        Self {
+            rag_context: template_references_var(&compact, "rag_context"),
+            memory_user: template_references_var(&compact, "memory.user"),
+            memory_project: template_references_var(&compact, "memory.project"),
+            memory_global: template_references_var(&compact, "memory.global"),
+            lsp_context: template_references_var(&compact, "lsp_context"),
+        }
+    }
+}
+
+fn template_references_var(compact_template: &str, var: &str) -> bool {
+    compact_template.contains(&format!("{{{{{var}"))
+}
+
+fn cap_context_block(label: &str, value: &str, max_chars: usize) -> String {
+    let original_chars = value.chars().count();
+    if original_chars <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated: String = value.chars().take(max_chars).collect();
+    truncated.push_str(&format!(
+        "\n\n[agent007-context truncated: {label}; original_chars={}; kept_chars={max_chars}]",
+        original_chars
+    ));
+    truncated
+}
+
 fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> SkillExecutionMetrics {
+    let queried = retrieval.query_chars > 0;
     let hits = u32::from(!rag_context.is_empty());
     SkillExecutionMetrics {
-        retrieval_queries: 1,
+        retrieval_queries: u32::from(queried),
         retrieval_hits: hits,
-        retrieval_hit_rate: hits as f64,
+        retrieval_hit_rate: if queried { hits as f64 } else { 0.0 },
         rag_context_chars: rag_context.chars().count(),
+        memory_context_chars: 0,
+        lsp_context_chars: 0,
+        rendered_prompt_chars: 0,
+        skipped_context_sections: Vec::new(),
+        context_policy: "placeholder-aware-capped".to_string(),
         graph_hits: retrieval.graph_hits,
         graph_files: retrieval.graph_files,
         graph_context_chars: retrieval.graph_context_chars,
@@ -252,12 +355,14 @@ mod tests {
     struct MockModelProvider {
         calls: Arc<AtomicUsize>,
         last_model: Arc<Mutex<Option<String>>>,
+        last_prompt: Arc<Mutex<Option<String>>>,
     }
     impl MockModelProvider {
         fn new() -> Self {
             Self {
                 calls: Arc::new(AtomicUsize::new(0)),
                 last_model: Arc::new(Mutex::new(None)),
+                last_prompt: Arc::new(Mutex::new(None)),
             }
         }
         fn call_count(&self) -> usize {
@@ -265,6 +370,9 @@ mod tests {
         }
         fn last_model(&self) -> Option<String> {
             self.last_model.lock().unwrap().clone()
+        }
+        fn last_prompt(&self) -> Option<String> {
+            self.last_prompt.lock().unwrap().clone()
         }
     }
     #[async_trait]
@@ -275,6 +383,7 @@ mod tests {
         ) -> Result<CompletionResponse, ModelError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             *self.last_model.lock().unwrap() = Some(request.model.clone());
+            *self.last_prompt.lock().unwrap() = request.messages.first().map(|m| m.content.clone());
             Ok(CompletionResponse {
                 content: "mock-output".to_string(),
                 model: request.model,
@@ -417,6 +526,77 @@ mod tests {
         assert_eq!(result, "mock-output");
         // Smoke assertion on render path: execution succeeded with the new variable present.
         assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn executor_skips_context_that_template_does_not_request() {
+        let dir = TempDir::new().unwrap();
+        let provider = Arc::new(MockModelProvider::new());
+        let executor = make_executor(dir.path(), Arc::clone(&provider));
+        let skill = make_skill(
+            "Args only: {{args}}. Literal words: rag_context and memory.project.",
+            "claude",
+        );
+
+        let report = executor.execute_with_report(&skill, "hello").await.unwrap();
+
+        assert_eq!(report.metrics.retrieval_queries, 0);
+        assert_eq!(report.metrics.rag_context_chars, 0);
+        assert_eq!(report.metrics.memory_context_chars, 0);
+        assert!(report
+            .metrics
+            .skipped_context_sections
+            .contains(&"rag_context".to_string()));
+        assert!(!provider.last_prompt().unwrap().contains("rag-fragment"));
+    }
+
+    #[test]
+    fn template_context_needs_only_matches_placeholders() {
+        let literal = TemplateContextNeeds::from_template("literal rag_context memory.project");
+        assert!(!literal.rag_context);
+        assert!(!literal.memory_project);
+
+        let filtered = TemplateContextNeeds::from_template(
+            "{{ rag_context | safe }} {{ memory.project | default(value=\"\") }} {{ lsp_context }}",
+        );
+        assert!(filtered.rag_context);
+        assert!(filtered.memory_project);
+        assert!(filtered.lsp_context);
+    }
+
+    #[tokio::test]
+    async fn executor_loads_only_requested_memory_scope() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(MemoryStore::new(dir.path()));
+        store
+            .scoped("project")
+            .write("note", "project-context")
+            .unwrap();
+        store.scoped("user").write("note", "user-context").unwrap();
+
+        let provider = Arc::new(MockModelProvider::new());
+        let embedder = Arc::new(FixedEmbedder) as Arc<dyn EmbeddingProvider>;
+        let db = Arc::new(FixedVectorDB {
+            fragment: "rag-fragment".to_string(),
+        }) as Arc<dyn VectorDB>;
+        let retriever = Arc::new(Retriever::new(embedder, db, 1));
+        let executor = SkillExecutor::new(
+            Arc::clone(&provider) as Arc<dyn ModelProvider>,
+            retriever,
+            store.global(),
+        );
+        let skill = make_skill("Project: {{memory.project}}", "claude");
+
+        let report = executor.execute_with_report(&skill, "hello").await.unwrap();
+        let prompt = provider.last_prompt().unwrap();
+
+        assert!(prompt.contains("project-context"));
+        assert!(!prompt.contains("user-context"));
+        assert!(report.metrics.memory_context_chars > 0);
+        assert!(report
+            .metrics
+            .skipped_context_sections
+            .contains(&"memory.user".to_string()));
     }
 
     #[tokio::test]

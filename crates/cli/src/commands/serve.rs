@@ -3589,17 +3589,19 @@ async fn run_skill_mcp(config: &Config, trigger: String, args: String) -> Result
     } else {
         let skill = find_skill(&trigger)?;
 
-        // Load ranked memory context for template variable injection.
-        let mem_ctx = build_memory_context(&args);
+        let rendered_template = skill
+            .template()
+            .replace("{{args}}", &args)
+            .replace("{{ args }}", &args)
+            .replace("{{task}}", &args)
+            .replace("{{ task }}", &args);
+        let mem_ctx = if TemplateContextNeeds::from_template(&rendered_template).any() {
+            build_memory_context(&args)
+        } else {
+            MemoryContext::empty()
+        };
 
-        let rendered = mem_ctx.apply_to(
-            &skill
-                .template()
-                .replace("{{args}}", &args)
-                .replace("{{ args }}", &args)
-                .replace("{{task}}", &args)
-                .replace("{{ task }}", &args),
-        );
+        let rendered = mem_ctx.apply_to(&rendered_template);
 
         let run_id = create_delegate_run("skill", &format!("{trigger} {args}"))?;
         let output = format!(
@@ -3656,6 +3658,108 @@ fn memory_store() -> Arc<agent007_memory::store::MemoryStore> {
 }
 
 /// All memory-related context needed for template variable injection.
+const MAX_HOSTED_MEMORY_CONTEXT_CHARS: usize = 6_000;
+const MAX_HOSTED_REPO_BRAIN_CHARS: usize = 4_000;
+const MAX_HOSTED_RAG_CONTEXT_CHARS: usize = 8_000;
+
+fn cap_hosted_context_block(label: &str, value: &str, max_chars: usize) -> String {
+    let original_chars = value.chars().count();
+    if original_chars <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated: String = value.chars().take(max_chars).collect();
+    truncated.push_str(&format!(
+        "\n\n[agent007-context truncated: {label}; original_chars={}; kept_chars={max_chars}]",
+        original_chars
+    ));
+    truncated
+}
+
+fn stable_context_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+#[derive(Default)]
+struct ContextReuseTracker {
+    seen: std::collections::HashMap<u64, Vec<ContextReuseEntry>>,
+}
+
+struct ContextReuseEntry {
+    label: String,
+    value: String,
+    chars: usize,
+}
+
+struct PersonaPromptReuse {
+    agent: String,
+    prompt: String,
+    chars: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TemplateContextNeeds {
+    project: bool,
+    user: bool,
+    global: bool,
+    repo_brain: bool,
+    rag: bool,
+}
+
+impl TemplateContextNeeds {
+    fn from_template(template: &str) -> Self {
+        let compact: String = template.chars().filter(|c| !c.is_whitespace()).collect();
+        Self {
+            project: template_references_var(&compact, "memory.project"),
+            user: template_references_var(&compact, "memory.user"),
+            global: template_references_var(&compact, "memory.global"),
+            repo_brain: template_references_var(&compact, "memory.repo_brain"),
+            rag: template_references_var(&compact, "rag_context"),
+        }
+    }
+
+    fn any(self) -> bool {
+        self.project || self.user || self.global || self.repo_brain || self.rag
+    }
+}
+
+fn template_references_var(compact_template: &str, var: &str) -> bool {
+    compact_template.contains(&format!("{{{{{var}"))
+}
+
+fn template_block_references_var(block: &str, var: &str) -> bool {
+    let compact: String = block.chars().filter(|c| !c.is_whitespace()).collect();
+    compact == var || compact.starts_with(&format!("{var}|"))
+}
+
+fn replace_template_var(template: &str, var: &str, replacement: &str) -> String {
+    let mut output = String::with_capacity(template.len() + replacement.len());
+    let mut rest = template;
+    while let Some(open_idx) = rest.find("{{") {
+        output.push_str(&rest[..open_idx]);
+        let after_open = &rest[open_idx + 2..];
+        let Some(close_idx) = after_open.find("}}") else {
+            output.push_str(&rest[open_idx..]);
+            return output;
+        };
+        let block = &after_open[..close_idx];
+        if template_block_references_var(block, var) {
+            output.push_str(replacement);
+        } else {
+            output.push_str("{{");
+            output.push_str(block);
+            output.push_str("}}");
+        }
+        rest = &after_open[close_idx + 2..];
+    }
+    output.push_str(rest);
+    output
+}
+
 /// Build once via `build_memory_context()` and apply with `apply_to()`.
 struct MemoryContext {
     project: String,
@@ -3666,19 +3770,77 @@ struct MemoryContext {
 }
 
 impl MemoryContext {
+    fn empty() -> Self {
+        Self {
+            project: String::new(),
+            user: String::new(),
+            global: String::new(),
+            repo_brain: String::new(),
+            rag: String::new(),
+        }
+    }
+
     /// Replace all `{{memory.*}}` and `{{rag_context}}` placeholders in a template string.
     fn apply_to(&self, template: &str) -> String {
-        template
-            .replace("{{memory.project}}", &self.project)
-            .replace("{{ memory.project }}", &self.project)
-            .replace("{{memory.user}}", &self.user)
-            .replace("{{ memory.user }}", &self.user)
-            .replace("{{memory.global}}", &self.global)
-            .replace("{{ memory.global }}", &self.global)
-            .replace("{{memory.repo_brain}}", &self.repo_brain)
-            .replace("{{ memory.repo_brain }}", &self.repo_brain)
-            .replace("{{rag_context}}", &self.rag)
-            .replace("{{ rag_context }}", &self.rag)
+        let mut tracker = ContextReuseTracker::default();
+        self.apply_to_with_reuse(template, &mut tracker)
+    }
+
+    /// Replace placeholders while avoiding repeated large context blocks in a
+    /// multi-step hosted workflow. The first use receives the capped block;
+    /// subsequent identical uses receive a stable reference stub.
+    fn apply_to_with_reuse(&self, template: &str, tracker: &mut ContextReuseTracker) -> String {
+        let mut rendered = template.to_string();
+        let compact: String = template.chars().filter(|c| !c.is_whitespace()).collect();
+        if template_references_var(&compact, "memory.project") {
+            let project = self.reusable_block("memory.project", &self.project, tracker);
+            rendered = replace_template_var(&rendered, "memory.project", &project);
+        }
+        if template_references_var(&compact, "memory.user") {
+            let user = self.reusable_block("memory.user", &self.user, tracker);
+            rendered = replace_template_var(&rendered, "memory.user", &user);
+        }
+        if template_references_var(&compact, "memory.global") {
+            let global = self.reusable_block("memory.global", &self.global, tracker);
+            rendered = replace_template_var(&rendered, "memory.global", &global);
+        }
+        if template_references_var(&compact, "memory.repo_brain") {
+            let repo_brain = self.reusable_block("memory.repo_brain", &self.repo_brain, tracker);
+            rendered = replace_template_var(&rendered, "memory.repo_brain", &repo_brain);
+        }
+        if template_references_var(&compact, "rag_context") {
+            let rag = self.reusable_block("rag_context", &self.rag, tracker);
+            rendered = replace_template_var(&rendered, "rag_context", &rag);
+        }
+        rendered
+    }
+
+    fn reusable_block(
+        &self,
+        label: &str,
+        value: &str,
+        tracker: &mut ContextReuseTracker,
+    ) -> String {
+        if value.trim().is_empty() {
+            return String::new();
+        }
+        let hash = stable_context_hash(value);
+        let entries = tracker.seen.entry(hash).or_default();
+        if let Some(existing) = entries
+            .iter()
+            .find(|entry| entry.label == label && entry.value == value)
+        {
+            return format!(
+                "[agent007-context-ref: {}; hash={hash:016x}; chars={}; reused in this workflow. Use agent007_context_compile or the workflow context bundle if full text is required.]",
+                existing.label, existing.chars
+            );
+        }
+        entries.push(ContextReuseEntry {
+            label: label.to_string(),
+            value: value.to_string(),
+            chars: value.chars().count(),
+        });
+        value.to_string()
     }
 }
 
@@ -3687,7 +3849,11 @@ impl MemoryContext {
 fn build_memory_context(task_or_args: &str) -> MemoryContext {
     let project_store = memory_store();
     let project_scoped = project_store.scoped("project");
-    let memory_project = project_scoped.read_top_n(20).unwrap_or_default();
+    let memory_project = cap_hosted_context_block(
+        "memory.project",
+        &project_scoped.read_top_n(8).unwrap_or_default(),
+        MAX_HOSTED_MEMORY_CONTEXT_CHARS,
+    );
     let include_shared_memory = std::env::var("AGENT007_INCLUDE_SHARED_MEMORY")
         .map(|raw| {
             matches!(
@@ -3699,22 +3865,34 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
     let user_store = memory_store_for_scope("user");
     let user_scoped = user_store.scoped("user");
     let memory_user = if include_shared_memory {
-        user_scoped.read_top_n(10).unwrap_or_default()
+        cap_hosted_context_block(
+            "memory.user",
+            &user_scoped.read_top_n(4).unwrap_or_default(),
+            MAX_HOSTED_MEMORY_CONTEXT_CHARS,
+        )
     } else {
         String::new()
     };
     let global_store = memory_store_for_scope("global");
     let global_scoped = global_store.scoped("global");
     let memory_global = if include_shared_memory {
-        global_scoped.read_top_n(10).unwrap_or_default()
+        cap_hosted_context_block(
+            "memory.global",
+            &global_scoped.read_top_n(4).unwrap_or_default(),
+            MAX_HOSTED_MEMORY_CONTEXT_CHARS,
+        )
     } else {
         String::new()
     };
-    let memory_repo_brain = project_scoped
-        .read("repo_brain")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let memory_repo_brain = cap_hosted_context_block(
+        "memory.repo_brain",
+        &project_scoped
+            .read("repo_brain")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        MAX_HOSTED_REPO_BRAIN_CHARS,
+    );
 
     let graph_rag_context = structural_repo_context(task_or_args);
     let memory_rag_context = {
@@ -3754,14 +3932,22 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
                 }
             }
         }
-        hits.join("\n\n")
+        cap_hosted_context_block(
+            "memory.rag_hits",
+            &hits.join("\n\n"),
+            MAX_HOSTED_RAG_CONTEXT_CHARS,
+        )
     };
-    let rag_context = [graph_rag_context.as_str(), memory_rag_context.as_str()]
-        .into_iter()
-        .map(str::trim)
-        .filter(|block| !block.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let rag_context = cap_hosted_context_block(
+        "rag_context",
+        &[graph_rag_context.as_str(), memory_rag_context.as_str()]
+            .into_iter()
+            .map(str::trim)
+            .filter(|block| !block.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        MAX_HOSTED_RAG_CONTEXT_CHARS,
+    );
 
     MemoryContext {
         project: memory_project,
@@ -3947,10 +4133,21 @@ fn inject_memory_into_def(
     mut def: agent007_workflows::WorkflowDef,
     task: &str,
 ) -> agent007_workflows::WorkflowDef {
-    let mem_ctx = build_memory_context(task);
+    let all_prompts = def
+        .steps
+        .iter()
+        .filter_map(|step| step.prompt.as_deref())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mem_ctx = if TemplateContextNeeds::from_template(&all_prompts).any() {
+        build_memory_context(task)
+    } else {
+        MemoryContext::empty()
+    };
+    let mut tracker = ContextReuseTracker::default();
     for step in &mut def.steps {
         if let Some(prompt) = &step.prompt {
-            step.prompt = Some(mem_ctx.apply_to(prompt));
+            step.prompt = Some(mem_ctx.apply_to_with_reuse(prompt, &mut tracker));
         }
     }
     def
@@ -5359,22 +5556,35 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
     let def = load_workflow_def(name)?;
     let registry = configured_persona_registry();
 
-    // Load ranked memory context for template variable injection.
-    let mem_ctx = build_memory_context(task);
+    let all_prompts = def
+        .steps
+        .iter()
+        .filter_map(|step| step.prompt.as_deref())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mem_ctx = if TemplateContextNeeds::from_template(&all_prompts).any() {
+        build_memory_context(task)
+    } else {
+        MemoryContext::empty()
+    };
 
     let mut steps = Vec::new();
+    let mut context_reuse = ContextReuseTracker::default();
+    let mut persona_prompt_reuse: std::collections::HashMap<u64, Vec<PersonaPromptReuse>> =
+        std::collections::HashMap::new();
     for step in &def.steps {
         let persona = {
             use agent007_core::PersonaProvider;
             registry.get(&step.agent)
         };
 
-        let rendered_prompt = mem_ctx.apply_to(
+        let rendered_prompt = mem_ctx.apply_to_with_reuse(
             &step
                 .prompt
                 .as_deref()
                 .unwrap_or("")
                 .replace("{{task}}", task),
+            &mut context_reuse,
         );
 
         let mut step_json = serde_json::json!({
@@ -5389,8 +5599,31 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
         }
 
         if let Some(spec) = persona {
+            let raw_system_prompt = spec.system_prompt;
+            let system_prompt = if raw_system_prompt.trim().is_empty() {
+                String::new()
+            } else {
+                let hash = stable_context_hash(&raw_system_prompt);
+                let entries = persona_prompt_reuse.entry(hash).or_default();
+                if let Some(existing) = entries
+                    .iter()
+                    .find(|entry| entry.prompt == raw_system_prompt)
+                {
+                    format!(
+                        "[agent007-persona-ref: same system prompt as agent '{}'; hash={hash:016x}; chars={}. Reuse the earlier system prompt from this workflow plan.]",
+                        existing.agent, existing.chars
+                    )
+                } else {
+                    entries.push(PersonaPromptReuse {
+                        agent: step.agent.clone(),
+                        chars: raw_system_prompt.chars().count(),
+                        prompt: raw_system_prompt.clone(),
+                    });
+                    raw_system_prompt
+                }
+            };
             step_json["persona"] = serde_json::json!({
-                "system_prompt": spec.system_prompt,
+                "system_prompt": system_prompt,
                 "preferred_model": spec.preferred_model,
                 "allowed_tools": spec.allowed_tools,
             });
@@ -7108,6 +7341,90 @@ output = "plan"
         let stored = memory_read("project", "repo_brain").unwrap();
         assert!(stored.as_deref().unwrap_or("").contains("Repo Brain"));
         std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[test]
+    fn memory_context_reuses_duplicate_blocks_with_refs() {
+        let ctx = MemoryContext {
+            project: "same project context".repeat(20),
+            user: String::new(),
+            global: String::new(),
+            repo_brain: "same brain context".repeat(20),
+            rag: "same rag context".repeat(20),
+        };
+        let mut tracker = ContextReuseTracker::default();
+        let first = ctx.apply_to_with_reuse(
+            "Project={{memory.project}}
+Brain={{memory.repo_brain}}
+Rag={{rag_context}}",
+            &mut tracker,
+        );
+        let second = ctx.apply_to_with_reuse(
+            "Project={{memory.project}}
+Brain={{memory.repo_brain}}
+Rag={{rag_context}}",
+            &mut tracker,
+        );
+
+        assert!(first.contains("same project context"));
+        assert!(first.contains("same brain context"));
+        assert!(first.contains("same rag context"));
+        assert!(second.contains("agent007-context-ref: memory.project"));
+        assert!(second.contains("agent007-context-ref: memory.repo_brain"));
+        assert!(second.contains("agent007-context-ref: rag_context"));
+        assert!(second.len() < first.len());
+    }
+
+    #[test]
+    fn memory_context_does_not_mark_unused_blocks_as_reused() {
+        let ctx = MemoryContext {
+            project: "project context".repeat(20),
+            user: String::new(),
+            global: String::new(),
+            repo_brain: String::new(),
+            rag: "rag context".repeat(20),
+        };
+        let mut tracker = ContextReuseTracker::default();
+
+        let first = ctx.apply_to_with_reuse("Project={{memory.project}}", &mut tracker);
+        let second = ctx.apply_to_with_reuse("Rag={{rag_context}}", &mut tracker);
+
+        assert!(first.contains("project context"));
+        assert!(second.contains("rag context"));
+        assert!(!second.contains("agent007-context-ref: rag_context"));
+    }
+
+    #[test]
+    fn memory_context_replaces_filtered_placeholders() {
+        let ctx = MemoryContext {
+            project: "project context".to_string(),
+            user: String::new(),
+            global: String::new(),
+            repo_brain: String::new(),
+            rag: "rag context".to_string(),
+        };
+        let rendered =
+            ctx.apply_to("Project={{ memory.project | safe }} Rag={{ rag_context | safe }}");
+
+        assert!(rendered.contains("Project=project context"));
+        assert!(rendered.contains("Rag=rag context"));
+        assert!(!rendered.contains("memory.project"));
+        assert!(!rendered.contains("rag_context"));
+    }
+
+    #[test]
+    fn template_context_needs_detects_requested_context() {
+        let needs = TemplateContextNeeds::from_template(
+            "{{ task }} {{ memory.project | safe }} {{memory.repo_brain}} {{ rag_context }}",
+        );
+        assert!(needs.project);
+        assert!(needs.repo_brain);
+        assert!(needs.rag);
+        assert!(!needs.user);
+        assert!(needs.any());
+
+        let literal = TemplateContextNeeds::from_template("literal memory.project and rag_context");
+        assert!(!literal.any());
     }
 
     #[test]
