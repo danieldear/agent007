@@ -282,23 +282,28 @@ impl TemplateContextNeeds {
     fn from_template(template: &str) -> Self {
         let compact: String = template.chars().filter(|c| !c.is_whitespace()).collect();
         Self {
-            rag_context: compact.contains("{{rag_context") || template.contains("rag_context"),
-            memory_user: compact.contains("memory.user"),
-            memory_project: compact.contains("memory.project"),
-            memory_global: compact.contains("memory.global"),
-            lsp_context: compact.contains("{{lsp_context") || template.contains("lsp_context"),
+            rag_context: template_references_var(&compact, "rag_context"),
+            memory_user: template_references_var(&compact, "memory.user"),
+            memory_project: template_references_var(&compact, "memory.project"),
+            memory_global: template_references_var(&compact, "memory.global"),
+            lsp_context: template_references_var(&compact, "lsp_context"),
         }
     }
 }
 
+fn template_references_var(compact_template: &str, var: &str) -> bool {
+    compact_template.contains(&format!("{{{{{var}"))
+}
+
 fn cap_context_block(label: &str, value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
+    let original_chars = value.chars().count();
+    if original_chars <= max_chars {
         return value.to_string();
     }
     let mut truncated: String = value.chars().take(max_chars).collect();
     truncated.push_str(&format!(
         "\n\n[agent007-context truncated: {label}; original_chars={}; kept_chars={max_chars}]",
-        value.chars().count()
+        original_chars
     ));
     truncated
 }
@@ -528,7 +533,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let provider = Arc::new(MockModelProvider::new());
         let executor = make_executor(dir.path(), Arc::clone(&provider));
-        let skill = make_skill("Args only: {{args}}", "claude");
+        let skill = make_skill(
+            "Args only: {{args}}. Literal words: rag_context and memory.project.",
+            "claude",
+        );
 
         let report = executor.execute_with_report(&skill, "hello").await.unwrap();
 
@@ -540,6 +548,20 @@ mod tests {
             .skipped_context_sections
             .contains(&"rag_context".to_string()));
         assert!(!provider.last_prompt().unwrap().contains("rag-fragment"));
+    }
+
+    #[test]
+    fn template_context_needs_only_matches_placeholders() {
+        let literal = TemplateContextNeeds::from_template("literal rag_context memory.project");
+        assert!(!literal.rag_context);
+        assert!(!literal.memory_project);
+
+        let filtered = TemplateContextNeeds::from_template(
+            "{{ rag_context | safe }} {{ memory.project | default(value=\"\") }} {{ lsp_context }}",
+        );
+        assert!(filtered.rag_context);
+        assert!(filtered.memory_project);
+        assert!(filtered.lsp_context);
     }
 
     #[tokio::test]

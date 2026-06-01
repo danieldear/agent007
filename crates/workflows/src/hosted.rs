@@ -78,8 +78,14 @@ fn stable_context_hash(value: &str) -> u64 {
     hash
 }
 
+struct PersonaPromptReuse {
+    agent: String,
+    prompt: String,
+    chars: usize,
+}
+
 fn dedupe_ready_step_system_prompts(mut steps: Vec<HostedWorkflowStep>) -> Vec<HostedWorkflowStep> {
-    let mut seen: HashMap<u64, (String, usize)> = HashMap::new();
+    let mut seen: HashMap<u64, Vec<PersonaPromptReuse>> = HashMap::new();
     for step in &mut steps {
         let Some(prompt) = step.system_prompt.as_ref() else {
             continue;
@@ -88,12 +94,18 @@ fn dedupe_ready_step_system_prompts(mut steps: Vec<HostedWorkflowStep>) -> Vec<H
             continue;
         }
         let hash = stable_context_hash(prompt);
-        if let Some((first_agent, chars)) = seen.get(&hash) {
+        let entries = seen.entry(hash).or_default();
+        if let Some(existing) = entries.iter().find(|entry| entry.prompt == *prompt) {
             step.system_prompt = Some(format!(
-                "[agent007-persona-ref: same system prompt as agent '{first_agent}'; hash={hash:016x}; chars={chars}. Reuse the earlier system prompt from this workflow_next response.]"
+                "[agent007-persona-ref: same system prompt as agent '{}'; hash={hash:016x}; chars={}. Reuse the earlier system prompt from this workflow_next response.]",
+                existing.agent, existing.chars
             ));
         } else {
-            seen.insert(hash, (step.agent.clone(), prompt.chars().count()));
+            entries.push(PersonaPromptReuse {
+                agent: step.agent.clone(),
+                chars: prompt.chars().count(),
+                prompt: prompt.clone(),
+            });
         }
     }
     steps
@@ -1327,6 +1339,44 @@ mod tests {
             .unwrap()
             .contains("careful reviewer"));
         assert!(deduped[1]
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains("agent007-persona-ref"));
+    }
+
+    #[test]
+    fn dedupe_ready_step_system_prompts_keeps_different_prompts_full() {
+        let base = HostedWorkflowStep {
+            id: "a".to_string(),
+            agent: "Reviewer".to_string(),
+            model_hint: "host-llm".to_string(),
+            system_prompt: Some("You are a careful reviewer.".repeat(20)),
+            prompt: "review A".to_string(),
+            output_key: Some("a".to_string()),
+            inputs: HashMap::new(),
+            depends_on: Vec::new(),
+            step_type: StepType::Execute,
+            requires_approval: false,
+            session_id: "s".to_string(),
+        };
+        let mut second = base.clone();
+        second.id = "b".to_string();
+        second.system_prompt = Some("You are a careful performance reviewer.".repeat(20));
+
+        let deduped = dedupe_ready_step_system_prompts(vec![base, second]);
+
+        assert!(deduped[0]
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains("careful reviewer"));
+        assert!(deduped[1]
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains("performance reviewer"));
+        assert!(!deduped[1]
             .system_prompt
             .as_deref()
             .unwrap()
