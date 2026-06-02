@@ -3708,6 +3708,7 @@ struct TemplateContextNeeds {
     global: bool,
     repo_brain: bool,
     rag: bool,
+    lsp: bool,
 }
 
 impl TemplateContextNeeds {
@@ -3719,11 +3720,12 @@ impl TemplateContextNeeds {
             global: template_references_var(&compact, "memory.global"),
             repo_brain: template_references_var(&compact, "memory.repo_brain"),
             rag: template_references_var(&compact, "rag_context"),
+            lsp: template_references_var(&compact, "lsp_context"),
         }
     }
 
     fn any(self) -> bool {
-        self.project || self.user || self.global || self.repo_brain || self.rag
+        self.project || self.user || self.global || self.repo_brain || self.rag || self.lsp
     }
 }
 
@@ -3767,6 +3769,7 @@ struct MemoryContext {
     global: String,
     repo_brain: String,
     rag: String,
+    lsp: String,
 }
 
 impl MemoryContext {
@@ -3777,10 +3780,11 @@ impl MemoryContext {
             global: String::new(),
             repo_brain: String::new(),
             rag: String::new(),
+            lsp: String::new(),
         }
     }
 
-    /// Replace all `{{memory.*}}` and `{{rag_context}}` placeholders in a template string.
+    /// Replace all hosted context placeholders in a template string.
     fn apply_to(&self, template: &str) -> String {
         let mut tracker = ContextReuseTracker::default();
         self.apply_to_with_reuse(template, &mut tracker)
@@ -3811,6 +3815,10 @@ impl MemoryContext {
         if template_references_var(&compact, "rag_context") {
             let rag = self.reusable_block("rag_context", &self.rag, tracker);
             rendered = replace_template_var(&rendered, "rag_context", &rag);
+        }
+        if template_references_var(&compact, "lsp_context") {
+            let lsp = self.reusable_block("lsp_context", &self.lsp, tracker);
+            rendered = replace_template_var(&rendered, "lsp_context", &lsp);
         }
         rendered
     }
@@ -3955,6 +3963,10 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
         global: memory_global,
         repo_brain: memory_repo_brain,
         rag: rag_context,
+        // Hosted-MCP skills do not run the SkillExecutor LSP enrichment path.
+        // Replace the placeholder with an empty string so templates never leak
+        // raw `{{lsp_context}}` literals to the host LLM.
+        lsp: String::new(),
     }
 }
 
@@ -7351,6 +7363,7 @@ output = "plan"
             global: String::new(),
             repo_brain: "same brain context".repeat(20),
             rag: "same rag context".repeat(20),
+            lsp: "same lsp context".repeat(20),
         };
         let mut tracker = ContextReuseTracker::default();
         let first = ctx.apply_to_with_reuse(
@@ -7383,6 +7396,7 @@ Rag={{rag_context}}",
             global: String::new(),
             repo_brain: String::new(),
             rag: "rag context".repeat(20),
+            lsp: String::new(),
         };
         let mut tracker = ContextReuseTracker::default();
 
@@ -7402,24 +7416,39 @@ Rag={{rag_context}}",
             global: String::new(),
             repo_brain: String::new(),
             rag: "rag context".to_string(),
+            lsp: "lsp context".to_string(),
         };
         let rendered =
-            ctx.apply_to("Project={{ memory.project | safe }} Rag={{ rag_context | safe }}");
+            ctx.apply_to("Project={{ memory.project | safe }} Rag={{ rag_context | safe }} Lsp={{ lsp_context | safe }}");
 
         assert!(rendered.contains("Project=project context"));
         assert!(rendered.contains("Rag=rag context"));
+        assert!(rendered.contains("Lsp=lsp context"));
         assert!(!rendered.contains("memory.project"));
         assert!(!rendered.contains("rag_context"));
+        assert!(!rendered.contains("lsp_context"));
+    }
+
+    #[test]
+    fn memory_context_strips_empty_lsp_context_placeholder() {
+        let ctx = MemoryContext::empty();
+        let rendered = ctx.apply_to("LSP context:\n{{ lsp_context }}\nDone");
+
+        assert!(rendered.contains("LSP context:"));
+        assert!(rendered.contains("Done"));
+        assert!(!rendered.contains("lsp_context"));
+        assert!(!rendered.contains("{{"));
     }
 
     #[test]
     fn template_context_needs_detects_requested_context() {
         let needs = TemplateContextNeeds::from_template(
-            "{{ task }} {{ memory.project | safe }} {{memory.repo_brain}} {{ rag_context }}",
+            "{{ task }} {{ memory.project | safe }} {{memory.repo_brain}} {{ rag_context }} {{ lsp_context }}",
         );
         assert!(needs.project);
         assert!(needs.repo_brain);
         assert!(needs.rag);
+        assert!(needs.lsp);
         assert!(!needs.user);
         assert!(needs.any());
 
@@ -7486,6 +7515,40 @@ Rag={{rag_context}}",
         let delegate_state =
             hosted_delegate_state(&load_run_store(), run_id).expect("delegate state should exist");
         assert!(delegate_state.awaiting_host_report);
+
+        std::env::remove_var("AGENT007_HOME");
+    }
+
+    #[tokio::test]
+    async fn hosted_skill_strips_lsp_context_placeholder() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path());
+        std::env::remove_var("AGENT007_DRY_RUN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(
+            skills_dir.join("lsp_probe.md"),
+            "---\nname: LSP Probe\ndescription: checks hosted lsp context rendering\ntrigger: /lsp-probe\nmodel: codex\n---\nTask={{ args }}\nLSP context:\n{{ lsp_context }}\nDone\n",
+        )
+        .unwrap();
+
+        let (output, _tokens) = run_skill_mcp(
+            &Config::default(),
+            "/lsp-probe".to_string(),
+            "inspect code".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert!(output.contains("Task=inspect code"));
+        assert!(output.contains("LSP context:"));
+        assert!(output.contains("Done"));
+        assert!(!output.contains("lsp_context"));
+        assert!(!output.contains("{{"));
 
         std::env::remove_var("AGENT007_HOME");
     }
