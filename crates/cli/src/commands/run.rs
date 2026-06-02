@@ -32,8 +32,8 @@ use agent007_memory::vectordb::LanceDBStore;
 use agent007_memory::Indexer;
 use agent007_memory::Retriever;
 use agent007_models::{
-    ClaudeProvider, CodexProvider, EmbeddingProvider, MockProvider, ModelProvider, ModelRouter,
-    OllamaEmbeddingProvider, OllamaProvider,
+    ClaudeProvider, CodexProvider, EmbeddingProvider, LocalHashEmbeddingProvider, MockProvider,
+    ModelProvider, ModelRouter, OllamaEmbeddingProvider, OllamaProvider,
 };
 use agent007_personas::PersonaRegistry;
 use agent007_skills::{SkillExecutor, SkillLoader};
@@ -821,20 +821,16 @@ async fn build_skill_executor(
                 768,
             )
         }
-        _ if config.models.ollama.is_some() => {
-            let ollama = config.models.ollama.as_ref().unwrap();
-            let primary = Arc::new(OllamaEmbeddingProvider::new(
-                &ollama.base_url,
-                "nomic-embed-text",
-            )) as Arc<dyn EmbeddingProvider>;
-            (
-                Arc::new(ResilientEmbeddingProvider::new(primary, 768))
-                    as Arc<dyn EmbeddingProvider>,
-                768,
-            )
+        Some(rag)
+            if rag.embedding_provider.eq_ignore_ascii_case("mock")
+                || rag.embedding_provider.eq_ignore_ascii_case("none")
+                || rag.embedding_provider.eq_ignore_ascii_case("zero") =>
+        {
+            let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
+            (Arc::new(ep) as Arc<dyn EmbeddingProvider>, 384)
         }
         _ => {
-            let ep = MockProvider::with_embedding_dim("", "mock-embed", 384);
+            let ep = LocalHashEmbeddingProvider::new(384);
             (Arc::new(ep) as Arc<dyn EmbeddingProvider>, 384)
         }
     };

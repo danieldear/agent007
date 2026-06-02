@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod error;
+pub mod local_embedding;
 pub mod mock;
 pub mod ollama;
 pub mod provider;
@@ -10,6 +11,7 @@ pub mod types;
 pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
 pub use error::ModelError;
+pub use local_embedding::LocalHashEmbeddingProvider;
 pub use mock::MockProvider;
 pub use ollama::OllamaEmbeddingProvider;
 pub use ollama::OllamaProvider;

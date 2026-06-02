@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use agent007_memory::vectordb::LanceDBStore;
 use agent007_memory::{Indexer, Retriever};
-use agent007_models::{EmbeddingProvider, MockProvider, OllamaEmbeddingProvider};
+use agent007_models::{
+    EmbeddingProvider, LocalHashEmbeddingProvider, MockProvider, OllamaEmbeddingProvider,
+};
 use serde::{Deserialize, Serialize};
 
 // ── data model ────────────────────────────────────────────────────────────────
@@ -201,21 +203,35 @@ async fn index_source_content(
     source: &RagSource,
 ) -> (Option<usize>, Option<String>) {
     let home = project_home;
-    let embedder = build_embedder();
-    let is_mock = embedder
-        .embed("agent007-rag-health")
-        .await
-        .map(|v| v.iter().all(|x| *x == 0.0))
-        .unwrap_or(true);
+    let embedder = build_embedder(project_home);
+    let health_embedding = match embedder.embed("agent007-rag-health").await {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                None,
+                Some(format!(
+                    "embedding provider health check failed before RAG content indexing: {}",
+                    friendly_embedding_error(&e.to_string())
+                )),
+            );
+        }
+    };
+    let is_mock = health_embedding.iter().all(|x| *x == 0.0);
     let embed_dim = if is_mock {
         384
     } else {
-        embedder
-            .embed("agent007-rag-dim")
-            .await
-            .map(|v| v.len())
-            .unwrap_or(384)
-            .max(1)
+        match embedder.embed("agent007-rag-dim").await {
+            Ok(v) => v.len().max(1),
+            Err(e) => {
+                return (
+                    None,
+                    Some(format!(
+                        "embedding provider dimension probe failed before RAG content indexing: {}",
+                        friendly_embedding_error(&e.to_string())
+                    )),
+                );
+            }
+        }
     };
     let db_dir = home.join("vectordb");
     let db_path = db_dir.to_string_lossy().to_string();
@@ -233,27 +249,130 @@ async fn index_source_content(
             let doc_id = format!("rag:{}:{}", source.kind, source.id);
             match indexer.index_text(&doc_id, &content).await {
                 Ok(_) => (Some(approx_chunks), None),
-                Err(e) => (None, Some(format!("failed to index content: {e}"))),
+                Err(e) => (
+                    None,
+                    Some(format!(
+                        "failed to index RAG content after reading {} source '{}': {}",
+                        source.kind,
+                        source.source_ref,
+                        friendly_embedding_error(&e.to_string())
+                    )),
+                ),
             }
         }
         Err(e) => (None, Some(e)),
     }
 }
 
-fn build_embedder() -> Arc<dyn EmbeddingProvider> {
-    let base_url = std::env::var("AGENT007_OLLAMA_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:11434".to_string());
-    let model = std::env::var("AGENT007_OLLAMA_EMBED_MODEL")
-        .unwrap_or_else(|_| "nomic-embed-text".to_string());
+fn friendly_embedding_error(message: &str) -> String {
+    if message.contains("ollama-embed") && message.contains("HTTP 404") {
+        let model = std::env::var("AGENT007_OLLAMA_EMBED_MODEL")
+            .unwrap_or_else(|_| "nomic-embed-text".to_string());
+        return format!(
+            "Ollama embedding request returned HTTP 404 for model '{model}'. This is an embedding setup problem, not a URL-vs-folder RAG source problem. If you do not want Ollama, set AGENT007_RAG_EMBED_PROVIDER=local or remove memory.rag.embedding_provider=ollama from config.toml. If you do want Ollama, run `ollama pull {model}` or set AGENT007_RAG_EMBED_MODEL to an installed embedding model. Details: {message}"
+        );
+    }
+
+    if message.contains("ollama-embed") {
+        return format!(
+            "Ollama embedding request failed. If you do not want Ollama, set AGENT007_RAG_EMBED_PROVIDER=local or remove memory.rag.embedding_provider=ollama from config.toml. Otherwise check AGENT007_OLLAMA_BASE_URL / AGENT007_RAG_EMBED_MODEL. Details: {message}"
+        );
+    }
+
+    message.to_string()
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RagEmbeddingFileConfig {
+    memory: Option<RagMemorySection>,
+    models: Option<RagModelsSection>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RagMemorySection {
+    rag: Option<RagMemoryConfig>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RagMemoryConfig {
+    embedding_provider: Option<String>,
+    embedding_model: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RagModelsSection {
+    ollama: Option<RagOllamaConfig>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RagOllamaConfig {
+    base_url: Option<String>,
+}
+
+fn build_embedder(project_home: &Path) -> Arc<dyn EmbeddingProvider> {
     if std::env::var("AGENT007_FORCE_MOCK_EMBED")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
-        Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384))
-            as Arc<dyn EmbeddingProvider>
-    } else {
-        Arc::new(OllamaEmbeddingProvider::new(&base_url, &model)) as Arc<dyn EmbeddingProvider>
+        return Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384))
+            as Arc<dyn EmbeddingProvider>;
     }
+
+    let file_cfg = read_rag_embedding_file_config(project_home);
+    let provider = std::env::var("AGENT007_RAG_EMBED_PROVIDER")
+        .ok()
+        .or_else(|| std::env::var("AGENT007_EMBEDDING_PROVIDER").ok())
+        .or_else(|| {
+            file_cfg
+                .as_ref()
+                .and_then(|cfg| cfg.memory.as_ref())
+                .and_then(|memory| memory.rag.as_ref())
+                .and_then(|rag| rag.embedding_provider.clone())
+        })
+        .unwrap_or_else(|| "local".to_string())
+        .to_lowercase();
+
+    match provider.as_str() {
+        "ollama" => {
+            let base_url = std::env::var("AGENT007_OLLAMA_BASE_URL")
+                .ok()
+                .or_else(|| {
+                    file_cfg
+                        .as_ref()
+                        .and_then(|cfg| cfg.models.as_ref())
+                        .and_then(|models| models.ollama.as_ref())
+                        .and_then(|ollama| ollama.base_url.clone())
+                })
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            let model = std::env::var("AGENT007_RAG_EMBED_MODEL")
+                .ok()
+                .or_else(|| std::env::var("AGENT007_OLLAMA_EMBED_MODEL").ok())
+                .or_else(|| {
+                    file_cfg
+                        .as_ref()
+                        .and_then(|cfg| cfg.memory.as_ref())
+                        .and_then(|memory| memory.rag.as_ref())
+                        .and_then(|rag| rag.embedding_model.clone())
+                })
+                .unwrap_or_else(|| "nomic-embed-text".to_string());
+            Arc::new(OllamaEmbeddingProvider::new(&base_url, &model)) as Arc<dyn EmbeddingProvider>
+        }
+        "mock" | "none" | "zero" => {
+            Arc::new(MockProvider::with_embedding_dim("", "mock-embed", 384))
+                as Arc<dyn EmbeddingProvider>
+        }
+        // Default: no external service. This avoids forcing Ollama while still
+        // producing non-zero lexical vectors for local folder/file RAG.
+        _ => Arc::new(LocalHashEmbeddingProvider::new(384)) as Arc<dyn EmbeddingProvider>,
+    }
+}
+
+fn read_rag_embedding_file_config(project_home: &Path) -> Option<RagEmbeddingFileConfig> {
+    let path = std::env::var("AGENT007_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| project_home.join("config.toml"));
+    let content = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&content).ok()
 }
 
 async fn gather_source_text(source: &RagSource) -> Result<(String, usize), String> {
@@ -306,7 +425,7 @@ pub async fn query_rag_sources(
 ) -> Result<(String, serde_json::Value), String> {
     let sources = load_rag_sources(project_home)?;
     let ready = sources.iter().filter(|s| s.status == "ready").count();
-    let embedder = build_embedder();
+    let embedder = build_embedder(project_home);
     let probe = embedder
         .embed("agent007-rag-health")
         .await
@@ -336,7 +455,11 @@ pub async fn query_rag_sources(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_rag_source, load_rag_sources, AddRagSourceRequest, RagKind};
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    use super::{
+        add_rag_source, friendly_embedding_error, load_rag_sources, AddRagSourceRequest, RagKind,
+    };
 
     #[test]
     fn load_sources_reports_invalid_json() {
@@ -346,6 +469,45 @@ mod tests {
         std::fs::write(dir.join("sources.json"), "not-json").unwrap();
         let err = load_rag_sources(tmp.path()).unwrap_err();
         assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn default_embedder_is_local_not_ollama() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AGENT007_FORCE_MOCK_EMBED");
+        std::env::remove_var("AGENT007_RAG_EMBED_PROVIDER");
+        std::env::remove_var("AGENT007_EMBEDDING_PROVIDER");
+        std::env::remove_var("AGENT007_CONFIG");
+        let tmp = tempfile::tempdir().unwrap();
+        let embedder = super::build_embedder(tmp.path());
+        assert_eq!(embedder.name(), "local-hash-embed");
+    }
+
+    #[test]
+    fn config_can_opt_into_ollama_embedder() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("AGENT007_FORCE_MOCK_EMBED");
+        std::env::remove_var("AGENT007_RAG_EMBED_PROVIDER");
+        std::env::remove_var("AGENT007_EMBEDDING_PROVIDER");
+        std::env::remove_var("AGENT007_CONFIG");
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[memory.rag]\nembedding_provider = \"ollama\"\nembedding_model = \"nomic-embed-text\"\n",
+        )
+        .unwrap();
+        let embedder = super::build_embedder(tmp.path());
+        assert_eq!(embedder.name(), "ollama-embed");
+    }
+
+    #[test]
+    fn friendly_embedding_error_explains_ollama_404() {
+        let msg = friendly_embedding_error(
+            "Embedding error: api error from ollama-embed: HTTP 404 Not Found: model missing",
+        );
+        assert!(msg.contains("embedding setup problem"));
+        assert!(msg.contains("not a URL-vs-folder RAG source problem"));
+        assert!(msg.contains("ollama pull"));
     }
 
     #[test]

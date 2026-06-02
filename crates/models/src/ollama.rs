@@ -215,10 +215,18 @@ impl OllamaEmbeddingProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let body = body.trim();
+            let message = if body.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {body}")
+            };
             return Err(ModelError::Api {
                 provider: "ollama-embed".to_string(),
-                message: format!("HTTP {}", response.status()),
+                message,
             });
         }
 
@@ -267,7 +275,7 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             .await
         {
             Ok(json) => Self::parse_embedding(&json),
-            Err(ModelError::Api { message, .. }) if message == "HTTP 404" => {
+            Err(ModelError::Api { message, .. }) if message.starts_with("HTTP 404") => {
                 let legacy = self
                     .post_json(
                         "/api/embeddings",
