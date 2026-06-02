@@ -528,8 +528,8 @@ default_model = "llama3"
 [memory.rag]
 enabled = true
 vector_db = "lancedb"
-embedding_provider = "ollama"
-embedding_model = "nomic-embed-text"
+embedding_provider = "local"
+embedding_model = "local-hash-embed"
 index = ["./src", "./docs"]
 
 [mcp.servers]
