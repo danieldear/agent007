@@ -81,9 +81,11 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
 
         WorkflowAction::Validate { name } => {
             let def = loader.load_named(&name)?;
-            let stack = build_stack(&config).await?;
-            let runner = stack.workflow_runner.clone();
-            match runner.validate(&def) {
+            // DAG validation is intentionally structural-only.  Do not build the
+            // full runtime stack here: doing so initializes model routing,
+            // memory/vector indexes, and repo-graph watchers, which makes a
+            // read-only validation command slow and side-effectful.
+            match agent007_workflows::dag::DagValidator::new(&def).validate() {
                 Ok(validated_dag) => {
                     println!("Workflow '{}' is valid.", name);
                     println!(
