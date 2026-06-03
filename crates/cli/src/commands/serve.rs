@@ -4206,6 +4206,7 @@ fn workflow_approve(
             }
             Err(error) => {
                 let summary = format!("hosted workflow approval failed: {}", error);
+                let _ = store.write_json_artifact(session, "workflow-state.json", &state);
                 let _ = store.finish_run(session, false, &summary);
                 Err(anyhow::anyhow!(summary))
             }
