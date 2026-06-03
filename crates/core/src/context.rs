@@ -461,6 +461,9 @@ fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
             if is_ignored_dir(name) && path.is_dir() {
                 continue;
             }
+            if is_generated_agent_guidance_file(name) {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
                 continue;
@@ -471,6 +474,10 @@ fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
         }
     }
     Ok(files)
+}
+
+fn is_generated_agent_guidance_file(name: &str) -> bool {
+    matches!(name, "AGENTS.agent007.generated.md")
 }
 
 fn is_ignored_dir(name: &str) -> bool {
@@ -674,5 +681,46 @@ mod tests {
             .relevant_files
             .iter()
             .any(|file| file.path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn compiler_excludes_generated_agents_companion_when_agents_md_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_home = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("AGENTS.md"),
+            "Use agent007 for login and JWT security audits\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("AGENTS.agent007.generated.md"),
+            "Use agent007 for login and JWT security audits\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("src/auth.rs"),
+            "pub fn login_with_jwt() {}\n",
+        )
+        .unwrap();
+
+        let compiler = ContextCompiler::new(root.path(), agent_home.path(), TokenBudget::default());
+        let bundle = compiler
+            .compile("security audit login JWT handling", 8, 4)
+            .unwrap();
+
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .any(|file| file.path == "AGENTS.md"));
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .all(|file| file.path != "AGENTS.agent007.generated.md"));
     }
 }
