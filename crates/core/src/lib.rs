@@ -2,6 +2,7 @@ pub mod budget;
 pub mod compact;
 pub mod context;
 pub mod error;
+pub mod hash;
 pub mod paths;
 pub mod repo_brain;
 pub mod repo_graph;
@@ -25,6 +26,7 @@ pub use context::{ContextBundle, ContextCompiler, ContextFile, ContextMemoryNote
 pub use dispatcher::{Dispatcher, LocalDispatcher};
 pub use error::CoreError;
 pub use events::AgentEvent;
+pub use hash::stable_context_hash;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
 pub use repo_graph::{

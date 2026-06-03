@@ -75,7 +75,7 @@ impl ContextCompiler {
         let keywords = extract_keywords(task);
         let (structural_context, structural_files) = self.collect_structural_context(task);
         let relevant_files = self.select_relevant_files(task, &keywords, max_files)?;
-        let memory_notes = self.collect_memory_notes(max_memory_notes)?;
+        let memory_notes = self.collect_memory_notes(task, &keywords, max_memory_notes)?;
         let recent_runs = RunStore::new(self.agent_home.join("sessions"))
             .list_runs(5)
             .unwrap_or_default();
@@ -183,14 +183,27 @@ impl ContextCompiler {
         Ok(scored)
     }
 
-    fn collect_memory_notes(&self, max_notes: usize) -> Result<Vec<ContextMemoryNote>, CoreError> {
+    fn collect_memory_notes(
+        &self,
+        task: &str,
+        keywords: &[String],
+        max_notes: usize,
+    ) -> Result<Vec<ContextMemoryNote>, CoreError> {
         let dir = self.agent_home.join("memory").join("project");
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
         let mut scored = Vec::new();
-        collect_memory_notes_recursive(&dir, &dir, &mut scored);
+        if dir.exists() {
+            collect_memory_notes_recursive(&dir, &dir, keywords, &mut scored);
+        }
+        collect_sqlite_memory_notes(
+            &self.agent_home.join("memory").join("memory.db"),
+            "project",
+            task,
+            keywords,
+            &mut scored,
+        )?;
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut seen = HashSet::new();
+        scored.retain(|(_, note)| seen.insert(note.key.clone()));
         scored.truncate(max_notes);
         Ok(scored.into_iter().map(|(_, note)| note).collect())
     }
@@ -212,6 +225,7 @@ impl ContextCompiler {
 fn collect_memory_notes_recursive(
     root: &std::path::Path,
     dir: &std::path::Path,
+    keywords: &[String],
     scored: &mut Vec<(f64, ContextMemoryNote)>,
 ) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -220,7 +234,7 @@ fn collect_memory_notes_recursive(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_memory_notes_recursive(root, &path, scored);
+            collect_memory_notes_recursive(root, &path, keywords, scored);
         } else if path.extension().and_then(|v| v.to_str()) == Some("md") {
             let key = if let Ok(rel) = path.strip_prefix(root) {
                 let components: Vec<&str> = rel
@@ -250,7 +264,10 @@ fn collect_memory_notes_recursive(
                 Err(_) => continue,
             };
             let (content, meta) = parse_memory_frontmatter(&raw);
-            let score = score_memory_entry(&meta);
+            let score = score_memory_entry(&key, &content, keywords, &meta);
+            if score <= 0.0 {
+                continue;
+            }
             let excerpt = summarize_markdown_note(&content);
             scored.push((
                 score,
@@ -262,6 +279,58 @@ fn collect_memory_notes_recursive(
             ));
         }
     }
+}
+
+fn collect_sqlite_memory_notes(
+    db_path: &std::path::Path,
+    namespace: &str,
+    task: &str,
+    keywords: &[String],
+    scored: &mut Vec<(f64, ContextMemoryNote)>,
+) -> Result<(), CoreError> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
+    let mut stmt = match conn
+        .prepare("SELECT key, value, updated_at, access_count FROM memory WHERE namespace = ?1")
+    {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(()),
+    };
+    let rows = stmt
+        .query_map([namespace], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })
+        .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
+    for (key, value, updated_at, access_count) in rows.flatten() {
+        let meta = MemoryFrontmatterMeta {
+            updated_at: updated_at
+                .as_deref()
+                .and_then(|raw| raw.parse::<chrono::DateTime<Utc>>().ok()),
+            access_count: access_count.map(|value| value.max(0) as u32),
+        };
+        let score = score_memory_entry(&key, &value, keywords, &meta);
+        if score <= 0.0 && !task.trim().is_empty() {
+            continue;
+        }
+        let excerpt = summarize_markdown_note(&value);
+        scored.push((
+            score,
+            ContextMemoryNote {
+                key,
+                tokens: estimate_tokens(&excerpt),
+                excerpt,
+            },
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize, Default)]
@@ -282,13 +351,40 @@ fn parse_memory_frontmatter(raw: &str) -> (String, MemoryFrontmatterMeta) {
     (raw.to_string(), MemoryFrontmatterMeta::default())
 }
 
-fn score_memory_entry(meta: &MemoryFrontmatterMeta) -> f64 {
+fn score_memory_entry(
+    key: &str,
+    content: &str,
+    keywords: &[String],
+    meta: &MemoryFrontmatterMeta,
+) -> f64 {
+    let key_lower = key.to_lowercase();
+    let content_lower = content.to_lowercase();
+    let keyword_score = keywords
+        .iter()
+        .map(|keyword| {
+            let mut score = 0.0;
+            if key_lower.contains(keyword) {
+                score += 2.0;
+            }
+            if content_lower.contains(keyword) {
+                score += 1.0;
+            }
+            score
+        })
+        .sum::<f64>();
     let count = meta.access_count.unwrap_or(0) as f64;
     let days_ago = meta
         .updated_at
         .map(|dt| (Utc::now() - dt).num_seconds() as f64 / 86400.0)
         .unwrap_or(365.0);
-    0.4 * (count + 1.0).ln() + 0.6 * (-days_ago / 30.0).exp()
+    let base = 0.4 * (count + 1.0).ln() + 0.6 * (-days_ago / 30.0).exp();
+    if keywords.is_empty() {
+        base
+    } else if keyword_score > 0.0 {
+        keyword_score + base
+    } else {
+        0.0
+    }
 }
 
 fn render_context(
@@ -380,8 +476,16 @@ fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
 fn is_ignored_dir(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "node_modules" | ".next" | "dist" | "build" | ".idea" | ".vscode"
-    )
+        ".git"
+            | ".agent007"
+            | ".next"
+            | ".idea"
+            | ".vscode"
+            | "target"
+            | "node_modules"
+            | "dist"
+            | "build"
+    ) || name.starts_with(".agent007.bak")
 }
 
 fn is_candidate_file(path: &Path) -> bool {
@@ -521,5 +625,54 @@ mod tests {
         assert_eq!(bundle.memory_notes.len(), 1);
         assert!(bundle.compiled_context.contains("Repo brain"));
         assert!(bundle.compiled_context.contains("Structural repo graph"));
+    }
+
+    #[test]
+    fn compiler_excludes_agent007_runtime_and_session_files() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_home = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("src/lib.rs"),
+            "pub fn workflow_gate() {}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join(".agent007").join("sessions")).unwrap();
+        fs::write(
+            root.path()
+                .join(".agent007")
+                .join("sessions")
+                .join("context-bundle.json"),
+            r#"{"task":"workflow gate approval","status":"running"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join(".agent007").join("runtime")).unwrap();
+        fs::write(
+            root.path()
+                .join(".agent007")
+                .join("runtime")
+                .join("huge.json"),
+            r#"{"workflow":"gate","approval":"runtime"}"#,
+        )
+        .unwrap();
+
+        let compiler = ContextCompiler::new(root.path(), agent_home.path(), TokenBudget::default());
+        let bundle = compiler
+            .compile("debug workflow gate approval", 8, 4)
+            .unwrap();
+
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .all(|file| !file.path.starts_with(".agent007/")));
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .any(|file| file.path == "src/lib.rs"));
     }
 }

@@ -2,6 +2,7 @@ use crate::error::SkillError;
 use crate::types::Skill;
 use agent007_lsp_client::LspClient;
 use agent007_memory::retriever::RetrieveStats;
+use agent007_memory::MemoryError;
 use agent007_memory::{Retriever, ScopedMemoryStore};
 use agent007_models::{CompletionRequest, Message, ModelProvider, ModelRouter, Role};
 use serde::{Deserialize, Serialize};
@@ -138,7 +139,13 @@ impl SkillExecutor {
             let scoped = self.memory.inner.scoped("project");
             cap_context_block(
                 "memory.project",
-                &scoped.read_top_n(8).map_err(|e| SkillError::Memory {
+                &read_relevant_memory_block(
+                    &scoped,
+                    args,
+                    8,
+                    &memory_keys_in_rag_context(&rag_context, "project"),
+                )
+                .map_err(|e| SkillError::Memory {
                     name: skill.name().to_string(),
                     source: e,
                 })?,
@@ -306,6 +313,102 @@ fn cap_context_block(label: &str, value: &str, max_chars: usize) -> String {
         original_chars
     ));
     truncated
+}
+
+fn context_keywords(query: &str) -> Vec<String> {
+    let stop = [
+        "the", "and", "for", "with", "that", "this", "from", "into", "agent007", "using", "use",
+        "task", "work", "code", "fix",
+    ];
+    let mut keywords = query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == ':'))
+        .map(|word| word.trim().to_lowercase())
+        .filter(|word| word.len() >= 3 && !stop.contains(&word.as_str()))
+        .collect::<Vec<_>>();
+    keywords.sort();
+    keywords.dedup();
+    keywords
+}
+
+fn memory_keys_in_rag_context(
+    rag_context: &str,
+    namespace: &str,
+) -> std::collections::HashSet<String> {
+    let prefix = format!("[{namespace}/");
+    rag_context
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(']'))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn memory_entry_matches(key: &str, value: &str, words: &[String], keywords: &[String]) -> bool {
+    if keywords.is_empty() {
+        return false;
+    }
+    let key_lower = key.to_lowercase();
+    if keywords.iter().any(|kw| key_lower.contains(kw.as_str())) {
+        return true;
+    }
+    if !words.is_empty()
+        && keywords
+            .iter()
+            .any(|kw| words.iter().any(|w| w.contains(kw.as_str())))
+    {
+        return true;
+    }
+    let value_lower = value.to_lowercase();
+    keywords.iter().any(|kw| value_lower.contains(kw.as_str()))
+}
+
+fn read_relevant_memory_block(
+    scoped: &ScopedMemoryStore,
+    query: &str,
+    limit: usize,
+    excluded_keys: &std::collections::HashSet<String>,
+) -> Result<String, MemoryError> {
+    let keywords = context_keywords(query);
+    if keywords.is_empty() {
+        return Ok(String::new());
+    }
+    let mut scored = Vec::new();
+    for key in scoped.list_keys()? {
+        if excluded_keys.contains(&key) {
+            continue;
+        }
+        let Some((value, meta)) = scoped.read_with_meta(&key)? else {
+            continue;
+        };
+        if !memory_entry_matches(&key, &value, &meta.words, &keywords) {
+            continue;
+        }
+        let key_lower = key.to_lowercase();
+        let value_lower = value.to_lowercase();
+        let score = keywords
+            .iter()
+            .map(|kw| {
+                let mut score = 0;
+                if key_lower.contains(kw) {
+                    score += 3;
+                }
+                if value_lower.contains(kw) {
+                    score += 1;
+                }
+                score
+            })
+            .sum::<i32>();
+        scored.push((score, key, value));
+    }
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    scored.truncate(limit);
+    Ok(scored
+        .into_iter()
+        .map(|(_, key, value)| format!("### {key}\n{value}"))
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 fn metrics_from_retrieval(rag_context: &str, retrieval: &RetrieveStats) -> SkillExecutionMetrics {
@@ -538,7 +641,10 @@ mod tests {
             "claude",
         );
 
-        let report = executor.execute_with_report(&skill, "hello").await.unwrap();
+        let report = executor
+            .execute_with_report(&skill, "project")
+            .await
+            .unwrap();
 
         assert_eq!(report.metrics.retrieval_queries, 0);
         assert_eq!(report.metrics.rag_context_chars, 0);
@@ -587,7 +693,10 @@ mod tests {
         );
         let skill = make_skill("Project: {{memory.project}}", "claude");
 
-        let report = executor.execute_with_report(&skill, "hello").await.unwrap();
+        let report = executor
+            .execute_with_report(&skill, "project")
+            .await
+            .unwrap();
         let prompt = provider.last_prompt().unwrap();
 
         assert!(prompt.contains("project-context"));

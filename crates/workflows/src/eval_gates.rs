@@ -146,10 +146,11 @@ pub fn evaluate_workflow_eval_gate(
         })?;
 
     if baseline_runs.len() < policy.min_baseline_runs {
-        let decision = match policy.mode {
-            EvalGateMode::FailOpen => WorkflowEvalGateDecisionKind::Warn,
-            EvalGateMode::FailClosed => WorkflowEvalGateDecisionKind::Block,
-        };
+        // Bootstrap should never hard-fail a workflow. A fail-closed gate is
+        // intended to block *known regressions* against a valid baseline, not
+        // punish first runs or newly introduced workflows that have not yet
+        // accumulated enough scorecards.
+        let decision = WorkflowEvalGateDecisionKind::Warn;
         return Ok(Some(WorkflowEvalGateDecision {
             workflow: workflow.to_string(),
             mode: policy.mode.clone(),
@@ -419,5 +420,37 @@ mod tests {
         assert!(comparison
             .violation_codes
             .contains(&"cost-increase".to_string()));
+    }
+
+    #[test]
+    fn insufficient_baseline_warns_even_when_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RunStore::new(dir.path());
+        let run = store
+            .create_run("workflow-test", "ship release", "hosted-mcp", Some("mock"))
+            .unwrap();
+        let policy = EvalGatePolicy {
+            enabled: true,
+            release_class: true,
+            mode: EvalGateMode::FailClosed,
+            min_baseline_runs: 3,
+            ..EvalGatePolicy::default()
+        };
+
+        let decision = evaluate_workflow_eval_gate(
+            &store,
+            &run.id,
+            "brand-new-workflow",
+            &BudgetUsed::default(),
+            &policy,
+        )
+        .unwrap()
+        .expect("decision expected");
+
+        assert_eq!(decision.decision, WorkflowEvalGateDecisionKind::Warn);
+        assert_eq!(decision.baseline_sample_size, 0);
+        assert!(decision
+            .reason_codes
+            .contains(&"insufficient-baseline".to_string()));
     }
 }

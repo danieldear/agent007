@@ -3675,15 +3675,6 @@ fn cap_hosted_context_block(label: &str, value: &str, max_chars: usize) -> Strin
     truncated
 }
 
-fn stable_context_hash(value: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in value.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 #[derive(Default)]
 struct ContextReuseTracker {
     seen: std::collections::HashMap<u64, Vec<ContextReuseEntry>>,
@@ -3765,6 +3756,7 @@ fn replace_template_var(template: &str, var: &str, replacement: &str) -> String 
 /// Build once via `build_memory_context()` and apply with `apply_to()`.
 struct MemoryContext {
     project: String,
+    project_deduped: String,
     user: String,
     global: String,
     repo_brain: String,
@@ -3776,6 +3768,7 @@ impl MemoryContext {
     fn empty() -> Self {
         Self {
             project: String::new(),
+            project_deduped: String::new(),
             user: String::new(),
             global: String::new(),
             repo_brain: String::new(),
@@ -3797,7 +3790,12 @@ impl MemoryContext {
         let mut rendered = template.to_string();
         let compact: String = template.chars().filter(|c| !c.is_whitespace()).collect();
         if template_references_var(&compact, "memory.project") {
-            let project = self.reusable_block("memory.project", &self.project, tracker);
+            let project_source = if template_references_var(&compact, "rag_context") {
+                &self.project_deduped
+            } else {
+                &self.project
+            };
+            let project = self.reusable_block("memory.project", project_source, tracker);
             rendered = replace_template_var(&rendered, "memory.project", &project);
         }
         if template_references_var(&compact, "memory.user") {
@@ -3832,7 +3830,7 @@ impl MemoryContext {
         if value.trim().is_empty() {
             return String::new();
         }
-        let hash = stable_context_hash(value);
+        let hash = agent007_core::stable_context_hash(value);
         let entries = tracker.seen.entry(hash).or_default();
         if let Some(existing) = entries
             .iter()
@@ -3857,11 +3855,6 @@ impl MemoryContext {
 fn build_memory_context(task_or_args: &str) -> MemoryContext {
     let project_store = memory_store();
     let project_scoped = project_store.scoped("project");
-    let memory_project = cap_hosted_context_block(
-        "memory.project",
-        &project_scoped.read_top_n(8).unwrap_or_default(),
-        MAX_HOSTED_MEMORY_CONTEXT_CHARS,
-    );
     let include_shared_memory = std::env::var("AGENT007_INCLUDE_SHARED_MEMORY")
         .map(|raw| {
             matches!(
@@ -3903,12 +3896,10 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
     );
 
     let graph_rag_context = structural_repo_context(task_or_args);
+    let keywords = context_keywords(task_or_args);
+    let mut memory_rag_hit_keys: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     let memory_rag_context = {
-        let keywords: Vec<String> = task_or_args
-            .split_whitespace()
-            .filter(|w| w.len() >= 3)
-            .map(|w| w.to_lowercase())
-            .collect();
         let mut hits: Vec<String> = Vec::new();
         let mut scoped_sources = vec![
             ("project", project_store.scoped("project")),
@@ -3923,17 +3914,8 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
                 for key in keys {
                     if let Ok(Some((val, meta))) = scoped.read_with_meta(&key) {
                         let val: String = val;
-                        let matches = if !meta.words.is_empty() {
-                            // Fast path: use pre-tokenized words index
-                            keywords
-                                .iter()
-                                .any(|kw| meta.words.iter().any(|w| w.contains(kw.as_str())))
-                        } else {
-                            // Legacy fallback: full content scan
-                            let val_lower = val.to_lowercase();
-                            keywords.iter().any(|kw| val_lower.contains(kw.as_str()))
-                        };
-                        if matches {
+                        if memory_entry_matches(&key, &val, &meta.words, &keywords) {
+                            memory_rag_hit_keys.insert((ns.to_string(), key.clone()));
                             hits.push(format!("[{ns}/{key}]\n{val}"));
                         }
                     }
@@ -3946,6 +3928,30 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
             MAX_HOSTED_RAG_CONTEXT_CHARS,
         )
     };
+    let memory_project = cap_hosted_context_block(
+        "memory.project",
+        &read_relevant_memory_block(
+            &project_scoped,
+            "project",
+            &keywords,
+            8,
+            &std::collections::HashSet::new(),
+        )
+        .unwrap_or_default(),
+        MAX_HOSTED_MEMORY_CONTEXT_CHARS,
+    );
+    let memory_project_deduped = cap_hosted_context_block(
+        "memory.project",
+        &read_relevant_memory_block(
+            &project_scoped,
+            "project",
+            &keywords,
+            8,
+            &memory_rag_hit_keys,
+        )
+        .unwrap_or_default(),
+        MAX_HOSTED_MEMORY_CONTEXT_CHARS,
+    );
     let rag_context = cap_hosted_context_block(
         "rag_context",
         &[graph_rag_context.as_str(), memory_rag_context.as_str()]
@@ -3959,6 +3965,7 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
 
     MemoryContext {
         project: memory_project,
+        project_deduped: memory_project_deduped,
         user: memory_user,
         global: memory_global,
         repo_brain: memory_repo_brain,
@@ -3968,6 +3975,90 @@ fn build_memory_context(task_or_args: &str) -> MemoryContext {
         // raw `{{lsp_context}}` literals to the host LLM.
         lsp: String::new(),
     }
+}
+
+fn context_keywords(query: &str) -> Vec<String> {
+    let stop = [
+        "the", "and", "for", "with", "that", "this", "from", "into", "agent007", "using", "use",
+        "task", "work", "code", "fix",
+    ];
+    let mut keywords = query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == ':'))
+        .map(|word| word.trim().to_lowercase())
+        .filter(|word| word.len() >= 3 && !stop.contains(&word.as_str()))
+        .collect::<Vec<_>>();
+    keywords.sort();
+    keywords.dedup();
+    keywords
+}
+
+fn memory_entry_matches(key: &str, value: &str, words: &[String], keywords: &[String]) -> bool {
+    if keywords.is_empty() {
+        return false;
+    }
+    let key_lower = key.to_lowercase();
+    if keywords.iter().any(|kw| key_lower.contains(kw.as_str())) {
+        return true;
+    }
+    if !words.is_empty()
+        && keywords
+            .iter()
+            .any(|kw| words.iter().any(|w| w.contains(kw.as_str())))
+    {
+        return true;
+    }
+    let value_lower = value.to_lowercase();
+    keywords.iter().any(|kw| value_lower.contains(kw.as_str()))
+}
+
+fn read_relevant_memory_block(
+    scoped: &agent007_memory::store::ScopedMemoryStore,
+    namespace: &str,
+    keywords: &[String],
+    limit: usize,
+    excluded: &std::collections::HashSet<(String, String)>,
+) -> Result<String> {
+    if keywords.is_empty() {
+        return Ok(String::new());
+    }
+    let mut scored = Vec::new();
+    for key in scoped.list_keys().map_err(|e| anyhow::anyhow!("{}", e))? {
+        if excluded.contains(&(namespace.to_string(), key.clone())) {
+            continue;
+        }
+        let Some((value, meta)) = scoped
+            .read_with_meta(&key)
+            .map_err(|e| anyhow::anyhow!("{}", e))?
+        else {
+            continue;
+        };
+        if !memory_entry_matches(&key, &value, &meta.words, keywords) {
+            continue;
+        }
+        let key_lower = key.to_lowercase();
+        let value_lower = value.to_lowercase();
+        let score = keywords
+            .iter()
+            .map(|kw| {
+                let mut score = 0;
+                if key_lower.contains(kw) {
+                    score += 3;
+                }
+                if value_lower.contains(kw) {
+                    score += 1;
+                }
+                score
+            })
+            .sum::<i32>();
+        scored.push((score, key, value));
+    }
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    scored.truncate(limit);
+    Ok(scored
+        .into_iter()
+        .map(|(_, key, value)| format!("### {key}\n{value}"))
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 fn structural_repo_context(task_or_args: &str) -> String {
@@ -4086,9 +4177,7 @@ fn workflow_approve(
     content: Option<String>,
 ) -> Result<String> {
     with_hosted_session_lock(session, || {
-        let store = load_run_store();
-        let mut state: agent007_workflows::WorkflowRunState =
-            store.read_json_artifact(session, "workflow-state.json")?;
+        let (store, request, def, mut state) = load_hosted_workflow_session(session)?;
         let step_id = step
             .or_else(|| {
                 state
@@ -4099,11 +4188,28 @@ fn workflow_approve(
             .ok_or_else(|| anyhow::anyhow!("no pending approval found in session {}", session))?;
         let decision = parse_approval_decision(decision, content)?;
         state.record_approval_decision(&step_id, decision);
-        store.write_json_artifact(session, "workflow-state.json", &state)?;
-        Ok(format!(
-            "Recorded approval decision for step '{}' in session {}. Continue with agent007_workflow_next, agent007_workflow_status, or `agent007 workflow resume --session {}`.",
-            step_id, session, session,
-        ))
+        let engine = hosted_workflow_engine().for_run(Arc::new(store.clone()), session.to_string());
+        match engine.dispatch(&def, &mut state) {
+            Ok(progress) => {
+                store.write_json_artifact(session, "workflow-state.json", &state)?;
+                store.append_note(
+                    session,
+                    "workflow-hosted-approval",
+                    serde_json::json!({
+                        "workflow": request.workflow,
+                        "step": step_id,
+                        "progress": &progress,
+                    }),
+                )?;
+                sync_hosted_run_metadata(&store, session, &progress)?;
+                hosted_workflow_response(session, &request, &progress, &state)
+            }
+            Err(error) => {
+                let summary = format!("hosted workflow approval failed: {}", error);
+                let _ = store.finish_run(session, false, &summary);
+                Err(anyhow::anyhow!(summary))
+            }
+        }
     })
 }
 
@@ -4442,7 +4548,7 @@ fn hosted_workflow_response(
                 "    ✅ Present the content AND the approval_prompt to the user in your chat response, then END your response.",
                 "    ✅ Wait for the user's explicit decision in their next message.",
                 "    ✅ After they respond, call agent007_workflow_approve with decision=approve|deny|edit.",
-                "    ✅ Then call agent007_workflow_next to continue.",
+                "    ✅ agent007_workflow_approve auto-continues the workflow and returns the next ready steps.",
             ],
             "model_hint_values": {
                 "claude": "Use Anthropic Claude (claude-sonnet, claude-opus, etc.)",
@@ -5615,7 +5721,7 @@ async fn workflow_plan(_config: &Config, name: &str, task: &str) -> Result<Strin
             let system_prompt = if raw_system_prompt.trim().is_empty() {
                 String::new()
             } else {
-                let hash = stable_context_hash(&raw_system_prompt);
+                let hash = agent007_core::stable_context_hash(&raw_system_prompt);
                 let entries = persona_prompt_reuse.entry(hash).or_default();
                 if let Some(existing) = entries
                     .iter()
@@ -7067,10 +7173,7 @@ requires_approval = true
 
         let approval =
             workflow_approve(&session, None, "edit", Some("approved plan".to_string())).unwrap();
-        assert!(approval.contains("agent007_workflow_next"));
-
-        let resumed = workflow_hosted_next(&session).unwrap();
-        let resumed: serde_json::Value = serde_json::from_str(&resumed).unwrap();
+        let resumed: serde_json::Value = serde_json::from_str(&approval).unwrap();
         assert_eq!(resumed["progress"]["status"], "succeeded");
         assert_eq!(
             resumed["workflow_state"]["outputs"]["plan"],
@@ -7359,6 +7462,7 @@ output = "plan"
     fn memory_context_reuses_duplicate_blocks_with_refs() {
         let ctx = MemoryContext {
             project: "same project context".repeat(20),
+            project_deduped: "same project context".repeat(20),
             user: String::new(),
             global: String::new(),
             repo_brain: "same brain context".repeat(20),
@@ -7392,6 +7496,7 @@ Rag={{rag_context}}",
     fn memory_context_does_not_mark_unused_blocks_as_reused() {
         let ctx = MemoryContext {
             project: "project context".repeat(20),
+            project_deduped: "project context".repeat(20),
             user: String::new(),
             global: String::new(),
             repo_brain: String::new(),
@@ -7412,6 +7517,7 @@ Rag={{rag_context}}",
     fn memory_context_replaces_filtered_placeholders() {
         let ctx = MemoryContext {
             project: "project context".to_string(),
+            project_deduped: "project context".to_string(),
             user: String::new(),
             global: String::new(),
             repo_brain: String::new(),
@@ -7427,6 +7533,24 @@ Rag={{rag_context}}",
         assert!(!rendered.contains("memory.project"));
         assert!(!rendered.contains("rag_context"));
         assert!(!rendered.contains("lsp_context"));
+    }
+
+    #[test]
+    fn memory_context_uses_deduped_project_block_when_rag_is_rendered() {
+        let ctx = MemoryContext {
+            project: "### auth_architecture\nAuth architecture note".to_string(),
+            project_deduped: String::new(),
+            user: String::new(),
+            global: String::new(),
+            repo_brain: String::new(),
+            rag: "[project/auth_architecture]\nAuth architecture note".to_string(),
+            lsp: String::new(),
+        };
+
+        let rendered = ctx.apply_to("Project={{memory.project}}\nRag={{rag_context}}");
+
+        assert!(rendered.contains("[project/auth_architecture]"));
+        assert!(!rendered.contains("### auth_architecture"));
     }
 
     #[test]

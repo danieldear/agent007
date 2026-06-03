@@ -44,8 +44,14 @@ impl RepoBrainBuilder {
         let workflows =
             collect_file_stems(&self.agent_home.join("workflows"), &["toml", "yaml", "yml"])?;
         let skills = collect_file_stems(&self.agent_home.join("skills"), &["md"])?;
-        let memory_notes =
+        let mut memory_notes =
             collect_file_stems(&self.agent_home.join("memory").join("project"), &["md"])?;
+        memory_notes.extend(collect_sqlite_memory_keys(
+            &self.agent_home.join("memory").join("memory.db"),
+            "project",
+        )?);
+        memory_notes.sort();
+        memory_notes.dedup();
         let conventions = self.collect_conventions();
         let recommended_commands = recommended_commands(&ecosystems);
         let ecosystem_label = if ecosystems.is_empty() {
@@ -171,6 +177,28 @@ fn collect_file_stems(dir: &Path, exts: &[&str]) -> Result<Vec<String>, CoreErro
     Ok(names)
 }
 
+fn collect_sqlite_memory_keys(db_path: &Path, namespace: &str) -> Result<Vec<String>, CoreError> {
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
+    let mut stmt = match conn.prepare("SELECT key FROM memory WHERE namespace = ?1") {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let rows = stmt
+        .query_map([namespace], |row| row.get::<_, String>(0))
+        .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
+    let mut keys = Vec::new();
+    for row in rows.flatten() {
+        keys.push(row);
+    }
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
+}
+
 fn recommended_commands(ecosystems: &[String]) -> Vec<String> {
     let mut commands = Vec::new();
     if ecosystems.iter().any(|item| item == "rust") {
@@ -233,5 +261,49 @@ mod tests {
         assert!(brain.entrypoints.contains(&"src/main.rs".to_string()));
         assert!(brain.workflows.contains(&"ship".to_string()));
         assert!(brain.skills.contains(&"review".to_string()));
+    }
+
+    #[test]
+    fn repo_brain_counts_sqlite_project_memory_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_home = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        let memory_dir = agent_home.path().join("memory");
+        fs::create_dir_all(&memory_dir).unwrap();
+        let db_path = memory_dir.join("memory.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE memory (
+                namespace TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                entry_type TEXT NOT NULL DEFAULT 'semantic',
+                summary TEXT NOT NULL DEFAULT '',
+                expires_after TEXT,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                words TEXT NOT NULL DEFAULT '[]',
+                related_to TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY (namespace, key)
+            );
+            INSERT INTO memory (namespace, key, value, created_at, updated_at)
+            VALUES ('project', 'database_pool', 'Use bounded DB pools', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+            ",
+        )
+        .unwrap();
+
+        let brain = RepoBrainBuilder::new(root.path(), agent_home.path())
+            .build()
+            .unwrap();
+
+        assert!(brain.memory_notes.contains(&"database_pool".to_string()));
+        assert!(brain.summary.contains("1 project memory note"));
     }
 }
