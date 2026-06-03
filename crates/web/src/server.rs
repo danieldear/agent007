@@ -1,4 +1,10 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::SystemTime,
+};
 
 use axum::{
     body::Body,
@@ -119,6 +125,7 @@ impl WebServer {
             .unwrap_or("unknown")
             .to_string();
         let project_path = project_root.display().to_string();
+        spawn_repo_graph_freshness_watcher(project_root.clone(), cancel.clone());
 
         Self {
             state: AppState {
@@ -431,6 +438,184 @@ impl WebServer {
         }
         unreachable!()
     }
+}
+
+fn spawn_repo_graph_freshness_watcher(root: PathBuf, cancel: CancellationToken) {
+    tokio::spawn(async move {
+        if std::env::var("AGENT007_REPO_GRAPH_WATCH").as_deref() == Ok("0") {
+            return;
+        }
+        let root = root.canonicalize().unwrap_or(root);
+        let poll_interval = std::time::Duration::from_millis(
+            std::env::var("AGENT007_REPO_GRAPH_WATCH_POLL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1_500),
+        );
+        let debounce = std::time::Duration::from_millis(
+            std::env::var("AGENT007_REPO_GRAPH_REFRESH_DEBOUNCE_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2_500),
+        );
+        let max_batch = std::env::var("AGENT007_REPO_GRAPH_WATCH_MAX_BATCH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500usize);
+        let mut seen = match snapshot_repo_graph_files_blocking(root.clone()).await {
+            Ok(seen) => seen,
+            Err(error) => {
+                tracing::warn!(error = %error, "repo graph watcher initial scan failed");
+                BTreeMap::new()
+            }
+        };
+        let mut dirty = match load_repo_graph_dirty_paths_blocking(root.clone()).await {
+            Ok(dirty) => dirty,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to load persisted repo graph dirty paths");
+                BTreeSet::new()
+            }
+        };
+        let mut last_change = if dirty.is_empty() {
+            None
+        } else {
+            Some(
+                std::time::Instant::now()
+                    .checked_sub(debounce)
+                    .unwrap_or_else(std::time::Instant::now),
+            )
+        };
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = interval.tick() => {}
+            }
+            let current = match snapshot_repo_graph_files_blocking(root.clone()).await {
+                Ok(current) => current,
+                Err(error) => {
+                    tracing::warn!(error = %error, "repo graph watcher scan failed");
+                    continue;
+                }
+            };
+            let mut changed = Vec::new();
+            for (path, mtime) in &current {
+                if seen.get(path) != Some(mtime) {
+                    dirty.insert(path.clone());
+                    changed.push(path.clone());
+                }
+            }
+            for path in seen.keys() {
+                if !current.contains_key(path) {
+                    dirty.insert(path.clone());
+                    changed.push(path.clone());
+                }
+            }
+            if !changed.is_empty() {
+                last_change = Some(std::time::Instant::now());
+                if let Err(error) =
+                    mark_repo_graph_dirty_paths_blocking(root.clone(), changed.clone()).await
+                {
+                    tracing::warn!(error = %error, "failed to record repo graph dirty paths");
+                }
+            }
+            if last_change
+                .map(|instant| instant.elapsed() >= debounce)
+                .unwrap_or(false)
+            {
+                if !dirty.is_empty() {
+                    match freshen_repo_graph_blocking(root.clone(), max_batch).await {
+                        Ok((report, remaining_dirty)) => {
+                            dirty = remaining_dirty;
+                            tracing::debug!(
+                                strategy = %report.strategy,
+                                refreshed = report.refreshed,
+                                remaining_dirty = dirty.len(),
+                                "repo graph freshness watcher reconciled changes"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error, "repo graph refresh failed");
+                        }
+                    }
+                    if dirty.is_empty() {
+                        last_change = None;
+                    } else {
+                        last_change = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            seen = current;
+        }
+    });
+}
+
+async fn snapshot_repo_graph_files_blocking(
+    root: PathBuf,
+) -> Result<BTreeMap<PathBuf, SystemTime>, String> {
+    tokio::task::spawn_blocking(move || snapshot_repo_graph_files(&root).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+async fn load_repo_graph_dirty_paths_blocking(root: PathBuf) -> Result<BTreeSet<PathBuf>, String> {
+    tokio::task::spawn_blocking(move || {
+        agent007_core::load_repo_graph_dirty_paths(&root)
+            .map(|paths| paths.into_iter().map(PathBuf::from).collect())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn mark_repo_graph_dirty_paths_blocking(
+    root: PathBuf,
+    changed: Vec<PathBuf>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        agent007_core::mark_repo_graph_dirty_paths(&root, &changed)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn freshen_repo_graph_blocking(
+    root: PathBuf,
+    max_batch: usize,
+) -> Result<(agent007_core::RepoGraphFreshenReport, BTreeSet<PathBuf>), String> {
+    tokio::task::spawn_blocking(move || {
+        let graph_path = agent007_core::default_graph_path_for_root(&root);
+        let report = agent007_core::freshen_graph_if_needed(&root, Some(&graph_path), max_batch)
+            .map_err(|e| e.to_string())?;
+        let remaining_dirty = agent007_core::load_repo_graph_dirty_paths(&root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        Ok((report, remaining_dirty))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn snapshot_repo_graph_files(
+    root: &std::path::Path,
+) -> Result<BTreeMap<PathBuf, SystemTime>, agent007_core::CoreError> {
+    let mut out = BTreeMap::new();
+    for path in agent007_core::repo_graph_trackable_files(root)? {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path.as_path())
+            .to_path_buf();
+        let modified = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        out.insert(rel, modified);
+    }
+    Ok(out)
 }
 
 /// Dashboard bind host. Defaults to localhost for safety.

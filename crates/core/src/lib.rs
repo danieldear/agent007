@@ -2,6 +2,7 @@ pub mod budget;
 pub mod compact;
 pub mod context;
 pub mod error;
+pub mod hash;
 pub mod paths;
 pub mod repo_brain;
 pub mod repo_graph;
@@ -25,16 +26,20 @@ pub use context::{ContextBundle, ContextCompiler, ContextFile, ContextMemoryNote
 pub use dispatcher::{Dispatcher, LocalDispatcher};
 pub use error::CoreError;
 pub use events::AgentEvent;
+pub use hash::stable_context_hash;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
 pub use repo_graph::{
     build_and_save_graph, callees_for_symbol, callers_for_symbol, context_bundle_for_query,
-    default_graph_path_for_root, dep_path_between_symbols, doc_links_for_symbol,
-    evidence_refs_for_text, graph_status, impact_radius_for_symbol, load_graph,
-    load_or_build_graph, refresh_graph_for_paths, resolve_graph_path, symbol_lookup,
-    usage_graph_for_symbol, RepoGraph, RepoGraphBuilder, RepoGraphCounts, RepoGraphEdge,
-    RepoGraphEdgeKind, RepoGraphNeighborhood, RepoGraphNode, RepoGraphNodeKind,
-    RepoGraphPathResult, RepoGraphPathStep, RepoGraphQueryContext, RepoGraphStatus,
+    default_graph_path_for_root, dep_path_between_symbols, dirty_paths_path_for_root,
+    doc_links_for_symbol, evidence_refs_for_text, freshen_graph_if_needed, graph_stale_paths,
+    graph_status, impact_radius_for_symbol, is_repo_graph_trackable_path, load_graph,
+    load_or_build_graph, load_repo_graph_dirty_paths, mark_repo_graph_dirty_paths,
+    refresh_graph_for_paths, repo_graph_trackable_files, resolve_graph_path, symbol_lookup,
+    usage_graph_for_symbol, RepoGraph, RepoGraphBuilder, RepoGraphCounts, RepoGraphDirtySet,
+    RepoGraphEdge, RepoGraphEdgeKind, RepoGraphFreshenReport, RepoGraphFreshnessState,
+    RepoGraphNeighborhood, RepoGraphNode, RepoGraphNodeKind, RepoGraphPathResult,
+    RepoGraphPathStep, RepoGraphQueryContext, RepoGraphStatus,
 };
 pub use repo_readiness::{
     detect_repo_intelligence_readiness, ensure_repo_graph_ready_for_task,

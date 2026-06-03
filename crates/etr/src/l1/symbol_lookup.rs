@@ -31,4 +31,30 @@ mod tests {
             run(&json!({"root": dir.path(), "symbol": "alpha", "build_if_missing": true})).unwrap();
         assert!(out["count"].as_u64().unwrap_or(0) >= 1);
     }
+
+    #[test]
+    fn auto_refreshes_dirty_graph_before_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}").unwrap();
+        let graph_path = agent007_core::default_graph_path_for_root(dir.path());
+        agent007_core::build_and_save_graph(dir.path(), Some(&graph_path)).unwrap();
+
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn beta() {}").unwrap();
+        agent007_core::mark_repo_graph_dirty_paths(
+            dir.path(),
+            &[std::path::PathBuf::from("src/lib.rs")],
+        )
+        .unwrap();
+
+        let out = run(&json!({
+            "root": dir.path(),
+            "symbol": "beta",
+            "exact": true,
+            "build_if_missing": true
+        }))
+        .unwrap();
+        assert_eq!(out["count"].as_u64().unwrap_or(0), 1);
+        assert!(!agent007_core::graph_status(&graph_path).stale);
+    }
 }

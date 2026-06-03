@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use agent007_core::persona::PersonaProvider;
-use agent007_core::RunStore;
+use agent007_core::{stable_context_hash, RunStore};
 use agent007_etr::{EtrCallRequest, EtrDispatcher};
 
 use crate::approval::{ApprovalDecision, ApprovalDecisionKind};
@@ -67,15 +67,6 @@ fn lazy_artifact_filename(key: &str) -> String {
 /// Returns true if `value` is a lazy-injection stub.
 pub fn is_lazy_stub(value: &str) -> bool {
     value.starts_with(LAZY_STUB_PREFIX)
-}
-
-fn stable_context_hash(value: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in value.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 struct PersonaPromptReuse {

@@ -17,6 +17,9 @@ pub fn run(input: &Value) -> Result<Value> {
         "stale": status.stale,
         "stale_files": status.stale_files,
         "missing_files": status.missing_files,
+        "freshness": status.freshness,
+        "dirty_paths": status.dirty_paths,
+        "last_error": status.last_error,
     }))
 }
 
