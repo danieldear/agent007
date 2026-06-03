@@ -115,6 +115,22 @@ Keep structural intelligence current as the repo evolves.
 - stale graph regions are visible
 - refresh cost scales with changed surface area, not total repo size
 
+**Shipped slice**
+- Repo graph status now reports explicit freshness states:
+  `missing`, `fresh`, `updating`, `stale_small`, `stale_large`, and `failed`.
+- File changes are recorded in a local dirty-path registry under `.agent007/runtime`.
+- The dashboard/server runtime watches trackable source files and incrementally refreshes
+  changed paths after a short debounce.
+- Graph ETR query tools self-heal before answering by auto-building missing graphs or
+  refreshing stale paths, so skills and workflows do not need to remember a separate
+  refresh step.
+- Large dirty sets can fall back to full rebuild, while normal edits stay path-scoped.
+- Runtime knobs:
+  - `AGENT007_REPO_GRAPH_WATCH=0` disables background watching.
+  - `AGENT007_REPO_GRAPH_WATCH_POLL_MS` controls scan interval.
+  - `AGENT007_REPO_GRAPH_REFRESH_DEBOUNCE_MS` controls debounce.
+  - `AGENT007_REPO_GRAPH_WATCH_MAX_BATCH` controls per-refresh batch size.
+
 ### W3 — Repo RAG as Default Corpus
 Treat the repo as the primary retrieval corpus instead of an implicit afterthought.
 

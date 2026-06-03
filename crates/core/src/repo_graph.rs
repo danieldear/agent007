@@ -97,6 +97,37 @@ pub struct RepoGraphStatus {
     pub stale: bool,
     pub stale_files: usize,
     pub missing_files: usize,
+    pub freshness: RepoGraphFreshnessState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dirty_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoGraphFreshnessState {
+    Missing,
+    Fresh,
+    Updating,
+    StaleSmall,
+    StaleLarge,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoGraphDirtySet {
+    pub updated_at: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGraphFreshenReport {
+    pub refreshed: bool,
+    pub strategy: String,
+    pub requested_paths: Vec<String>,
+    pub before: RepoGraphStatus,
+    pub after: RepoGraphStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,6 +376,12 @@ pub fn default_graph_path_for_root(root: &Path) -> PathBuf {
     root.join(".agent007").join("runtime").join(GRAPH_FILENAME)
 }
 
+pub fn dirty_paths_path_for_root(root: &Path) -> PathBuf {
+    root.join(".agent007")
+        .join("runtime")
+        .join("repo_graph_dirty_paths.json")
+}
+
 pub fn load_graph(path: &Path) -> Result<RepoGraph, CoreError> {
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
     serde_json::from_str(&text).map_err(CoreError::from)
@@ -366,6 +403,7 @@ pub fn build_and_save_graph(root: &Path, path: Option<&Path>) -> Result<RepoGrap
         .unwrap_or_else(|| default_graph_path_for_root(root));
     graph.graph_path = target.display().to_string();
     save_graph(&graph, &target)?;
+    let _ = clear_repo_graph_dirty_paths(root, &[]);
     Ok(graph)
 }
 
@@ -534,6 +572,14 @@ pub fn refresh_graph_for_paths(
         edges,
     };
     save_graph(&refreshed, &target)?;
+    let _ = clear_repo_graph_dirty_paths(
+        &root,
+        requested
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    );
     Ok(refreshed)
 }
 
@@ -549,11 +595,14 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
             stale: false,
             stale_files: 0,
             missing_files: 0,
+            freshness: RepoGraphFreshnessState::Missing,
+            dirty_paths: Vec::new(),
+            last_error: None,
         };
     }
     let graph = match load_graph(path) {
         Ok(graph) => graph,
-        Err(_) => {
+        Err(err) => {
             return RepoGraphStatus {
                 exists: true,
                 graph_path: path.display().to_string(),
@@ -564,6 +613,9 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
                 stale: true,
                 stale_files: 0,
                 missing_files: 0,
+                freshness: RepoGraphFreshnessState::Failed,
+                dirty_paths: Vec::new(),
+                last_error: Some(err.to_string()),
             };
         }
     };
@@ -572,16 +624,11 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
         .map(|dt| dt.with_timezone(&Utc));
     let mut stale_files = 0usize;
     let mut missing_files = 0usize;
+    let root = PathBuf::from(&graph.root);
+    let dirty_paths = load_repo_graph_dirty_paths(&root).unwrap_or_default();
     if let Some(built_at) = built_at {
-        let root = PathBuf::from(&graph.root);
-        for node in &graph.nodes {
-            // Check both Rust source files and doc files for staleness; changes
-            // to either can invalidate doc→symbol edges or symbol definitions.
-            if node.kind != RepoGraphNodeKind::File && node.kind != RepoGraphNodeKind::Doc {
-                continue;
-            }
-            let Some(rel) = &node.path else { continue };
-            let p = root.join(rel);
+        for rel in graph_tracked_paths(&graph) {
+            let p = root.join(&rel);
             let Ok(meta) = fs::metadata(&p) else {
                 missing_files += 1;
                 continue;
@@ -595,6 +642,15 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
             }
         }
     }
+    let stale = stale_files > 0 || missing_files > 0 || !dirty_paths.is_empty();
+    let stale_total = stale_files + missing_files + dirty_paths.len();
+    let freshness = if stale_total == 0 {
+        RepoGraphFreshnessState::Fresh
+    } else if stale_total <= 200 {
+        RepoGraphFreshnessState::StaleSmall
+    } else {
+        RepoGraphFreshnessState::StaleLarge
+    };
     RepoGraphStatus {
         exists: true,
         graph_path: path.display().to_string(),
@@ -602,10 +658,186 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
         built_at: Some(graph.built_at),
         version: Some(graph.version),
         counts: Some(graph.counts),
-        stale: stale_files > 0 || missing_files > 0,
+        stale,
         stale_files,
         missing_files,
+        freshness,
+        dirty_paths,
+        last_error: None,
     }
+}
+
+pub fn graph_stale_paths(path: &Path, max_paths: usize) -> Result<Vec<String>, CoreError> {
+    let graph = load_graph(path)?;
+    let root = PathBuf::from(&graph.root);
+    let built_at = chrono::DateTime::parse_from_rfc3339(&graph.built_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc));
+    let mut out = BTreeSet::new();
+    for rel in load_repo_graph_dirty_paths(&root).unwrap_or_default() {
+        out.insert(rel);
+    }
+    if let Some(built_at) = built_at {
+        for rel in graph_tracked_paths(&graph) {
+            let p = root.join(&rel);
+            let Ok(meta) = fs::metadata(&p) else {
+                out.insert(rel);
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            let modified = chrono::DateTime::<Utc>::from(modified);
+            if modified > built_at {
+                out.insert(rel);
+            }
+        }
+    }
+    Ok(out.into_iter().take(max_paths).collect())
+}
+
+pub fn freshen_graph_if_needed(
+    root: &Path,
+    graph_path: Option<&Path>,
+    max_incremental_paths: usize,
+) -> Result<RepoGraphFreshenReport, CoreError> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let target = graph_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_graph_path_for_root(&root));
+    let before = graph_status(&target);
+    if !target.exists() {
+        let graph = build_and_save_graph(&root, Some(&target))?;
+        let after = graph_status(&target);
+        return Ok(RepoGraphFreshenReport {
+            refreshed: true,
+            strategy: "build_missing".into(),
+            requested_paths: Vec::new(),
+            before,
+            after: RepoGraphStatus {
+                counts: Some(graph.counts),
+                ..after
+            },
+        });
+    }
+    if !before.stale {
+        return Ok(RepoGraphFreshenReport {
+            refreshed: false,
+            strategy: "fresh".into(),
+            requested_paths: Vec::new(),
+            after: before.clone(),
+            before,
+        });
+    }
+    let requested = graph_stale_paths(&target, max_incremental_paths.saturating_add(1))?;
+    if requested.is_empty() {
+        return Ok(RepoGraphFreshenReport {
+            refreshed: false,
+            strategy: "stale_unknown".into(),
+            requested_paths: Vec::new(),
+            after: before.clone(),
+            before,
+        });
+    }
+    if requested.len() > max_incremental_paths {
+        let graph = build_and_save_graph(&root, Some(&target))?;
+        let after = graph_status(&target);
+        return Ok(RepoGraphFreshenReport {
+            refreshed: true,
+            strategy: "full_rebuild_large_stale_set".into(),
+            requested_paths: requested,
+            before,
+            after: RepoGraphStatus {
+                counts: Some(graph.counts),
+                ..after
+            },
+        });
+    }
+    let requested_paths = requested.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let _graph = refresh_graph_for_paths(&root, Some(&target), &requested_paths)?;
+    let after = graph_status(&target);
+    Ok(RepoGraphFreshenReport {
+        refreshed: true,
+        strategy: "incremental_path_patch".into(),
+        requested_paths: requested,
+        before,
+        after,
+    })
+}
+
+pub fn mark_repo_graph_dirty_paths(
+    root: &Path,
+    paths: &[PathBuf],
+) -> Result<Vec<String>, CoreError> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut current = load_repo_graph_dirty_paths(&root).unwrap_or_default();
+    let mut set: BTreeSet<String> = current.drain(..).collect();
+    for path in paths {
+        let rel = normalize_dirty_path(&root, path);
+        if rel.is_empty() || !is_repo_graph_trackable_rel_path(&rel) {
+            continue;
+        }
+        set.insert(rel);
+    }
+    let paths: Vec<String> = set.into_iter().collect();
+    write_dirty_set(&root, &paths)?;
+    Ok(paths)
+}
+
+pub fn load_repo_graph_dirty_paths(root: &Path) -> Result<Vec<String>, CoreError> {
+    let path = dirty_paths_path_for_root(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| CoreError::io(&path, e))?;
+    let dirty: RepoGraphDirtySet = serde_json::from_str(&raw)?;
+    Ok(dirty.paths)
+}
+
+pub fn clear_repo_graph_dirty_paths(root: &Path, cleared: &[PathBuf]) -> Result<(), CoreError> {
+    let path = dirty_paths_path_for_root(root);
+    if !path.exists() {
+        return Ok(());
+    }
+    if cleared.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    let current = load_repo_graph_dirty_paths(root).unwrap_or_default();
+    let cleared: BTreeSet<String> = cleared
+        .iter()
+        .map(|p| normalize_dirty_path(root, p))
+        .collect();
+    let remaining: Vec<String> = current
+        .into_iter()
+        .filter(|p| !cleared.contains(p))
+        .collect();
+    if remaining.is_empty() {
+        let _ = fs::remove_file(path);
+    } else {
+        write_dirty_set(root, &remaining)?;
+    }
+    Ok(())
+}
+
+pub fn repo_graph_trackable_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
+    Ok(walk_repo_files(root)?
+        .into_iter()
+        .filter(|path| is_repo_graph_trackable_path(path))
+        .collect())
+}
+
+pub fn is_repo_graph_trackable_path(path: &Path) -> bool {
+    if path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .map(should_skip_name)
+            .unwrap_or(false)
+    }) {
+        return false;
+    }
+    detect_source_language(path).is_some() || is_doc_file(path)
 }
 
 pub fn resolve_graph_path(root: Option<&Path>, graph_path: Option<&Path>) -> PathBuf {
@@ -704,6 +936,53 @@ fn normalize_requested_paths(root: &Path, requested_paths: &[PathBuf]) -> BTreeS
             }
         })
         .collect()
+}
+
+fn graph_tracked_paths(graph: &RepoGraph) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for node in &graph.nodes {
+        if !matches!(node.kind, RepoGraphNodeKind::File | RepoGraphNodeKind::Doc) {
+            continue;
+        }
+        let Some(rel) = &node.path else { continue };
+        if is_repo_graph_trackable_rel_path(rel) {
+            out.insert(rel.clone());
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn normalize_dirty_path(root: &Path, path: &Path) -> String {
+    let rel = if path.is_absolute() {
+        relative_path(root, path)
+    } else {
+        path.to_path_buf()
+    };
+    rel.to_string_lossy().replace('\\', "/")
+}
+
+fn is_repo_graph_trackable_rel_path(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    if path
+        .split('/')
+        .any(|segment| segment.is_empty() || should_skip_name(segment))
+    {
+        return false;
+    }
+    is_repo_graph_trackable_path(Path::new(&path))
+}
+
+fn write_dirty_set(root: &Path, paths: &[String]) -> Result<(), CoreError> {
+    let path = dirty_paths_path_for_root(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
+    }
+    let dirty = RepoGraphDirtySet {
+        updated_at: Utc::now().to_rfc3339(),
+        paths: paths.to_vec(),
+    };
+    let raw = serde_json::to_string_pretty(&dirty)?;
+    fs::write(&path, raw).map_err(|e| CoreError::io(&path, e))
 }
 
 fn patch_source_file(
@@ -850,7 +1129,19 @@ fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
 fn should_skip_name(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "node_modules" | ".venv" | "venv" | ".idea" | ".zed" | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
+        ".git"
+            | "target"
+            | "node_modules"
+            | ".venv"
+            | "venv"
+            | ".idea"
+            | ".zed"
+            | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
+            | "dist"
+            | "build"
+            | ".next"
+            | "coverage"
+            | "out"
     )
 }
 
@@ -1683,6 +1974,58 @@ pub fn gamma() { beta(); }
         assert!(callees
             .iter()
             .any(|row| row.get("callee") == Some(&"alpha_renamed".to_string())));
+    }
+
+    #[test]
+    fn dirty_paths_mark_status_stale_and_incremental_freshen_clears_them() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        let graph_path = default_graph_path_for_root(dir.path());
+        build_and_save_graph(dir.path(), Some(&graph_path)).unwrap();
+
+        fs::write(dir.path().join("src/lib.rs"), "pub fn beta() {}\n").unwrap();
+        let dirty =
+            mark_repo_graph_dirty_paths(dir.path(), &[PathBuf::from("src/lib.rs")]).unwrap();
+        assert_eq!(dirty, vec!["src/lib.rs"]);
+
+        let status = graph_status(&graph_path);
+        assert!(status.stale);
+        assert_eq!(status.freshness, RepoGraphFreshnessState::StaleSmall);
+        assert_eq!(status.dirty_paths, vec!["src/lib.rs"]);
+
+        let report = freshen_graph_if_needed(dir.path(), Some(&graph_path), 10).unwrap();
+        assert!(report.refreshed);
+        assert_eq!(report.strategy, "incremental_path_patch");
+        assert!(!graph_status(&graph_path).stale);
+        let graph = load_graph(&graph_path).unwrap();
+        assert_eq!(symbol_lookup(&graph, "alpha", true).len(), 0);
+        assert_eq!(symbol_lookup(&graph, "beta", true).len(), 1);
+        assert!(load_repo_graph_dirty_paths(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn trackable_files_skip_build_and_runtime_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("target")).unwrap();
+        fs::create_dir_all(dir.path().join(".agent007/runtime")).unwrap();
+        fs::create_dir_all(dir.path().join("dist")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        fs::write(dir.path().join("target/generated.rs"), "pub fn bad() {}\n").unwrap();
+        fs::write(
+            dir.path().join(".agent007/runtime/repo_graph_v1.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(dir.path().join("dist/bundle.js"), "function bundled() {}\n").unwrap();
+
+        let files = repo_graph_trackable_files(dir.path()).unwrap();
+        let rels: Vec<_> = files
+            .iter()
+            .map(|p| relative_path(dir.path(), p).to_string_lossy().to_string())
+            .collect();
+        assert_eq!(rels, vec!["src/lib.rs"]);
     }
 
     #[test]
