@@ -3,9 +3,11 @@ use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
 pub struct ProjectsArgs {
@@ -196,8 +198,61 @@ fn save_registry(registry_path: &Path, registry: &ProjectRegistry) -> Result<()>
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let content = serde_json::to_string_pretty(registry)?;
-    fs::write(registry_path, format!("{}\n", content))
+    atomic_write(registry_path, &format!("{}\n", content))
         .with_context(|| format!("failed to write {}", registry_path.display()))
+}
+
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("{} has no file name", path.display()))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let tmp_path = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        nanos
+    ));
+
+    let write_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .with_context(|| format!("failed to create {}", tmp_path.display()))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", tmp_path.display()))?;
+        Ok(())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path).with_context(|| format!("failed to replace {}", path.display()))?;
+    }
+
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err).with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                tmp_path.display(),
+                path.display()
+            )
+        });
+    }
+    Ok(())
 }
 
 fn canonical_project_dir(path: &Path) -> Result<PathBuf> {
@@ -213,14 +268,44 @@ fn canonical_project_dir(path: &Path) -> Result<PathBuf> {
 fn normalize_remove_path(value: &str) -> Option<String> {
     let path = Path::new(value);
     if let Ok(canonical) = path.canonicalize() {
-        return Some(canonical.to_string_lossy().to_string());
+        return Some(
+            normalize_path_lexically(&canonical)
+                .to_string_lossy()
+                .to_string(),
+        );
     }
-    if path.is_absolute() {
-        return Some(path.to_string_lossy().to_string());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(
+        normalize_path_lexically(&absolute)
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
     }
-    std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.join(path).to_string_lossy().to_string())
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
 }
 
 fn clean_name(name: Option<&str>) -> Option<String> {
@@ -352,6 +437,43 @@ mod tests {
 
         let saved = load_registry(&registry).unwrap();
         assert!(saved.projects.is_empty());
+    }
+
+    #[test]
+    fn remove_project_by_path_works_after_directory_is_deleted() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("demo-project");
+        fs::create_dir_all(&project).unwrap();
+        let registry = registry_path(&temp);
+
+        let entry = add_project_at(&registry, &project, None, "2026-06-17T10:00:00Z").unwrap();
+        fs::remove_dir_all(&project).unwrap();
+
+        let equivalent_missing_path = Path::new(&entry.path).join("nested").join("..");
+        let removed = remove_project(&registry, equivalent_missing_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(removed, entry);
+        assert!(load_registry(&registry).unwrap().projects.is_empty());
+    }
+
+    #[test]
+    fn save_registry_uses_temp_file_without_leaving_tmp_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = registry_path(&temp);
+        let project = temp.path().join("demo-project");
+        fs::create_dir_all(&project).unwrap();
+
+        let entry = add_project_at(&registry, &project, None, "2026-06-17T10:00:00Z").unwrap();
+
+        let saved = load_registry(&registry).unwrap();
+        assert_eq!(saved.projects, vec![entry]);
+        let parent = registry.parent().unwrap();
+        let leftovers: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
     }
 
     #[test]
