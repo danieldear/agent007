@@ -3359,6 +3359,42 @@ free-form reasoning, broad file reads, or ad-hoc shell/Python parsing.
 agent007 is the control plane. Use it for workflows, personas, repo intelligence,
 memory, and deterministic extraction.
 
+## Core cycle
+
+```text
+1. TASK
+   -> user asks for work
+
+2. CONTROL
+   -> use agent007_run / agent007_skill_run / agent007_workflow_run
+   -> get a run, prompt, or structured plan
+
+3. WORK
+   -> execute with normal editor tools
+   -> read files, edit code, run commands, inspect diffs
+
+4. RECORD
+   -> when hosted flows ask for it, call agent007_record_tokens
+   -> preserve useful output in memory and dashboard telemetry
+
+5. LEARN
+   -> future runs reuse repo brain, memory, and prior outputs
+```
+
+The important rule:
+
+```text
+for multi-step or high-context work, route through agent007 first
+```
+
+The durable file/log inspection rule:
+
+```text
+for repository files, logs, CSV/JSON reports, diffs, workflow state, metrics,
+and code search, use agent007 ETR tools first; do not silently fall back to
+ad-hoc shell/Python readers in a new, resumed, or forked thread.
+```
+
 ## Coordinator model
 
 Top-level coordinators:
@@ -3384,8 +3420,27 @@ Keep the top-level small. Prefer richer workers underneath rather than adding ma
 1. **Quick single-step work** → `agent007_run`
 2. **Repeatable expert pattern** → `agent007_skill_run`
 3. **Multi-step / approval-gated / parallel work** → `agent007_workflow_run`
-4. **Exact extraction or structured analysis** → ETR first
+4. **Exact extraction or structured analysis** → `agent007_etr_list` then `agent007_etr_call`
 5. **Execution of builds/tests/scripts** → shell/build/test tools are fine
+
+## Core tools
+
+| Tool | Purpose |
+|------|---------|
+| `agent007_run` | Run a quick task through the agent stack |
+| `agent007_skill_list` | Discover installed skills |
+| `agent007_skill_run` | Run a named skill by trigger |
+| `agent007_workflow_list` | List available workflows |
+| `agent007_workflow_run` | Run a workflow synchronously |
+| `agent007_workflow_start` / `agent007_workflow_next` | Drive hosted workflow sessions |
+| `agent007_workflow_submit_step` / `agent007_workflow_approve` | Submit hosted step output and approval decisions |
+| `agent007_record_tokens` | Persist hosted output and dashboard metrics |
+| `agent007_context_compile` | Pull repo brain + memory + relevant files |
+| `agent007_memory_read` / `agent007_memory_write` | Read or persist high-signal context |
+| `agent007_run_history` | Review prior runs |
+| `agent007_repo_brain_refresh` | Rebuild project summary memory |
+| `agent007_etr_list` | Discover available ETR tools and schemas |
+| `agent007_etr_call` | Read/search/slice/analyze files through ETR |
 
 ## Skills to prefer
 
@@ -3455,34 +3510,44 @@ Use agent007 / ETR for **interpretation and extraction**:
 - repo graph callers/callees/context
 
 Do **not** default to custom Python or shell parsing if ETR can do the job.
+If shell or Python is used for reading/analyzing files, state why ETR was not
+sufficient. Python is acceptable for deterministic bulk edits when `apply_patch`
+would be impractical, but not as the default file reader.
 
 ## ETR-first rule
 
-Prefer ETR built-ins first for deterministic tasks:
-- `etr.grep`
-- `etr.glob`
-- `etr.file_stat`
-- `etr.diff`
-- `etr.csv_slice`
-- `etr.json_extract`
-- `etr.graph_build`
-- `etr.graph_status`
-- `etr.symbol_lookup`
-- `etr.callers`
-- `etr.callees`
-- `etr.impact_radius`
-- `etr.context_bundle`
+Prefer ETR built-ins first for deterministic tasks. Common choices:
+
+| ETR tool | Use |
+|----------|-----|
+| `etr.artifact_read` | Read source files, reports, JSON, and text artifacts with guardrails |
+| `etr.grep` | Search source/logs for code paths, symbols, errors, and report fields |
+| `etr.glob` | Discover files under source, report, log, and artifact directories |
+| `etr.file_stat` | Check existence, size, and timestamps |
+| `etr.diff` | Compare text artifacts deterministically |
+| `etr.csv_slice` | Inspect CSV rows with optional column selection |
+| `etr.table_select` / `etr.table_stats` | Select, filter, and summarize CSV/JSONL tables |
+| `etr.metrics_summary` / `etr.delta_compare` | Summarize metrics and compare baseline vs candidate |
+| `etr.json_extract` / `etr.json_query` / `etr.json_query_v2` | Inspect JSON manifests, reports, and state files |
+| `etr.text_extract` | Extract regex matches from text or files |
+| `etr.logs_slice` / `etr.logs_correlate` | Slice and correlate logs |
+| `etr.workflow_status_summary` / `etr.workflow_outputs_index` / `etr.workflow_step_health` | Inspect hosted workflow state compactly |
+| `etr.graph_build` / `etr.graph_status` | Build or inspect repo graph state |
+| `etr.symbol_lookup` / `etr.callers` / `etr.callees` | Query symbol-level structure |
+| `etr.impact_radius` / `etr.context_bundle` | Build graph-aware edit or review context |
 
 If unsure:
 
 ```text
 agent007_etr_list()
+agent007_etr_call(tool="etr.grep", input={"path":"<path>", "pattern":"<regex>", "context_lines":2})
 ```
 
 ## Anti-patterns
 
 Avoid:
 - writing throwaway Python to parse JSON/logs/tables when ETR exists
+- silently falling back to shell/Python readers after an ETR miss without saying why
 - broad-reading many files before trying `agent007_context_compile`
 - improvising on a task that clearly fits a skill or workflow
 - treating hosted-MCP mode as if the host should ignore agent007
@@ -3497,12 +3562,17 @@ choose agent007 surfaces:
 - personas for role-specific tasks
 - ETR for deterministic extraction
 
+In every new, resumed, or forked thread, re-apply the ETR-first rule before
+touching logs, validation reports, generated artifacts, algorithm code, or UI export code.
+
 ## Examples
 
 - **Build warning analysis:** run the build with shell, then use agent007 / ETR to interpret it
 - **Large feature request:** route to `feature` or `sparc`, do not broad-plan it by hand
 - **Code review or audit:** use `code-review` or `security-audit`
 - **Repo structure question:** use Repo Intelligence / graph tools first, then read only pointed files
+- **JSON/report question:** use `etr.json_query` or `etr.artifact_read`, not custom Python
+- **CSV/metrics question:** use `etr.csv_slice`, `etr.table_stats`, or `etr.metrics_summary`
 "#;
 
 const CLAUDE_AGENT_ARCHITECT: &str = r#"---
@@ -3759,6 +3829,7 @@ fn claude_md_wrapper(canonical_target: &str) -> String {
 - For non-trivial work, route through agent007 before broad free-form reasoning.
 - In hosted-MCP mode, Claude is still the planner, so it must deliberately choose agent007 workflows, skills, personas, and ETR tools.
 - Use shell for execution; use agent007 / ETR for interpretation and structured extraction.
+- Before custom shell/Python readers, use `agent007_etr_list` and `agent007_etr_call`; if you fall back, say why ETR was not sufficient.
 "#
     )
 }
@@ -3778,8 +3849,8 @@ alwaysApply: true
 {shared_refs}
 
 - Prefer agent007 for non-trivial work.
-- Prefer ETR for deterministic extraction and repo graph queries.
-- Use shell/build/test tools for execution, not ad-hoc parsing.
+- Prefer `agent007_etr_list` / `agent007_etr_call` for deterministic extraction and repo graph queries.
+- Use shell/build/test tools for execution, not ad-hoc parsing; if you fall back to shell/Python readers, say why ETR was not sufficient.
 "#
     )
 }
@@ -3792,8 +3863,9 @@ Also honor `{canonical_target}` as the primary shared operating contract for thi
 
 - Route non-trivial tasks through agent007 first.
 - Prefer skills and workflows before broad free-form planning.
-- Use ETR for deterministic extraction/query/status tasks before custom shell/Python parsing.
+- Use `agent007_etr_list` / `agent007_etr_call` for deterministic extraction/query/status tasks before custom shell/Python parsing.
 - Use shell for execution of builds/tests/scripts, then synthesize results through agent007.
+- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
 "#
     )
 }
@@ -3805,8 +3877,9 @@ fn zed_rules_md(canonical_target: &str) -> String {
 Use `{canonical_target}` as the detailed shared operating contract for this repository.
 
 - Prefer agent007 for non-trivial work.
-- Prefer Repo Intelligence and ETR before broad file reads or ad-hoc parsing.
+- Prefer Repo Intelligence and `agent007_etr_call` before broad file reads or ad-hoc parsing.
 - Use workflows for multi-step delivery and skills for repeatable specialist work.
+- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
 "#
     )
 }
@@ -3823,7 +3896,9 @@ Use agent007 first for:
 - repo intelligence / graph interrogation
 - deterministic extraction via ETR
 
+Use `agent007_etr_list` / `agent007_etr_call` before custom shell/Python readers.
 Use shell for execution and verification, not as the default interpretation layer.
+If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
 "#
     )
 }
@@ -4138,6 +4213,11 @@ name = "night"
         assert!(generated.contains("## Routing ladder"));
         assert!(generated.contains("Hosted-MCP reality"));
         assert!(generated.contains("agent007_context_compile"));
+        assert!(generated.contains("The durable file/log inspection rule"));
+        assert!(generated.contains("agent007_etr_call"));
+        assert!(generated.contains("If shell or Python is used for reading/analyzing files"));
+        assert!(generated.contains("etr.artifact_read"));
+        assert!(generated.contains("etr.workflow_status_summary"));
     }
 
     #[test]
@@ -4151,6 +4231,8 @@ name = "night"
 
         let claude_md = std::fs::read_to_string(project_dir.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("@AGENTS.md"));
+        assert!(claude_md.contains("agent007_etr_call"));
+        assert!(claude_md.contains("why ETR was not sufficient"));
 
         let agent_names = [
             "agent007-architect.md",
@@ -4182,11 +4264,14 @@ name = "night"
             std::fs::read_to_string(project_dir.join(".cursor/rules/agent007.mdc")).unwrap();
         assert!(cursor_rule.contains("alwaysApply: true"));
         assert!(cursor_rule.contains("@AGENTS.md"));
+        assert!(cursor_rule.contains("agent007_etr_call"));
 
         let copilot =
             std::fs::read_to_string(project_dir.join(".github/copilot-instructions.md")).unwrap();
         assert!(copilot.contains("GitHub Copilot"));
         assert!(copilot.contains("AGENTS.agent007.generated.md"));
+        assert!(copilot.contains("agent007_etr_call"));
+        assert!(copilot.contains("why ETR was not sufficient"));
 
         let workspace_mcp: JsonValue =
             serde_json::from_str(&std::fs::read_to_string(project_dir.join(".mcp.json")).unwrap())
@@ -4195,6 +4280,19 @@ name = "night"
             workspace_mcp["mcpServers"]["agent007"]["command"],
             "/opt/agent007"
         );
+    }
+
+    #[test]
+    fn codex_project_note_reinforces_etr_first_fallback_rule() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_dir = temp.path();
+
+        register_codex_project_files(project_dir, false).unwrap();
+
+        let codex_note = std::fs::read_to_string(project_dir.join("AGENT007-CODEX.md")).unwrap();
+        assert!(codex_note.contains("agent007_etr_call"));
+        assert!(codex_note.contains("If shell/Python is used as a reader/parser"));
+        assert!(codex_note.contains("why ETR was not sufficient"));
     }
 
     #[test]
