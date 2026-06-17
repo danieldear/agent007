@@ -4190,10 +4190,20 @@ name = "night"
 
     #[test]
     fn built_in_llm_council_workflow_validates() {
+        let raw_protocol_marker_count = WORKFLOW_LLM_COUNCIL
+            .matches(WORKFLOW_OPERATING_PROTOCOL_MARKER)
+            .count();
         let rendered = render_builtin_workflow_template(WORKFLOW_LLM_COUNCIL);
+        assert!(!rendered.contains(WORKFLOW_OPERATING_PROTOCOL_MARKER));
+
         let def: agent007_workflows::WorkflowDef = serde_yaml::from_str(&rendered).unwrap();
         assert_eq!(def.name, "llm-council");
         assert_eq!(def.steps.len(), 22);
+        assert_eq!(raw_protocol_marker_count, def.steps.len());
+        assert_eq!(
+            rendered.matches("Operating protocol:").count(),
+            def.steps.len()
+        );
 
         let registry = agent007_personas::PersonaRegistry::built_in();
         use agent007_core::PersonaProvider;
