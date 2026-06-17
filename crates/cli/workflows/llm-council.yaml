@@ -1,0 +1,860 @@
+name: llm-council
+description: >
+  Opt-in, deep peer-deliberation LLM Council workflow. Frames a question, runs
+  multiple independent specialist perspectives in parallel, lets each council member
+  question other members, routes and deduplicates those challenges, asks each member
+  to revise their own position, then produces a final decision memo preserving
+  consensus, dissent, risks, evidence needs, and action steps. Useful for product
+  brainstorming, coding/architecture decisions, finance research frameworks, travel
+  research, science exploration, business strategy, debugging approaches, and other
+  ambiguous or high-impact decisions. This is intentionally heavier than brainstorm/code-review
+  and should be used when extra deliberation is worth the latency/cost. Advisory only;
+  does not replace professional financial, legal, medical, security, or travel-safety advice.
+
+reliability:
+  enabled: true
+  recovery:
+    enabled: true
+    max_step_retries: 1
+  budget_governor:
+    enabled: true
+    max_degradations_per_run: 2
+    degrade_output_chars: 10000
+  confidence:
+    enabled: true
+    low_terms:
+      - "unsure"
+      - "uncertain"
+      - "not sure"
+    missing_requires_approval: false
+eval_gate:
+  enabled: true
+  release_class: false
+  mode: fail-open
+  baseline_window: 20
+  min_baseline_runs: 3
+  thresholds:
+    max_quality_score_drop: 0.2
+    max_cost_usd_increase: 4.0
+    max_latency_ms_increase: 5000
+    max_retry_increase: 1.0
+
+steps:
+  - id: frame-question
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Chair of a peer-deliberation LLM Council. Frame the user's request
+      so the council can deliberate productively across domains.
+
+      USER REQUEST:
+      {{task}}
+
+      Produce a concise Council Brief with:
+      1. Decision / question to answer
+      2. Domain classification: coding, product, business, finance, travel, science/research,
+         personal, legal/medical, security, other
+      3. Desired output type: brainstorm, plan, strategy, decision memo, implementation plan,
+         research brief, itinerary, review, other
+      4. Success criteria and evaluation rubric
+      5. Constraints stated by the user
+      6. Missing information that would materially change the answer
+      7. Safety / compliance notes:
+         - Finance: educational decision support only; avoid personalized buy/sell instructions;
+           require risk tolerance, time horizon, diversification, liquidity, tax jurisdiction,
+           and current data before any concrete portfolio conclusion.
+         - Travel: verify current visas, safety, weather, closures, opening hours, prices,
+           and local rules before final booking decisions.
+         - Science/research: separate established facts from hypotheses and speculation;
+           identify sources/experiments needed.
+         - Legal/medical: informational only; recommend professional review.
+         - Security: defensive/remediation-focused only.
+         - Coding: preserve tests, security, maintainability, and rollback options.
+      8. Working assumptions the council should use if the user did not provide enough detail.
+      9. Council roles that should pay special attention for this domain.
+
+      Do not answer the request yet. Prepare the brief for the other council members.
+    output: council_brief
+    depends_on: []
+
+  - id: opportunity-analyst
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Opportunity Analyst on an LLM Council. Think expansively and look for
+      upside, novel angles, options, and hidden opportunities.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - 3-7 promising approaches/options
+      - Why each could work
+      - Upside potential
+      - Key assumptions behind the upside
+      - What evidence would increase or decrease confidence
+      - Unconventional but plausible alternatives
+      - Your current top recommendation, if any
+
+      Stay grounded. Do not invent current facts, prices, citations, schedules, or
+      performance data. If current external data is required, say exactly what should be fetched.
+    output: opportunity_view
+    depends_on: [frame-question]
+
+  - id: pragmatist-planner
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Pragmatist / Execution Planner on an LLM Council. Convert the request
+      into a practical, staged path that a real person or team could follow.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - Recommended execution strategy
+      - Phased plan: immediate, short-term, medium-term
+      - Decision checkpoints and kill criteria
+      - Resource requirements
+      - Dependencies and sequencing
+      - What to do first with minimal regret
+      - What not to do yet
+      - Your current top recommendation, if any
+
+      Optimize for usefulness, reversibility, and learning speed.
+    output: pragmatist_view
+    depends_on: [frame-question]
+
+  - id: systems-architect
+    agent: Architect
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Systems Architect on an LLM Council. Design the structure behind the
+      answer: components, decision framework, interfaces, data flow, operating model,
+      or research structure.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - A structured framework/model for solving the problem
+      - Key components and how they interact
+      - Trade-offs and architecture/strategy choices
+      - Scalability, maintainability, robustness considerations
+      - Failure modes caused by poor structure
+      - If coding/product: technical architecture implications
+      - If finance/business: portfolio/business/system design principles, not unsupported direct advice
+      - If travel: itinerary/research structure, constraints, fallback paths, and logistics design
+      - If science/research: conceptual model, hypotheses, evidence hierarchy, and experiment/research plan
+      - Your current top recommendation, if any
+    output: architect_view
+    depends_on: [frame-question]
+
+  - id: risk-skeptic
+    agent: SecurityReviewer
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Risk Skeptic / Red Team on an LLM Council. Your job is to find what
+      could go wrong and where the council might be overconfident.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - Major risks, ranked by severity and likelihood
+      - Hidden assumptions and possible failure modes
+      - Compliance, safety, ethical, legal, security, operational, and financial-risk concerns where relevant
+      - Ways the proposed direction could harm the user/project or waste time/money
+      - Mitigations and guardrails
+      - Questions that must be answered before irreversible action
+      - Your current top recommendation, if any, emphasizing risk-adjusted choice
+
+      For finance-related requests, explicitly avoid personalized investment recommendations;
+      focus on risk management, due diligence, diversification, sizing, time horizon, and need
+      for current market/filing data.
+    output: skeptic_view
+    depends_on: [frame-question]
+
+  - id: evidence-analyst
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Evidence Analyst on an LLM Council. Focus on factual support,
+      uncertainty, measurement, and validation.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - What facts/data are needed to answer well
+      - Which claims can be reasoned from provided context vs require fresh lookup/testing
+      - Validation plan and metrics
+      - Confidence levels for major assumptions
+      - Data sources/tools to consult next
+      - A table: Claim | Evidence needed | How to verify | Confidence now
+      - Your current top recommendation, if any, from an evidence-quality perspective
+
+      Do not fabricate data or citations. If the task depends on current facts, mark them as
+      "requires current verification" and specify the exact queries, sources, or tools needed.
+    output: evidence_view
+    depends_on: [frame-question]
+
+  - id: implementation-operator
+    agent: ExpertCoder
+    model: gpt-5.3-codex
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Implementation Operator on an LLM Council. Think in terms of concrete
+      execution artifacts: code changes, tasks, checklists, automations, dashboards,
+      documents, itineraries, spreadsheets, research logs, or operating routines.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      USER REQUEST:
+      {{task}}
+
+      Deliver:
+      - Concrete deliverables the user can create
+      - Task breakdown with acceptance criteria
+      - Tooling/automation opportunities
+      - For coding: files/modules/tests likely involved, if known
+      - For product/business/finance/research/travel: templates, trackers, review cadences,
+        decision logs, validation checklists
+      - A first-week action checklist
+      - A definition of done
+      - Your current top recommendation, if any, from an execution perspective
+
+      Keep it domain-appropriate; do not pretend to have inspected files or live data unless supplied.
+    output: operator_view
+    depends_on: [frame-question]
+
+  - id: opportunity-questions
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Opportunity Analyst. Read the other council members' initial views and
+      ask targeted questions that would improve the final answer.
+
+      YOUR INITIAL VIEW:
+      {{opportunity_view}}
+
+      OTHER VIEWS:
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions that expose missed upside, creative alternatives, false constraints, or better opportunities.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: opportunity_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: pragmatist-questions
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Pragmatist Planner. Read the other council members' initial views and
+      ask targeted questions that would make the plan more executable.
+
+      YOUR INITIAL VIEW:
+      {{pragmatist_view}}
+
+      OTHER VIEWS:
+      Opportunity: {{opportunity_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions about sequencing, effort, dependencies, reversibility, constraints, or first steps.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: pragmatist_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: architect-questions
+    agent: Architect
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Systems Architect. Read the other council members' initial views and
+      ask targeted questions that would improve the structure and robustness of the answer.
+
+      YOUR INITIAL VIEW:
+      {{architect_view}}
+
+      OTHER VIEWS:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions about structure, interfaces, systems failure modes, scaling, maintainability,
+      robustness, and model/framework fit.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: architect_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: skeptic-questions
+    agent: SecurityReviewer
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Risk Skeptic. Read the other council members' initial views and ask
+      targeted questions that challenge overconfidence and expose failure modes.
+
+      YOUR INITIAL VIEW:
+      {{skeptic_view}}
+
+      OTHER VIEWS:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions about risk, safety, downside, unsupported assumptions, incentives, compliance,
+      hidden costs, and irreversible decisions.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: skeptic_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: evidence-questions
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Evidence Analyst. Read the other council members' initial views and
+      ask targeted questions that improve factual grounding and validation.
+
+      YOUR INITIAL VIEW:
+      {{evidence_view}}
+
+      OTHER VIEWS:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Implementation Operator: {{operator_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions about evidence quality, testability, current data, falsifiability, metrics,
+      confidence, and what would change the recommendation.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: evidence_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: operator-questions
+    agent: ExpertCoder
+    model: gpt-5.3-codex
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Implementation Operator. Read the other council members' initial views
+      and ask targeted questions that make the result easier to execute.
+
+      YOUR INITIAL VIEW:
+      {{operator_view}}
+
+      OTHER VIEWS:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+
+      Ask up to 3 high-value questions total. Each question must target a specific council member.
+      Favor questions about concrete deliverables, tooling, checklists, ownership, acceptance criteria,
+      automation, operational complexity, and definition of done.
+
+      Output exactly:
+      - Target agent:
+        Question:
+        Why this matters:
+        What kind of answer would change your mind:
+    output: operator_questions
+    depends_on: [opportunity-analyst, pragmatist-planner, systems-architect, risk-skeptic, evidence-analyst, implementation-operator]
+
+  - id: route-challenges
+    agent: CodeReviewer
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Council Moderator. Your job is NOT to be the only questioner.
+      Instead, route, deduplicate, and prioritize questions generated by the council members.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      QUESTIONS FROM OPPORTUNITY ANALYST:
+      {{opportunity_questions}}
+
+      QUESTIONS FROM PRAGMATIST:
+      {{pragmatist_questions}}
+
+      QUESTIONS FROM ARCHITECT:
+      {{architect_questions}}
+
+      QUESTIONS FROM RISK SKEPTIC:
+      {{skeptic_questions}}
+
+      QUESTIONS FROM EVIDENCE ANALYST:
+      {{evidence_questions}}
+
+      QUESTIONS FROM IMPLEMENTATION OPERATOR:
+      {{operator_questions}}
+
+      Produce a Challenge Packet. Requirements:
+      - Preserve which agent originally asked each question.
+      - Deduplicate overlapping questions.
+      - Route each question to a target agent.
+      - Keep at most 5 routed questions per target agent.
+      - Add at most 3 moderator-added questions total, only if a critical blind spot was missed.
+      - Include "global challenges" that every agent should consider, if any.
+
+      Output format:
+      ## Challenge Packet
+      ### Global Challenges
+      - ...
+      ### Target: Opportunity Analyst
+      - Asked by: ... | Question: ... | Why it matters: ...
+      ### Target: Pragmatist Planner
+      - ...
+      ### Target: Systems Architect
+      - ...
+      ### Target: Risk Skeptic
+      - ...
+      ### Target: Evidence Analyst
+      - ...
+      ### Target: Implementation Operator
+      - ...
+    output: challenge_packet
+    depends_on: [opportunity-questions, pragmatist-questions, architect-questions, skeptic-questions, evidence-questions, operator-questions]
+
+  - id: opportunity-revision
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Opportunity Analyst. Revise your view after reading the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{opportunity_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Answer challenges addressed to Opportunity Analyst and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated top options/recommendation
+      5. Remaining concerns or open questions
+      6. Confidence: Low / Medium / High, with reason
+    output: opportunity_revised
+    depends_on: [route-challenges]
+
+  - id: pragmatist-revision
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Pragmatist Planner. Revise your plan after reading the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{pragmatist_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Opportunity: {{opportunity_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Answer challenges addressed to Pragmatist Planner and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated execution plan/recommendation
+      5. Remaining concerns or open questions
+      6. Confidence: Low / Medium / High, with reason
+    output: pragmatist_revised
+    depends_on: [route-challenges]
+
+  - id: architect-revision
+    agent: Architect
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Systems Architect. Revise your framework after reading the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{architect_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Answer challenges addressed to Systems Architect and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated framework/architecture/recommendation
+      5. Remaining concerns or open questions
+      6. Confidence: Low / Medium / High, with reason
+    output: architect_revised
+    depends_on: [route-challenges]
+
+  - id: skeptic-revision
+    agent: SecurityReviewer
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Risk Skeptic. Revise your risk assessment after reading the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{skeptic_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      Answer challenges addressed to Risk Skeptic and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated risk-adjusted recommendation
+      5. Remaining concerns or open questions
+      6. Confidence: Low / Medium / High, with reason
+    output: skeptic_revised
+    depends_on: [route-challenges]
+
+  - id: evidence-revision
+    agent: Researcher
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Evidence Analyst. Revise your evidence and validation plan after reading
+      the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{evidence_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Implementation Operator: {{operator_view}}
+
+      Answer challenges addressed to Evidence Analyst and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated evidence/validation plan
+      5. Claims requiring current verification
+      6. Confidence: Low / Medium / High, with reason
+    output: evidence_revised
+    depends_on: [route-challenges]
+
+  - id: operator-revision
+    agent: ExpertCoder
+    model: gpt-5.3-codex
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Implementation Operator. Revise your execution artifacts and checklist after
+      reading the council challenge packet.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      YOUR ORIGINAL VIEW:
+      {{operator_view}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      OTHER INITIAL VIEWS FOR CONTEXT:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+
+      Answer challenges addressed to Implementation Operator and any global challenges.
+      Then revise your position.
+
+      Output:
+      1. Challenges answered
+      2. What changed in your view
+      3. What you still believe
+      4. Updated deliverables/checklist/implementation recommendation
+      5. Remaining concerns or open questions
+      6. Confidence: Low / Medium / High, with reason
+    output: operator_revised
+    depends_on: [route-challenges]
+
+  - id: option-scoring
+    agent: CodeReviewer
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Council Moderator. Extract the final candidate options from the revised
+      council positions and score them with a shared rubric.
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      REVISED OPPORTUNITY VIEW:
+      {{opportunity_revised}}
+
+      REVISED PRAGMATIST VIEW:
+      {{pragmatist_revised}}
+
+      REVISED ARCHITECT VIEW:
+      {{architect_revised}}
+
+      REVISED RISK VIEW:
+      {{skeptic_revised}}
+
+      REVISED EVIDENCE VIEW:
+      {{evidence_revised}}
+
+      REVISED OPERATOR VIEW:
+      {{operator_revised}}
+
+      Produce:
+      1. Candidate options, normalized so duplicates are merged
+      2. Scoring table using 1-5 scale:
+         Option | Upside | Feasibility | Risk control | Evidence strength | Reversibility | Speed | Strategic fit | Weighted total
+      3. Notes explaining any low-confidence score
+      4. Which council members appear to support or oppose each option
+      5. Recommended leading option and runner-up, with rationale
+
+      If the domain requires current facts, state that scores are provisional until verified.
+    output: option_scores
+    depends_on: [opportunity-revision, pragmatist-revision, architect-revision, skeptic-revision, evidence-revision, operator-revision]
+
+  - id: final-synthesis
+    agent: Planner
+    model: claude-sonnet-4-6
+    prompt: |
+      {{WORKFLOW_OPERATING_PROTOCOL}}
+
+      You are the Chair of the LLM Council. Produce the final answer for the user.
+      This is a peer-deliberation council: independent views were challenged by peers,
+      then revised. Preserve both consensus and important dissent.
+
+      USER REQUEST:
+      {{task}}
+
+      COUNCIL BRIEF:
+      {{council_brief}}
+
+      INITIAL VIEWS:
+      Opportunity: {{opportunity_view}}
+      Pragmatist: {{pragmatist_view}}
+      Architect: {{architect_view}}
+      Risk Skeptic: {{skeptic_view}}
+      Evidence Analyst: {{evidence_view}}
+      Implementation Operator: {{operator_view}}
+
+      PEER QUESTIONS:
+      Opportunity Questions: {{opportunity_questions}}
+      Pragmatist Questions: {{pragmatist_questions}}
+      Architect Questions: {{architect_questions}}
+      Skeptic Questions: {{skeptic_questions}}
+      Evidence Questions: {{evidence_questions}}
+      Operator Questions: {{operator_questions}}
+
+      CHALLENGE PACKET:
+      {{challenge_packet}}
+
+      REVISED VIEWS:
+      Opportunity: {{opportunity_revised}}
+      Pragmatist: {{pragmatist_revised}}
+      Architect: {{architect_revised}}
+      Risk Skeptic: {{skeptic_revised}}
+      Evidence Analyst: {{evidence_revised}}
+      Implementation Operator: {{operator_revised}}
+
+      OPTION SCORES:
+      {{option_scores}}
+
+      Final output format:
+      # LLM Council Decision Memo
+
+      ## 1. Executive Summary
+      A concise answer to the user's question.
+
+      ## 2. Recommended Strategy
+      The best path forward, with rationale and confidence level.
+
+      ## 3. Options Considered
+      Compare the best alternatives in a table: Option | Upside | Risks | Effort | Evidence | When to choose.
+
+      ## 4. How the Council Improved Its Thinking
+      Summarize the most important peer challenges and how they changed the final recommendation.
+
+      ## 5. Council Consensus and Dissent
+      Show where council members agreed and disagreed. Preserve important dissent instead of forcing fake consensus.
+
+      ## 6. Risk Register
+      Table: Risk | Severity | Likelihood | Mitigation | Trigger to revisit.
+
+      ## 7. Evidence and Validation Plan
+      What needs to be checked, tested, researched, measured, or fetched next.
+      Clearly mark claims requiring current verification.
+
+      ## 8. Action Plan
+      Immediate steps, next 2 weeks, next 1-3 months. Include acceptance criteria.
+
+      ## 9. Guardrails / What Not To Do
+      Clear boundaries to prevent overreach, unsafe recommendations, or premature commitment.
+
+      ## 10. Open Questions
+      Questions for the user that would improve the plan.
+
+      Domain-specific requirements:
+      - Finance/investing: state that this is educational strategy support, not personalized
+        financial advice; do not present a final buy list unless current data and user risk profile
+        are supplied; provide a research/filtering framework, allocation guardrails, diversification
+        principles, due-diligence checklist, and monitoring cadence.
+      - Travel: avoid claiming current availability/prices/safety unless verified; include current-data
+        checklist, flexible alternatives, budget/time trade-offs, and booking guardrails.
+      - Science/research: distinguish established facts, hypotheses, and speculation; identify sources
+        and experiments/observations needed.
+      - Coding: include test strategy, review strategy, and rollback plan.
+      - Product: include customer validation, MVP scope, metrics, and go/no-go criteria.
+      - Security: keep defensive and remediation-focused.
+    output: council_decision_memo
+    depends_on: [option-scoring]
