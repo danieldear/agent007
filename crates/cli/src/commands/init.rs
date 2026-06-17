@@ -587,6 +587,12 @@ pub async fn execute(
         "workflows/brainstorm.yaml",
         force,
     )?;
+    write_workflow_file(
+        &wf_dir.join("llm-council.yaml"),
+        WORKFLOW_LLM_COUNCIL,
+        "workflows/llm-council.yaml",
+        force,
+    )?;
 
     // ── 5. Seed ALL built-in personas as editable TOML files ────────────────
     section("5. Seeding built-in personas");
@@ -1712,7 +1718,12 @@ fn seed_global_if_missing(global_home: &Path) -> Result<()> {
             WORKFLOW_BRAINSTORM,
             "~/.agent007/workflows/brainstorm.yaml",
         )?;
-        ok("8 built-in workflows seeded to ~/.agent007/workflows/");
+        write_workflow_if_missing(
+            &wf_dir.join("llm-council.yaml"),
+            WORKFLOW_LLM_COUNCIL,
+            "~/.agent007/workflows/llm-council.yaml",
+        )?;
+        ok("9 built-in workflows seeded to ~/.agent007/workflows/");
     }
 
     let personas_dir = global_home.join("personas");
@@ -1867,6 +1878,8 @@ steps:
 "#;
 
 // ── Built-in workflows ──────────────────────────────────────────────────────
+
+const WORKFLOW_LLM_COUNCIL: &str = include_str!("../../workflows/llm-council.yaml");
 
 const WORKFLOW_LOG_ANALYSIS: &str = r#"name: log-analysis
 description: >
@@ -4079,6 +4092,29 @@ name = "night"
             .find(|entry| entry["label"] == "agent007: run task")
             .unwrap();
         assert_eq!(run_task["command"], "custom-agent007");
+    }
+
+    #[test]
+    fn built_in_llm_council_workflow_validates() {
+        let rendered = render_builtin_workflow_template(WORKFLOW_LLM_COUNCIL);
+        let def: agent007_workflows::WorkflowDef = serde_yaml::from_str(&rendered).unwrap();
+        assert_eq!(def.name, "llm-council");
+        assert_eq!(def.steps.len(), 22);
+
+        let registry = agent007_personas::PersonaRegistry::built_in();
+        use agent007_core::PersonaProvider;
+        for step in &def.steps {
+            assert!(
+                registry.get(&step.agent).is_some(),
+                "missing built-in persona for step {} agent {}",
+                step.id,
+                step.agent
+            );
+        }
+
+        agent007_workflows::dag::DagValidator::new(&def)
+            .validate()
+            .unwrap();
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub const SKILL_META_CREATE_AGENT: &str = include_str!("../skills/meta-create-ag
 pub const SKILL_META_ANALYZE_CODEBASE: &str = include_str!("../skills/meta-analyze-codebase.md");
 pub const SKILL_BRAINSTORM: &str = include_str!("../skills/brainstorm.md");
 pub const SKILL_FRONTEND_DESIGNER: &str = include_str!("../skills/frontend-designer.md");
+pub const SKILL_COUNCIL: &str = include_str!("../skills/council.md");
 
 pub const ALL_SKILLS: &[(&str, &str)] = &[
     ("dev-architect.md", SKILL_DEV_ARCHITECT),
@@ -34,4 +35,18 @@ pub const ALL_SKILLS: &[(&str, &str)] = &[
     ("meta-analyze-codebase.md", SKILL_META_ANALYZE_CODEBASE),
     ("brainstorm.md", SKILL_BRAINSTORM),
     ("frontend-designer.md", SKILL_FRONTEND_DESIGNER),
+    ("council.md", SKILL_COUNCIL),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn built_in_catalog_includes_council_skill() {
+        assert!(ALL_SKILLS
+            .iter()
+            .any(|(filename, content)| *filename == "council.md"
+                && content.contains("trigger: /council")));
+    }
+}
