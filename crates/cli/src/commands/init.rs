@@ -1454,7 +1454,15 @@ fn register_zed_rules(project_dir: &Path, force: bool) -> Result<()> {
 
 fn ensure_canonical_instruction_files(project_dir: &Path, force: bool) -> Result<String> {
     let agents_path = project_dir.join("AGENTS.md");
+    let shared_path = project_dir.join("AGENT007.md");
     let generated_path = project_dir.join("AGENTS.agent007.generated.md");
+
+    write_file(
+        &shared_path,
+        AGENT007_SHARED_MD,
+        "AGENT007.md",
+        force || !shared_path.exists(),
+    )?;
 
     if agents_path.exists() {
         if force {
@@ -1485,11 +1493,11 @@ fn ensure_canonical_instruction_files(project_dir: &Path, force: bool) -> Result
             ));
             info("Generated agent007 companion guidance without overwriting AGENTS.md");
         }
-        return Ok("AGENTS.agent007.generated.md".to_string());
+        return Ok("AGENT007.md".to_string());
     }
 
     write_file(&agents_path, AGENT007_AGENTS_MD, "AGENTS.md", true)?;
-    Ok("AGENTS.md".to_string())
+    Ok("AGENT007.md".to_string())
 }
 
 fn register_claude_project_files(project_dir: &Path, claude_dir: &Path, force: bool) -> Result<()> {
@@ -3349,7 +3357,7 @@ steps:
 
 // ── Host instruction templates and Claude Code sub-agent definitions ──────
 
-const AGENT007_AGENTS_MD: &str = r#"# agent007 — AI Orchestration Rules
+const AGENT007_SHARED_MD: &str = r#"# agent007 — AI Orchestration Rules
 
 You have access to the **agent007** MCP server.
 
@@ -3573,6 +3581,24 @@ touching logs, validation reports, generated artifacts, algorithm code, or UI ex
 - **Repo structure question:** use Repo Intelligence / graph tools first, then read only pointed files
 - **JSON/report question:** use `etr.json_query` or `etr.artifact_read`, not custom Python
 - **CSV/metrics question:** use `etr.csv_slice`, `etr.table_stats`, or `etr.metrics_summary`
+"#;
+
+const AGENT007_AGENTS_MD: &str = r#"# agent007 — Codex entrypoint
+
+Codex reads `AGENTS.md` automatically. The detailed shared agent007 operating
+contract is `AGENT007.md`.
+
+Before any non-trivial task, read and follow `AGENT007.md`. This `AGENTS.md`
+file intentionally stays small so the shared contract can also be loaded by
+Claude Code, Cursor, Zed, and Copilot without duplicating content.
+
+Critical bootstrap rules:
+- Route non-trivial or high-context work through agent007 first.
+- Use `agent007_context_compile` before broad edits on unfamiliar code.
+- Use `agent007_etr_list` and `agent007_etr_call` before custom shell/Python readers.
+- Use shell for execution/build/test; use agent007/ETR for interpretation and extraction.
+- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
+- Do not add `--no-dashboard` to `agent007 serve`; the dashboard is served by default.
 "#;
 
 const CLAUDE_AGENT_ARCHITECT: &str = r#"---
@@ -3813,19 +3839,16 @@ Routing:
 "#;
 
 fn claude_md_wrapper(canonical_target: &str) -> String {
-    let shared_refs = if canonical_target == "AGENTS.md" {
-        "@AGENTS.md".to_string()
-    } else {
-        format!("@AGENTS.md\n@{canonical_target}")
-    };
     format!(
         r#"# Claude Code project guidance
 
-{shared_refs}
+@AGENTS.md
+@{canonical_target}
 
 ## Claude Code
 
-- Use `CLAUDE.md` as the Claude-native entry file and treat `{canonical_target}` as the detailed shared operating contract.
+- Claude Code reads `CLAUDE.md`, not `AGENTS.md`; this file imports both the Codex entrypoint and the shared agent007 contract.
+- Treat `{canonical_target}` as the detailed shared operating contract.
 - For non-trivial work, route through agent007 before broad free-form reasoning.
 - In hosted-MCP mode, Claude is still the planner, so it must deliberately choose agent007 workflows, skills, personas, and ETR tools.
 - Use shell for execution; use agent007 / ETR for interpretation and structured extraction.
@@ -3835,18 +3858,14 @@ fn claude_md_wrapper(canonical_target: &str) -> String {
 }
 
 fn cursor_rule_mdc(canonical_target: &str) -> String {
-    let shared_refs = if canonical_target == "AGENTS.md" {
-        "@AGENTS.md".to_string()
-    } else {
-        format!("@AGENTS.md\n@{canonical_target}")
-    };
     format!(
         r#"---
 description: agent007 routing and repo-intelligence rules
 alwaysApply: true
 ---
 
-{shared_refs}
+@AGENTS.md
+@{canonical_target}
 
 - Prefer agent007 for non-trivial work.
 - Prefer `agent007_etr_list` / `agent007_etr_call` for deterministic extraction and repo graph queries.
@@ -3859,7 +3878,7 @@ fn copilot_instructions_md(canonical_target: &str) -> String {
     format!(
         r#"# agent007 guidance for GitHub Copilot
 
-Also honor `{canonical_target}` as the primary shared operating contract for this repository.
+Also honor `AGENTS.md` as the Codex entrypoint and `{canonical_target}` as the primary shared agent007 operating contract for this repository.
 
 - Route non-trivial tasks through agent007 first.
 - Prefer skills and workflows before broad free-form planning.
@@ -3874,7 +3893,7 @@ fn zed_rules_md(canonical_target: &str) -> String {
     format!(
         r#"# agent007 rules for Zed
 
-Use `{canonical_target}` as the detailed shared operating contract for this repository.
+Use `{canonical_target}` as the detailed shared agent007 operating contract for this repository. `AGENTS.md` remains the Codex entrypoint.
 
 - Prefer agent007 for non-trivial work.
 - Prefer Repo Intelligence and `agent007_etr_call` before broad file reads or ad-hoc parsing.
@@ -3888,7 +3907,7 @@ fn codex_project_note_md(canonical_target: &str) -> String {
     format!(
         r#"# Codex + agent007 project note
 
-Codex should load `{canonical_target}` as the detailed shared operating contract for this repository.
+Codex reads `AGENTS.md` automatically. `AGENTS.md` points to `{canonical_target}`, the detailed shared agent007 operating contract for this repository.
 
 Use agent007 first for:
 - multi-step features
@@ -4206,18 +4225,23 @@ name = "night"
 
         let rules_path = project_dir.join(".rules");
         let rules = std::fs::read_to_string(&rules_path).unwrap();
-        assert!(rules.contains("AGENTS.agent007.generated.md"));
+        assert!(rules.contains("AGENT007.md"));
 
         let generated_path = project_dir.join("AGENTS.agent007.generated.md");
         let generated = std::fs::read_to_string(&generated_path).unwrap();
-        assert!(generated.contains("## Routing ladder"));
-        assert!(generated.contains("Hosted-MCP reality"));
-        assert!(generated.contains("agent007_context_compile"));
-        assert!(generated.contains("The durable file/log inspection rule"));
-        assert!(generated.contains("agent007_etr_call"));
-        assert!(generated.contains("If shell or Python is used for reading/analyzing files"));
-        assert!(generated.contains("etr.artifact_read"));
-        assert!(generated.contains("etr.workflow_status_summary"));
+        assert!(generated.contains("Codex reads `AGENTS.md` automatically"));
+        assert!(generated.contains("AGENT007.md"));
+
+        let shared_path = project_dir.join("AGENT007.md");
+        let shared = std::fs::read_to_string(&shared_path).unwrap();
+        assert!(shared.contains("## Routing ladder"));
+        assert!(shared.contains("Hosted-MCP reality"));
+        assert!(shared.contains("agent007_context_compile"));
+        assert!(shared.contains("The durable file/log inspection rule"));
+        assert!(shared.contains("agent007_etr_call"));
+        assert!(shared.contains("If shell or Python is used for reading/analyzing files"));
+        assert!(shared.contains("etr.artifact_read"));
+        assert!(shared.contains("etr.workflow_status_summary"));
     }
 
     #[test]
@@ -4231,6 +4255,7 @@ name = "night"
 
         let claude_md = std::fs::read_to_string(project_dir.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("@AGENTS.md"));
+        assert!(claude_md.contains("@AGENT007.md"));
         assert!(claude_md.contains("agent007_etr_call"));
         assert!(claude_md.contains("why ETR was not sufficient"));
 
@@ -4264,12 +4289,13 @@ name = "night"
             std::fs::read_to_string(project_dir.join(".cursor/rules/agent007.mdc")).unwrap();
         assert!(cursor_rule.contains("alwaysApply: true"));
         assert!(cursor_rule.contains("@AGENTS.md"));
+        assert!(cursor_rule.contains("@AGENT007.md"));
         assert!(cursor_rule.contains("agent007_etr_call"));
 
         let copilot =
             std::fs::read_to_string(project_dir.join(".github/copilot-instructions.md")).unwrap();
         assert!(copilot.contains("GitHub Copilot"));
-        assert!(copilot.contains("AGENTS.agent007.generated.md"));
+        assert!(copilot.contains("AGENT007.md"));
         assert!(copilot.contains("agent007_etr_call"));
         assert!(copilot.contains("why ETR was not sufficient"));
 
@@ -4290,6 +4316,8 @@ name = "night"
         register_codex_project_files(project_dir, false).unwrap();
 
         let codex_note = std::fs::read_to_string(project_dir.join("AGENT007-CODEX.md")).unwrap();
+        assert!(codex_note.contains("AGENTS.md"));
+        assert!(codex_note.contains("AGENT007.md"));
         assert!(codex_note.contains("agent007_etr_call"));
         assert!(codex_note.contains("If shell/Python is used as a reader/parser"));
         assert!(codex_note.contains("why ETR was not sufficient"));
