@@ -90,6 +90,15 @@ pub enum Commands {
     Persona(PersonaArgs),
     /// Manage the global project registry used by the agent007 Hub
     Projects(ProjectsArgs),
+    /// Start the browser-based multi-project agent007 Hub
+    Hub {
+        /// Port to listen on (default: 8006)
+        #[arg(long, default_value_t = 8006)]
+        port: u16,
+        /// Do not open the Hub in the system browser
+        #[arg(long, default_value_t = false)]
+        no_open: bool,
+    },
     /// Manage git operations (branch, commit, PR, impact)
     Git(GitArgs),
     /// Manage named checkpoints (stash-based)
@@ -328,8 +337,15 @@ async fn main() -> anyhow::Result<()> {
             .with_writer(std::io::stderr)
             .init();
     }
+    // Global control-plane commands must remain usable even when the current
+    // directory contains a missing or malformed project-local config.
+    let command = match cli.command {
+        Commands::Projects(projects) => return commands::projects::execute(projects.action).await,
+        Commands::Hub { port, no_open } => return commands::hub::execute(port, !no_open).await,
+        command => command,
+    };
     let config = std::sync::Arc::new(crate::config::Config::load()?);
-    match cli.command {
+    match command {
         Commands::Init {
             force,
             global,
@@ -396,7 +412,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,
         Commands::Test(args) => commands::test_pipeline::execute(config, args).await,
         Commands::Persona(p) => commands::persona::execute(config, p.action).await,
-        Commands::Projects(p) => commands::projects::execute(config, p.action).await,
+        Commands::Projects(_) | Commands::Hub { .. } => unreachable!("handled before config load"),
         Commands::Git(g) => commands::git::execute(config, g.action).await,
         Commands::Checkpoint(c) => commands::checkpoint::execute(config, c.action).await,
         Commands::Rollback { to } => {
@@ -865,6 +881,28 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Workflow(ref w) if matches!(&w.action, WorkflowAction::Show { name } if name == "my-flow")
+        ));
+    }
+
+    #[test]
+    fn parse_projects_status_subcommand() {
+        let cli = Cli::try_parse_from(["agent007", "projects", "status", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Projects(ref p)
+                if matches!(p.action, commands::projects::ProjectsAction::Status { json: true })
+        ));
+    }
+
+    #[test]
+    fn parse_hub_subcommand() {
+        let cli = Cli::try_parse_from(["agent007", "hub", "--port", "9000", "--no-open"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Hub {
+                port: 9000,
+                no_open: true
+            }
         ));
     }
 }
