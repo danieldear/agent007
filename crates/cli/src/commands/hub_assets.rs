@@ -714,6 +714,13 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), AssetError> {
             .map_err(|error| io_error("write temporary asset file", error))?;
         file.sync_all()
             .map_err(|error| io_error("sync temporary asset file", error))?;
+
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path)
+                .map_err(|error| io_error("remove existing global asset", error))?;
+        }
+
         fs::rename(&temporary, path).map_err(|error| io_error("replace global asset", error))
     })();
     if result.is_err() {

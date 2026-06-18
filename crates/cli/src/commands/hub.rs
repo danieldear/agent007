@@ -231,6 +231,12 @@ async fn api_delete_credential(
     if credentials::provider(&provider).is_none() {
         return Err(AssetError::BadRequest("unsupported credential provider".to_string()).into());
     }
+    if !credentials::keychain_supported() {
+        return Err(AssetError::BadRequest(
+            "secure credential storage is currently available on macOS only".to_string(),
+        )
+        .into());
+    }
     credentials::delete(&provider).map_err(|error| AssetError::Io(error.to_string()))?;
     Ok(Json(json!({
         "status": "removed",
@@ -644,8 +650,8 @@ fn provider_readiness(global_home: &Path) -> Vec<ProviderReadiness> {
     let openai_keychain = credentials::keychain_contains("openai");
     let anthropic_keychain = credentials::keychain_contains("anthropic");
     let ollama_env = std::env::var("OLLAMA_HOST").ok();
-    let openai_config = config_has_table(&config, &["models", "openai"]);
-    let anthropic_config = config_has_table(&config, &["models", "anthropic"]);
+    let openai_config = config_has_table(&config, &["models", "codex"]);
+    let anthropic_config = config_has_table(&config, &["models", "claude"]);
     let ollama_config = config_has_table(&config, &["models", "ollama"]);
     let ollama_endpoint = ollama_env
         .as_deref()
@@ -751,13 +757,25 @@ fn redact_url(value: &str) -> String {
     url.to_string().trim_end_matches('/').to_string()
 }
 
+#[cfg(target_os = "macos")]
 fn open_url(url: &str) {
-    let _ = std::process::Command::new("open")
-        .arg(url)
-        .spawn()
-        .or_else(|_| std::process::Command::new("xdg-open").arg(url).spawn())
-        .or_else(|_| std::process::Command::new("start").arg(url).spawn());
+    let _ = std::process::Command::new("open").arg(url).spawn();
 }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+#[cfg(windows)]
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_url(_url: &str) {}
 
 const HUB_HTML: &str = include_str!("hub.html");
 
@@ -875,6 +893,23 @@ mod tests {
         let json = serde_json::to_string(&providers).unwrap();
         assert!(!json.contains("sk-"));
         assert!(!json.contains("API_KEY"));
+    }
+
+    #[test]
+    fn provider_readiness_recognizes_runtime_config_tables() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "[models.claude]\ndefault_model = \"claude-sonnet\"\n\n[models.codex]\ndefault_model = \"gpt-codex\"\n",
+        )
+        .unwrap();
+
+        let providers = provider_readiness(temp.path());
+        for id in ["anthropic", "openai"] {
+            let provider = providers.iter().find(|provider| provider.id == id).unwrap();
+            assert!(provider.configured, "{id} should be configured");
+            assert!(provider.source.contains("config"));
+        }
     }
 
     #[test]

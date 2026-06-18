@@ -884,17 +884,22 @@ pub async fn execute(
     let anthropic_key = super::credentials::get("anthropic").unwrap_or_default();
     let openai_key = super::credentials::get("openai").unwrap_or_default();
     if anthropic_key.is_empty() {
-        info("ANTHROPIC_API_KEY not set");
+        info("Anthropic credential not configured");
     } else {
         ok(&format!(
-            "ANTHROPIC_API_KEY set ({} chars)",
-            anthropic_key.len()
+            "Anthropic credential available via {} ({} chars)",
+            super::credentials::source("anthropic").unwrap_or("configured source"),
+            anthropic_key.len(),
         ));
     }
     if openai_key.is_empty() {
-        info("OPENAI_API_KEY not set");
+        info("OpenAI credential not configured");
     } else {
-        ok(&format!("OPENAI_API_KEY set ({} chars)", openai_key.len()));
+        ok(&format!(
+            "OpenAI credential available via {} ({} chars)",
+            super::credentials::source("openai").unwrap_or("configured source"),
+            openai_key.len(),
+        ));
     }
     if standalone_mode_available(&config) {
         let provider = selected_runtime_provider(&config).unwrap_or_else(|| "unknown".to_string());
