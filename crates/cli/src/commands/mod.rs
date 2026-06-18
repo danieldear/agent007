@@ -7,6 +7,7 @@ pub mod git;
 pub mod init;
 pub mod operator_tui;
 pub mod persona;
+pub mod projects;
 pub mod replay;
 pub mod run;
 pub mod runtime_status;

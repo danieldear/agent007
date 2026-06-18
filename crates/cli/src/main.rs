@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use commands::checkpoint::CheckpointArgs;
 use commands::git::GitArgs;
 use commands::operator_tui::TuiArgs;
+use commands::projects::ProjectsArgs;
 use commands::runtime_status::StatusArgs;
 
 pub use commands::workflow::WorkflowAction;
@@ -87,6 +88,8 @@ pub enum Commands {
     Test(commands::test_pipeline::TestArgs),
     /// Manage personas
     Persona(PersonaArgs),
+    /// Manage the global project registry used by the agent007 Hub
+    Projects(ProjectsArgs),
     /// Manage git operations (branch, commit, PR, impact)
     Git(GitArgs),
     /// Manage named checkpoints (stash-based)
@@ -393,6 +396,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,
         Commands::Test(args) => commands::test_pipeline::execute(config, args).await,
         Commands::Persona(p) => commands::persona::execute(config, p.action).await,
+        Commands::Projects(p) => commands::projects::execute(config, p.action).await,
         Commands::Git(g) => commands::git::execute(config, g.action).await,
         Commands::Checkpoint(c) => commands::checkpoint::execute(config, c.action).await,
         Commands::Rollback { to } => {
@@ -620,6 +624,56 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Persona(ref p) if matches!(p.action, PersonaAction::Show { ref name } if name == "Researcher")
+        ));
+    }
+
+    #[test]
+    fn parse_projects_add_subcommand() {
+        let cli = Cli::try_parse_from([
+            "agent007",
+            "projects",
+            "add",
+            "/tmp/demo",
+            "--name",
+            "Demo",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Projects(ref p)
+                if matches!(
+                    p.action,
+                    commands::projects::ProjectsAction::Add { ref path, ref name, json }
+                        if path == std::path::Path::new("/tmp/demo")
+                            && name.as_deref() == Some("Demo")
+                            && json
+                )
+        ));
+    }
+
+    #[test]
+    fn parse_projects_list_subcommand() {
+        let cli = Cli::try_parse_from(["agent007", "projects", "list", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Projects(ref p)
+                if matches!(p.action, commands::projects::ProjectsAction::List { json: true })
+        ));
+    }
+
+    #[test]
+    fn parse_projects_remove_subcommand() {
+        let cli =
+            Cli::try_parse_from(["agent007", "projects", "remove", "proj-123", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Projects(ref p)
+                if matches!(
+                    p.action,
+                    commands::projects::ProjectsAction::Remove { ref id_or_path, json }
+                        if id_or_path == "proj-123" && json
+                )
         ));
     }
 
