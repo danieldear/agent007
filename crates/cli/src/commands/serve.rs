@@ -5611,16 +5611,10 @@ fn health_check(config: &Config) -> String {
 
     let available_providers = {
         let mut providers = Vec::new();
-        if std::env::var("ANTHROPIC_API_KEY")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-        {
+        if super::run::has_anthropic_api_key() {
             providers.push("claude");
         }
-        if std::env::var("OPENAI_API_KEY")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-        {
+        if super::run::has_openai_api_key() {
             providers.push("codex");
         }
         if selected_runtime_provider(config).as_deref() == Some("ollama") {

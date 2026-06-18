@@ -881,8 +881,8 @@ pub async fn execute(
     // ── 9. Environment check ───────────────────────────────────────────────
     section(&format!("{step}. Environment check"));
 
-    let anthropic_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    let anthropic_key = super::credentials::get("anthropic").unwrap_or_default();
+    let openai_key = super::credentials::get("openai").unwrap_or_default();
     if anthropic_key.is_empty() {
         info("ANTHROPIC_API_KEY not set");
     } else {

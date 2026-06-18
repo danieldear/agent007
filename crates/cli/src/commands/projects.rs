@@ -1,4 +1,3 @@
-use crate::config::Config;
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
@@ -6,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
@@ -31,6 +29,12 @@ pub enum ProjectsAction {
     /// List projects from the global agent007 project registry
     List {
         /// Print the registry as JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Show project initialization and filesystem health without starting processes
+    Status {
+        /// Print project health as JSON
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -62,6 +66,21 @@ pub struct ProjectRegistry {
     pub projects: Vec<ProjectEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectHealth {
+    pub status: String,
+    pub exists: bool,
+    pub has_agent_home: bool,
+    pub config_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectStatus {
+    #[serde(flatten)]
+    pub project: ProjectEntry,
+    pub health: ProjectHealth,
+}
+
 impl Default for ProjectRegistry {
     fn default() -> Self {
         Self {
@@ -75,7 +94,7 @@ fn default_registry_version() -> u32 {
     1
 }
 
-pub async fn execute(_config: Arc<Config>, action: ProjectsAction) -> Result<()> {
+pub async fn execute(action: ProjectsAction) -> Result<()> {
     let registry_path = default_registry_path();
     match action {
         ProjectsAction::Add { path, name, json } => {
@@ -97,6 +116,14 @@ pub async fn execute(_config: Arc<Config>, action: ProjectsAction) -> Result<()>
                 print_project_table(&registry.projects);
             }
         }
+        ProjectsAction::Status { json } => {
+            let statuses = project_statuses(&load_registry(&registry_path)?);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&statuses)?);
+            } else {
+                print_status_table(&statuses);
+            }
+        }
         ProjectsAction::Remove { id_or_path, json } => {
             let removed = remove_project(&registry_path, &id_or_path)?;
             if json {
@@ -111,7 +138,7 @@ pub async fn execute(_config: Arc<Config>, action: ProjectsAction) -> Result<()>
     Ok(())
 }
 
-fn default_registry_path() -> PathBuf {
+pub(crate) fn default_registry_path() -> PathBuf {
     agent007_core::paths::agent007_global_home().join("projects.json")
 }
 
@@ -179,7 +206,7 @@ fn remove_project(registry_path: &Path, id_or_path: &str) -> Result<ProjectEntry
     Ok(removed)
 }
 
-fn load_registry(registry_path: &Path) -> Result<ProjectRegistry> {
+pub(crate) fn load_registry(registry_path: &Path) -> Result<ProjectRegistry> {
     if !registry_path.exists() {
         return Ok(ProjectRegistry::default());
     }
@@ -280,10 +307,37 @@ fn normalize_remove_path(value: &str) -> Option<String> {
         std::env::current_dir().ok()?.join(path)
     };
     Some(
-        normalize_path_lexically(&absolute)
+        canonicalize_existing_prefix(&absolute)
             .to_string_lossy()
             .to_string(),
     )
+}
+
+/// Canonicalize the longest existing ancestor, then append the missing suffix.
+/// This preserves symlink normalization (notably macOS `/tmp` -> `/private/tmp`)
+/// even after the registered project directory has been deleted.
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let normalized = normalize_path_lexically(path);
+    let mut prefix = normalized.as_path();
+    let mut suffix = Vec::new();
+
+    loop {
+        if let Ok(canonical) = prefix.canonicalize() {
+            let mut resolved = canonical;
+            for part in suffix.iter().rev() {
+                resolved.push(part);
+            }
+            return normalize_path_lexically(&resolved);
+        }
+        let Some(name) = prefix.file_name() else {
+            return normalized;
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = prefix.parent() else {
+            return normalized;
+        };
+        prefix = parent;
+    }
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {
@@ -352,6 +406,53 @@ fn print_project_table(projects: &[ProjectEntry]) {
         println!(
             "{:<23} {:<24} {:<20} {}",
             project.id, project.name, project.last_seen_at, project.path
+        );
+    }
+}
+
+pub(crate) fn project_statuses(registry: &ProjectRegistry) -> Vec<ProjectStatus> {
+    registry
+        .projects
+        .iter()
+        .cloned()
+        .map(|project| {
+            let path = Path::new(&project.path);
+            let agent_home = Path::new(&project.agent_home);
+            let exists = path.is_dir();
+            let has_agent_home = agent_home.is_dir();
+            let config_present = agent_home.join("config.toml").is_file();
+            let status = if !exists {
+                "missing"
+            } else if !has_agent_home || !config_present {
+                "needs_init"
+            } else {
+                "ready"
+            };
+            ProjectStatus {
+                project,
+                health: ProjectHealth {
+                    status: status.to_string(),
+                    exists,
+                    has_agent_home,
+                    config_present,
+                },
+            }
+        })
+        .collect()
+}
+
+fn print_status_table(statuses: &[ProjectStatus]) {
+    if statuses.is_empty() {
+        println!("No registered projects. Add one with `agent007 projects add <path>`.");
+        return;
+    }
+
+    println!("{:<23} {:<22} {:<12} PATH", "ID", "NAME", "STATUS");
+    println!("{}", "-".repeat(92));
+    for entry in statuses {
+        println!(
+            "{:<23} {:<22} {:<12} {}",
+            entry.project.id, entry.project.name, entry.health.status, entry.project.path
         );
     }
 }
@@ -454,6 +555,67 @@ mod tests {
 
         assert_eq!(removed, entry);
         assert!(load_registry(&registry).unwrap().projects.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_missing_project_resolves_symlinked_existing_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_parent = temp.path().join("real");
+        let alias_parent = temp.path().join("alias");
+        fs::create_dir_all(&real_parent).unwrap();
+        symlink(&real_parent, &alias_parent).unwrap();
+        let project_via_alias = alias_parent.join("demo-project");
+        fs::create_dir_all(&project_via_alias).unwrap();
+        let registry = registry_path(&temp);
+
+        let entry =
+            add_project_at(&registry, &project_via_alias, None, "2026-06-17T10:00:00Z").unwrap();
+        fs::remove_dir_all(real_parent.join("demo-project")).unwrap();
+
+        let equivalent_missing_path = project_via_alias.join("nested").join("..");
+        let removed = remove_project(&registry, equivalent_missing_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(removed, entry);
+        assert!(load_registry(&registry).unwrap().projects.is_empty());
+    }
+
+    #[test]
+    fn project_status_reports_ready_needs_init_and_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let ready = temp.path().join("ready");
+        let needs_init = temp.path().join("needs-init");
+        let missing = temp.path().join("missing");
+        fs::create_dir_all(ready.join(".agent007")).unwrap();
+        fs::write(ready.join(".agent007/config.toml"), "").unwrap();
+        fs::create_dir_all(&needs_init).unwrap();
+
+        let registry = ProjectRegistry {
+            version: 1,
+            projects: vec![
+                test_entry("ready", &ready),
+                test_entry("needs-init", &needs_init),
+                test_entry("missing", &missing),
+            ],
+        };
+
+        let statuses = project_statuses(&registry);
+        assert_eq!(statuses[0].health.status, "ready");
+        assert_eq!(statuses[1].health.status, "needs_init");
+        assert_eq!(statuses[2].health.status, "missing");
+    }
+
+    fn test_entry(name: &str, path: &Path) -> ProjectEntry {
+        ProjectEntry {
+            id: format!("proj-{name}"),
+            name: name.to_string(),
+            path: path.to_string_lossy().to_string(),
+            agent_home: path.join(".agent007").to_string_lossy().to_string(),
+            added_at: "2026-06-17T10:00:00Z".to_string(),
+            last_seen_at: "2026-06-17T10:00:00Z".to_string(),
+        }
     }
 
     #[test]

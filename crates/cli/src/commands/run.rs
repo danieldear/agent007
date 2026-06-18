@@ -128,15 +128,11 @@ pub fn is_dry_run() -> bool {
 }
 
 pub fn has_anthropic_api_key() -> bool {
-    std::env::var("ANTHROPIC_API_KEY")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false)
+    super::credentials::get("anthropic").is_some()
 }
 
 pub fn has_openai_api_key() -> bool {
-    std::env::var("OPENAI_API_KEY")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false)
+    super::credentials::get("openai").is_some()
 }
 
 fn ollama_health_timeout() -> Duration {
@@ -301,6 +297,7 @@ pub fn provider_readiness_response(
     });
 
     let claude_configured = has_anthropic_api_key();
+    let claude_source = super::credentials::source("anthropic").unwrap_or("not configured");
     providers.push(agent007_web::api::ProviderReadinessCard {
         id: "claude".to_string(),
         label: "Claude".to_string(),
@@ -314,9 +311,9 @@ pub fn provider_readiness_response(
         available: claude_configured,
         selected: selected_provider.as_deref() == Some("claude"),
         model: Some(config.models.default_model_for_provider("claude")),
-        source: "ANTHROPIC_API_KEY".to_string(),
+        source: claude_source.to_string(),
         hint: if claude_configured {
-            "ANTHROPIC_API_KEY is present; secret value is not exposed. Standalone Claude calls can use agent007-managed prompt caching for long system prompts."
+            "A Claude credential is available; its value is not exposed. Standalone calls can use agent007-managed prompt caching for long system prompts."
         } else {
             "Set ANTHROPIC_API_KEY to enable Claude standalone execution."
         }
@@ -329,6 +326,7 @@ pub fn provider_readiness_response(
     });
 
     let codex_configured = has_openai_api_key();
+    let codex_source = super::credentials::source("openai").unwrap_or("not configured");
     providers.push(agent007_web::api::ProviderReadinessCard {
         id: "codex".to_string(),
         label: "OpenAI / Codex".to_string(),
@@ -342,9 +340,9 @@ pub fn provider_readiness_response(
         available: codex_configured,
         selected: selected_provider.as_deref() == Some("codex"),
         model: Some(config.models.default_model_for_provider("codex")),
-        source: "OPENAI_API_KEY".to_string(),
+        source: codex_source.to_string(),
         hint: if codex_configured {
-            "OPENAI_API_KEY is present; secret value is not exposed. Cached-input pricing applies only on direct standalone API calls, not hosted-MCP delegation."
+            "An OpenAI credential is available; its value is not exposed. Cached-input pricing applies only on direct standalone API calls, not hosted-MCP delegation."
         } else {
             "Set OPENAI_API_KEY to enable OpenAI/Codex standalone execution."
         }
@@ -439,24 +437,20 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
 
     let mut router = ModelRouter::new("mock");
     let mut available = Vec::new();
+    let anthropic_key = super::credentials::get("anthropic");
+    let openai_key = super::credentials::get("openai");
 
-    if has_anthropic_api_key() {
+    if let Some(api_key) = anthropic_key.as_deref() {
         let model = config.models.default_model_for_provider("claude");
-        let claude = Arc::new(ClaudeProvider::new(
-            &std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-            &model,
-        ));
+        let claude = Arc::new(ClaudeProvider::new(api_key, &model));
         router.register("claude", claude as Arc<dyn ModelProvider>);
         router.alias(&model, "claude");
         available.push("claude".to_string());
     }
 
-    if has_openai_api_key() {
+    if let Some(api_key) = openai_key.as_deref() {
         let model = config.models.default_model_for_provider("codex");
-        let codex = Arc::new(CodexProvider::new(
-            &std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            &model,
-        ));
+        let codex = Arc::new(CodexProvider::new(api_key, &model));
         router.register("codex", codex as Arc<dyn ModelProvider>);
         router.alias(&model, "codex");
         available.push("codex".to_string());
@@ -501,22 +495,16 @@ pub fn build_model_router(config: &Config, is_dry_run: bool) -> ModelRouter {
     };
     router = ModelRouter::new(&default_provider);
 
-    if has_anthropic_api_key() {
+    if let Some(api_key) = anthropic_key.as_deref() {
         let model = config.models.default_model_for_provider("claude");
-        let claude = Arc::new(ClaudeProvider::new(
-            &std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-            &model,
-        ));
+        let claude = Arc::new(ClaudeProvider::new(api_key, &model));
         router.register("claude", claude as Arc<dyn ModelProvider>);
         router.alias(&model, "claude");
     }
 
-    if has_openai_api_key() {
+    if let Some(api_key) = openai_key.as_deref() {
         let model = config.models.default_model_for_provider("codex");
-        let codex = Arc::new(CodexProvider::new(
-            &std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            &model,
-        ));
+        let codex = Arc::new(CodexProvider::new(api_key, &model));
         router.register("codex", codex as Arc<dyn ModelProvider>);
         router.alias(&model, "codex");
     }
