@@ -35,6 +35,54 @@ const RESUME_SOURCE_ARTIFACT: &str = "resume-source.json";
 const EXTERNAL_WORKFLOW_CONTROL_ERROR: &str =
     "This workflow is controlled by the client that started it. Review, approve, and continue it there; the web dashboard is read-only for external workflow runs.";
 
+fn catalog_source_label(dir: &FsPath, kind: &str) -> String {
+    let global_home = agent007_global_home();
+    if dir == global_home.join(kind) {
+        return "global".to_string();
+    }
+    if dir.starts_with(global_home.join("packs")) {
+        return "global-pack".to_string();
+    }
+    if dir
+        .components()
+        .any(|component| component.as_os_str() == "packs")
+    {
+        return "project-pack".to_string();
+    }
+    "project".to_string()
+}
+
+fn is_pack_source(source: &str) -> bool {
+    matches!(source, "project-pack" | "global-pack")
+}
+
+fn catalog_scope_kind(source: &str, asset_kind: &str, shadowed_len: usize) -> String {
+    let suffix = if shadowed_len == 0 {
+        asset_kind.to_string()
+    } else {
+        "override".to_string()
+    };
+    format!("{source}-{suffix}")
+}
+
+/// Return only user-managed asset directories, excluding immutable pack roots.
+/// Search order matches the effective catalog: project first, then global.
+fn editable_asset_dirs(kind: &str) -> Vec<PathBuf> {
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        return vec![PathBuf::from(home).join(kind)];
+    }
+
+    let mut dirs = Vec::new();
+    if let Some(project) = agent007_project_home() {
+        dirs.push(project.join(kind));
+    }
+    let global = agent007_global_home().join(kind);
+    if !dirs.iter().any(|dir| dir == &global) {
+        dirs.push(global);
+    }
+    dirs
+}
+
 fn dashboard_controls_workflow(kind: &str) -> bool {
     kind.starts_with("workflow-web-")
 }
@@ -748,25 +796,18 @@ pub async fn run_handler(
     }
 }
 
-/// `GET /api/skills` — list skills from project-local and global `.agent007/skills/`.
-/// Each skill includes a `source` field: `"project"` or `"global"`.
+/// `GET /api/skills` — list the effective skill catalog, including enabled packs.
 pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let global_dir = agent007_global_home().join("skills");
-
     let mut skills: Vec<Value> = Vec::new();
     let mut index_by_trigger: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
     for dir in skills_search_dirs() {
-        let source = if dir == global_dir {
-            "global"
-        } else {
-            "project"
-        };
+        let source = catalog_source_label(&dir, "skills");
         for skill in load_skills_from_dir(&dir) {
             let trigger = skill.trigger().to_string();
             let variant = serde_json::json!({
-                "source": source,
+                "source": &source,
                 "name": skill.name(),
                 "version": skill.version(),
                 "path": skill.entry_path().display().to_string(),
@@ -778,8 +819,11 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                         .and_then(|value| value.as_array())
                         .cloned()
                         .unwrap_or_default();
-                    if !shadowed.iter().any(|entry| entry.as_str() == Some(source)) {
-                        shadowed.push(Value::String(source.to_string()));
+                    if !shadowed
+                        .iter()
+                        .any(|entry| entry.as_str() == Some(source.as_str()))
+                    {
+                        shadowed.push(Value::String(source.clone()));
                     }
                     obj.insert(
                         "shadowed_sources".to_string(),
@@ -795,7 +839,7 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                         .cloned()
                         .unwrap_or_default();
                     let already_present = variants.iter().any(|entry| {
-                        entry.get("source").and_then(|v| v.as_str()) == Some(source)
+                        entry.get("source").and_then(|v| v.as_str()) == Some(source.as_str())
                             && entry.get("path").and_then(|v| v.as_str())
                                 == Some(skill.entry_path().to_string_lossy().as_ref())
                     });
@@ -810,7 +854,7 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                     );
                 }
             } else {
-                let mut payload = skill_json(&skill, source);
+                let mut payload = skill_json(&skill, &source);
                 if let Some(obj) = payload.as_object_mut() {
                     obj.insert(
                         "precedence_source".to_string(),
@@ -838,17 +882,12 @@ pub async fn skills_handler(State(_state): State<AppState>) -> impl IntoResponse
                 .and_then(|value| value.as_array())
                 .map(|items| items.len())
                 .unwrap_or(0);
-            let scope_kind = match (precedence, shadowed_len) {
-                ("global", 0) => "global-skill",
-                ("project", 0) => "project-skill",
-                ("project", _) => "project-override",
-                ("global", _) => "global-override",
-                _ => "project-skill",
-            };
-            obj.insert(
-                "scope_kind".to_string(),
-                Value::String(scope_kind.to_string()),
-            );
+            let scope_kind = catalog_scope_kind(precedence, "skill", shadowed_len);
+            let read_only = is_pack_source(precedence);
+            obj.insert("scope_kind".to_string(), Value::String(scope_kind));
+            obj.insert("read_only".to_string(), Value::Bool(read_only));
+            obj.insert("can_override".to_string(), Value::Bool(read_only));
+            obj.insert("can_delete".to_string(), Value::Bool(!read_only));
         }
     }
 
@@ -862,7 +901,7 @@ pub async fn skill_delete_handler(Path(trigger): Path<String>) -> impl IntoRespo
     // Scan frontmatter to find the file with matching trigger.
     // This handles the case where the filename doesn't match the trigger slug
     // (e.g. senior-ml-engineer.md with trigger: /skill).
-    for dir in skills_search_dirs() {
+    for dir in editable_asset_dirs("skills") {
         for skill in load_skills_from_dir(&dir) {
             if skill.trigger() == target_trigger {
                 return match remove_skill_entry(&skill) {
@@ -874,6 +913,27 @@ pub async fn skill_delete_handler(Path(trigger): Path<String>) -> impl IntoRespo
                         .into_response(),
                 };
             }
+        }
+    }
+
+    // An enabled pack may provide the effective skill. Pack files are verified,
+    // immutable catalog content; users can disable/uninstall the pack or save a
+    // project/global override, but the dashboard must never delete pack bytes.
+    for dir in skills_search_dirs() {
+        if !is_pack_source(&catalog_source_label(&dir, "skills")) {
+            continue;
+        }
+        if load_skills_from_dir(&dir)
+            .into_iter()
+            .any(|skill| skill.trigger() == target_trigger)
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "pack-provided skills are read-only; save an override or manage the pack from Domain packs"
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -1090,27 +1150,16 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
         agent007_write_home(),
     );
 
-    // Collect all home dirs (project-local first, then global) — deduplicated
-    let mut homes = Vec::new();
-    if let Some(proj) = agent007_project_home() {
-        homes.push(proj);
-    }
-    let global = agent007_global_home();
-    if !homes.contains(&global) {
-        homes.push(global);
-    }
-
     let mut skill_triggers = std::collections::HashSet::new();
-    for home in &homes {
-        for skill in load_skills_from_dir(&home.join("skills")) {
+    for dir in skills_search_dirs() {
+        for skill in load_skills_from_dir(&dir) {
             skill_triggers.insert(skill.trigger().to_string());
         }
     }
     let skills_count = skill_triggers.len() as u32;
 
     let mut workflow_names = std::collections::HashSet::new();
-    for home in &homes {
-        let dir = home.join("workflows");
+    for dir in workflow_search_dirs() {
         if !dir.exists() {
             continue;
         }
@@ -1132,8 +1181,7 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
             .collect::<std::collections::HashSet<_>>()
     };
     let mut persona_names = built_in_personas;
-    for home in &homes {
-        let dir = home.join("personas");
+    for dir in persona_search_dirs() {
         if !dir.exists() {
             continue;
         }
@@ -2254,56 +2302,43 @@ pub struct PersonaSaveRequest {
 }
 
 pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let global_dir = agent007_global_home().join("personas");
-    let project_dir = agent007_project_home().map(|p| p.join("personas"));
+    let search_dirs = persona_search_dirs();
+    let mut origins: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
 
-    // Load each source separately so we can tag with "global" / "project".
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut personas: Vec<Value> = Vec::new();
-
-    let sources: Vec<(std::path::PathBuf, &str)> = {
-        let mut v: Vec<(std::path::PathBuf, &str)> = Vec::new();
-        if let Some(pd) = &project_dir {
-            v.push((pd.clone(), "project"));
-        }
-        v.push((global_dir.clone(), "global"));
-        v
-    };
-
-    for (dir, source_label) in &sources {
-        if let Ok(registry) =
-            agent007_personas::PersonaRegistry::load_from_dirs(std::iter::once(dir.as_path()))
-        {
-            use agent007_core::PersonaProvider;
-            for p in registry.list() {
-                let key = p.name.to_ascii_lowercase();
-                if seen.insert(key) {
-                    let version = persona_version_for_name(dir, &p.name);
-                    personas.push(serde_json::json!({
-                        "name": p.name,
-                        "description": p.description,
-                        "preferred_model": p.preferred_model,
-                        "allowed_tools": p.allowed_tools,
-                        "system_prompt": p.system_prompt,
-                        "memory_namespace": p.memory_namespace,
-                        "zones": p.zones,
-                        "skills": p.skills,
-                        "agent_type": p.agent_type,
-                        "allowed_workers": p.allowed_workers,
-                        "source": source_label,
-                        "version": version,
-                    }));
-                }
+    // Search directories are highest-precedence first. Record the first source
+    // that defines each persona so the UI reflects the effective catalog.
+    for dir in &search_dirs {
+        let source = catalog_source_label(dir, "personas");
+        if let Ok(specs) = agent007_personas::loader::load_user_overrides(dir) {
+            for spec in specs {
+                origins
+                    .entry(spec.name.to_ascii_lowercase())
+                    .or_insert_with(|| (source.clone(), persona_version_for_name(dir, &spec.name)));
             }
         }
     }
 
-    // Fall back to built-ins if nothing was found on disk.
-    if personas.is_empty() {
-        use agent007_core::PersonaProvider;
-        let registry = agent007_personas::PersonaRegistry::built_in();
-        for p in registry.list() {
-            personas.push(serde_json::json!({
+    // PersonaRegistry applies later directories last, so reverse the normal
+    // highest-precedence-first catalog order before building effective specs.
+    let mut registry_dirs = search_dirs;
+    registry_dirs.reverse();
+    let registry = agent007_personas::PersonaRegistry::load_from_dirs(
+        registry_dirs.iter().map(|dir| dir.as_path()),
+    )
+    .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in());
+
+    use agent007_core::PersonaProvider;
+    let mut personas: Vec<Value> = registry
+        .list()
+        .into_iter()
+        .map(|p| {
+            let (source, version) = origins
+                .get(&p.name.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| ("built-in".to_string(), "1.0.0".to_string()));
+            let read_only = is_pack_source(&source) || source == "built-in";
+            serde_json::json!({
                 "name": p.name,
                 "description": p.description,
                 "preferred_model": p.preferred_model,
@@ -2314,11 +2349,21 @@ pub async fn personas_list_handler(State(_state): State<AppState>) -> impl IntoR
                 "skills": p.skills,
                 "agent_type": p.agent_type,
                 "allowed_workers": p.allowed_workers,
-                "source": "global",
-                "version": "1.0.0",
-            }));
-        }
-    }
+                "source": source,
+                "version": version,
+                "scope_kind": format!("{}-persona", source),
+                "read_only": read_only,
+                "can_override": read_only,
+                "can_delete": !read_only,
+            })
+        })
+        .collect();
+    personas.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
 
     Json(Value::Array(personas)).into_response()
 }
@@ -2583,23 +2628,21 @@ fn sanitize_file_stem(raw: &str, fallback: &str) -> String {
 }
 
 pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl IntoResponse {
-    let global = agent007_global_home().join("workflows");
     let skill_associations = build_skill_association_index();
 
     let mut index_by_name: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut result: Vec<Value> = Vec::new();
     for wf_dir in workflow_search_dirs() {
-        let is_global = wf_dir == global;
+        let source = catalog_source_label(&wf_dir, "workflows");
         if let Ok(entries) = std::fs::read_dir(&wf_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
-                if ext == Some("yaml") || ext == Some("yml") {
+                if matches!(ext, Some("yaml" | "yml" | "toml")) {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let source = if is_global { "global" } else { "project" };
                         let variant = serde_json::json!({
-                            "source": source,
+                            "source": &source,
                             "name": stem,
                             "path": path.display().to_string(),
                         });
@@ -2610,8 +2653,11 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                                     .and_then(|value| value.as_array())
                                     .cloned()
                                     .unwrap_or_default();
-                                if !shadowed.iter().any(|entry| entry.as_str() == Some(source)) {
-                                    shadowed.push(Value::String(source.to_string()));
+                                if !shadowed
+                                    .iter()
+                                    .any(|entry| entry.as_str() == Some(source.as_str()))
+                                {
+                                    shadowed.push(Value::String(source.clone()));
                                 }
                                 obj.insert(
                                     "shadowed_sources".to_string(),
@@ -2627,7 +2673,8 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                                     .cloned()
                                     .unwrap_or_default();
                                 let already_present = variants.iter().any(|entry| {
-                                    entry.get("source").and_then(|v| v.as_str()) == Some(source)
+                                    entry.get("source").and_then(|v| v.as_str())
+                                        == Some(source.as_str())
                                         && entry.get("path").and_then(|v| v.as_str())
                                             == Some(path.to_string_lossy().as_ref())
                                 });
@@ -2646,7 +2693,7 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                             }
                         } else {
                             let mut payload =
-                                workflow_list_item(&path, stem, source, &skill_associations);
+                                workflow_list_item(&path, stem, &source, &skill_associations);
                             if let Some(obj) = payload.as_object_mut() {
                                 obj.insert(
                                     "precedence_source".to_string(),
@@ -2679,17 +2726,12 @@ pub async fn workflows_list_handler(State(_state): State<AppState>) -> impl Into
                 .and_then(|value| value.as_array())
                 .map(|items| items.len())
                 .unwrap_or(0);
-            let scope_kind = match (precedence, shadowed_len) {
-                ("global", 0) => "global-workflow",
-                ("project", 0) => "project-workflow",
-                ("project", _) => "project-override",
-                ("global", _) => "global-override",
-                _ => "project-workflow",
-            };
-            obj.insert(
-                "scope_kind".to_string(),
-                Value::String(scope_kind.to_string()),
-            );
+            let scope_kind = catalog_scope_kind(precedence, "workflow", shadowed_len);
+            let read_only = is_pack_source(precedence);
+            obj.insert("scope_kind".to_string(), Value::String(scope_kind));
+            obj.insert("read_only".to_string(), Value::Bool(read_only));
+            obj.insert("can_override".to_string(), Value::Bool(read_only));
+            obj.insert("can_delete".to_string(), Value::Bool(!read_only));
         }
     }
     result.sort_by(|a, b| {
@@ -2721,6 +2763,7 @@ pub async fn workflow_get_handler(
             [
                 dir.join(format!("{safe_name}.yaml")),
                 dir.join(format!("{safe_name}.yml")),
+                dir.join(format!("{safe_name}.toml")),
             ]
         })
         .find(|p| p.exists());
@@ -2732,15 +2775,14 @@ pub async fn workflow_get_handler(
             .into_response();
     };
 
-    match std::fs::read_to_string(&path) {
-        Ok(content) => match serde_yaml::from_str::<Value>(&content) {
-            Ok(val) => Json(val).into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response(),
-        },
+    let loader = WorkflowLoader::new(
+        path.parent()
+            .unwrap_or_else(|| FsPath::new("."))
+            .to_path_buf(),
+    );
+    match loader.load_file(&path) {
+        Ok(def) => Json(serde_json::to_value(def).unwrap_or_else(|_| serde_json::json!({})))
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -3614,11 +3656,7 @@ pub async fn skill_get_handler(
     let target_path = params.get("path").cloned();
 
     // Search project-local first, then global — same order as the list endpoint.
-    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(p) = agent007_project_home() {
-        search_dirs.push(p.join("skills"));
-    }
-    search_dirs.push(agent007_global_home().join("skills"));
+    let search_dirs = skills_search_dirs();
 
     // If caller provided a concrete path, honor it first to avoid
     // trigger-collision ambiguity between project/global variants.
@@ -3855,14 +3893,9 @@ pub async fn skill_registry_handler() -> impl IntoResponse {
 }
 
 fn installed_skill_conflict_info(trigger: &str) -> Option<SkillConflictInfo> {
-    let global_dir = agent007_global_home().join("skills");
     let mut variants = Vec::new();
     for dir in skills_search_dirs() {
-        let source = if dir == global_dir {
-            "global"
-        } else {
-            "project"
-        };
+        let source = catalog_source_label(&dir, "skills");
         for skill in load_skills_from_dir(&dir) {
             if skill.trigger() != trigger {
                 continue;
@@ -5320,6 +5353,7 @@ pub async fn workflow_promote_handler(
         [
             dir.join(format!("{safe_name}.yaml")),
             dir.join(format!("{safe_name}.yml")),
+            dir.join(format!("{safe_name}.toml")),
         ]
         .into_iter()
         .find(|p| p.exists())
@@ -5386,19 +5420,17 @@ pub async fn workflow_delete_handler(Path(name): Path<String>) -> impl IntoRespo
             .into_response();
     }
 
-    // Search project-local first, then global
-    let candidates: Vec<std::path::PathBuf> = {
-        let mut v = Vec::new();
-        if let Some(p) = agent007_project_home() {
-            let dir = p.join("workflows");
-            v.push(dir.join(format!("{safe_name}.yaml")));
-            v.push(dir.join(format!("{safe_name}.yml")));
-        }
-        let global = agent007_global_home().join("workflows");
-        v.push(global.join(format!("{safe_name}.yaml")));
-        v.push(global.join(format!("{safe_name}.yml")));
-        v
-    };
+    // Search user-managed project/global files only. Pack roots are immutable.
+    let candidates: Vec<std::path::PathBuf> = editable_asset_dirs("workflows")
+        .into_iter()
+        .flat_map(|dir| {
+            [
+                dir.join(format!("{safe_name}.yaml")),
+                dir.join(format!("{safe_name}.yml")),
+                dir.join(format!("{safe_name}.toml")),
+            ]
+        })
+        .collect();
 
     for path in &candidates {
         if path.exists() {
@@ -5410,6 +5442,24 @@ pub async fn workflow_delete_handler(Path(name): Path<String>) -> impl IntoRespo
                 )
                     .into_response(),
             };
+        }
+    }
+
+    for dir in workflow_search_dirs() {
+        if !is_pack_source(&catalog_source_label(&dir, "workflows")) {
+            continue;
+        }
+        if ["yaml", "yml", "toml"]
+            .into_iter()
+            .any(|ext| dir.join(format!("{safe_name}.{ext}")).is_file())
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "pack-provided workflows are read-only; save an override or manage the pack from Domain packs"
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -6598,15 +6648,7 @@ fn build_skill_association_index() -> std::collections::HashMap<String, Associat
         std::collections::HashMap::new();
     let mut seen = std::collections::HashSet::new();
 
-    let project_dir = agent007_project_home().map(|p| p.join("skills"));
-    let global_dir = agent007_global_home().join("skills");
-    let mut dirs = Vec::new();
-    if let Some(dir) = project_dir {
-        dirs.push(dir);
-    }
-    dirs.push(global_dir);
-
-    for dir in dirs {
+    for dir in skills_search_dirs() {
         for skill in load_skills_from_dir(&dir) {
             let key = normalize_skill_key(skill.trigger());
             if key.is_empty() || !seen.insert(key.clone()) {
@@ -7408,6 +7450,31 @@ mod tests {
         .unwrap();
     }
 
+    fn write_enabled_pack_lock(agent_home: &Path, id: &str, version: &str) {
+        std::fs::create_dir_all(agent_home.join("packs")).unwrap();
+        std::fs::write(
+            agent_home.join("packs/lock.json"),
+            format!(
+                r#"{{
+  "schema_version": 1,
+  "packs": {{
+    "{id}": {{
+      "id": "{id}",
+      "version": "{version}",
+      "enabled": true,
+      "installed_at": "2026-06-19T00:00:00Z",
+      "registry": "fixture",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "history": []
+    }}
+  }}
+}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     fn write_rust_repo_fixture(base: &Path) {
         std::fs::write(
             base.join("Cargo.toml"),
@@ -7479,7 +7546,7 @@ mod tests {
             "---\nname: pkg\ndescription: test\ntrigger: /pkg\nmodel: codex\n---\nUse {{args}}\n",
         )
         .unwrap();
-        std::fs::write(package_dir.join("ftm_engine.py"), "print('helper')\n").unwrap();
+        std::fs::write(package_dir.join("report_helper.py"), "print('helper')\n").unwrap();
 
         let skills = load_skills_from_dir(&skills_dir);
         assert_eq!(skills.len(), 1);
@@ -7612,20 +7679,20 @@ mod tests {
     #[test]
     fn collect_association_normalizes_hidden_agent007_tool_paths() {
         let mut assets = super::AssociatedAssets::default();
-        collect_association_from_ref(".agent007/tools/ftm_engine.py", &mut assets);
+        collect_association_from_ref(".agent007/tools/report_helper.py", &mut assets);
         assert!(assets
             .tools
             .iter()
-            .any(|tool| tool == "tools/ftm_engine.py"));
+            .any(|tool| tool == "tools/report_helper.py"));
         assert!(assets
             .scripts
             .iter()
-            .any(|tool| tool == "tools/ftm_engine.py"));
+            .any(|tool| tool == "tools/report_helper.py"));
         assert!(
             !assets
                 .scripts
                 .iter()
-                .any(|tool| tool == ".agent007/tools/ftm_engine.py"),
+                .any(|tool| tool == ".agent007/tools/report_helper.py"),
             "hidden agent007-prefixed tool path should not survive as ghost script ref"
         );
     }
@@ -7932,6 +7999,108 @@ mod tests {
             std::env::set_var("HOME", home);
         } else {
             std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn api_catalogs_include_enabled_pack_assets_as_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let agent_home = home.path().join(".agent007");
+        let pack_root = agent_home.join("packs/example/1.0.0");
+        std::fs::create_dir_all(pack_root.join("skills")).unwrap();
+        std::fs::create_dir_all(pack_root.join("workflows")).unwrap();
+        std::fs::create_dir_all(pack_root.join("personas")).unwrap();
+        std::fs::write(
+            pack_root.join("skills/pack-skill.md"),
+            "---\nname: Pack Skill\ndescription: from pack\ntrigger: /pack-skill\nmodel: codex\n---\nUse {{args}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pack_root.join("workflows/pack-workflow.toml"),
+            "name = \"Pack Workflow\"\ndescription = \"from pack\"\n[[steps]]\nid = \"plan\"\nagent = \"Researcher\"\nprompt = \"Plan {{task}}\"\noutput = \"plan\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pack_root.join("personas/pack-analyst.toml"),
+            "name = \"PackAnalyst\"\ndescription = \"from pack\"\npreferred_model = \"codex\"\nallowed_tools = [\"file_read\"]\nsystem_prompt = \"Analyze carefully.\"\n",
+        )
+        .unwrap();
+        write_enabled_pack_lock(&agent_home, "example", "1.0.0");
+
+        let original_cwd = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let original_agent_home = std::env::var("AGENT007_HOME").ok();
+        std::env::remove_var("AGENT007_HOME");
+        std::env::set_current_dir(project.path()).unwrap();
+        std::env::set_var("HOME", home.path());
+
+        let ts = test_server();
+
+        let skills_response = ts.get("/api/skills").await;
+        skills_response.assert_status_ok();
+        let skills: serde_json::Value = skills_response.json();
+        let skill = skills
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["trigger"] == "/pack-skill")
+            .expect("pack skill should be visible");
+        assert_eq!(skill["source"], "global-pack");
+        assert_eq!(skill["scope_kind"], "global-pack-skill");
+        assert_eq!(skill["read_only"], true);
+        assert_eq!(skill["can_delete"], false);
+
+        let workflow_response = ts.get("/api/workflows").await;
+        workflow_response.assert_status_ok();
+        let workflows: serde_json::Value = workflow_response.json();
+        let workflow = workflows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "pack-workflow")
+            .expect("pack workflow should be visible");
+        assert_eq!(workflow["source"], "global-pack");
+        assert_eq!(workflow["scope_kind"], "global-pack-workflow");
+        assert_eq!(workflow["read_only"], true);
+
+        let workflow_get = ts.get("/api/workflows/pack-workflow").await;
+        workflow_get.assert_status_ok();
+        let workflow_body: serde_json::Value = workflow_get.json();
+        assert_eq!(workflow_body["name"], "Pack Workflow");
+
+        let personas_response = ts.get("/api/personas").await;
+        personas_response.assert_status_ok();
+        let personas: serde_json::Value = personas_response.json();
+        let persona = personas
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "PackAnalyst")
+            .expect("pack persona should be visible");
+        assert_eq!(persona["source"], "global-pack");
+        assert_eq!(persona["read_only"], true);
+        assert_eq!(persona["can_delete"], false);
+
+        let skill_delete = ts.delete("/api/skills/pack-skill").await;
+        skill_delete.assert_status(StatusCode::CONFLICT);
+        assert!(pack_root.join("skills/pack-skill.md").is_file());
+
+        let workflow_delete = ts.delete("/api/workflows/pack-workflow").await;
+        workflow_delete.assert_status(StatusCode::CONFLICT);
+        assert!(pack_root.join("workflows/pack-workflow.toml").is_file());
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(home) = original_agent_home {
+            std::env::set_var("AGENT007_HOME", home);
+        } else {
+            std::env::remove_var("AGENT007_HOME");
         }
     }
 

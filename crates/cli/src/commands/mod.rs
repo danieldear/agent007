@@ -9,6 +9,7 @@ pub mod hub;
 pub mod hub_assets;
 pub mod init;
 pub mod operator_tui;
+pub mod pack;
 pub mod persona;
 pub mod projects;
 pub mod replay;

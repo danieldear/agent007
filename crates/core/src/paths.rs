@@ -8,6 +8,26 @@ fn push_unique(dirs: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+/// Return enabled pack asset directories for one agent007 home.
+///
+/// Invalid or unsupported pack lockfiles are ignored here so a corrupt optional
+/// pack cannot prevent the core runtime from starting. Pack-management commands
+/// still report the underlying lockfile error directly.
+pub fn enabled_pack_asset_dirs(home: &std::path::Path, kind: &str) -> Vec<PathBuf> {
+    agent007_packs::enabled_pack_roots(home)
+        .into_iter()
+        .map(|root| root.join(kind))
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn push_home_asset_dirs(dirs: &mut Vec<PathBuf>, home: &std::path::Path, kind: &str) {
+    push_unique(dirs, home.join(kind));
+    for pack_dir in enabled_pack_asset_dirs(home, kind) {
+        push_unique(dirs, pack_dir);
+    }
+}
+
 /// Walk up from CWD looking for a `.agent007/` directory (like git finds `.git/`).
 /// Returns `Some(path)` if found, `None` if we hit the filesystem root.
 pub fn agent007_project_home() -> Option<PathBuf> {
@@ -46,14 +66,13 @@ pub fn agent007_home() -> PathBuf {
 pub fn skills_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
-        push_unique(&mut dirs, PathBuf::from(home).join("skills"));
+        push_home_asset_dirs(&mut dirs, &PathBuf::from(home), "skills");
         return dirs;
     }
     if let Some(project) = agent007_project_home() {
-        push_unique(&mut dirs, project.join("skills"));
+        push_home_asset_dirs(&mut dirs, &project, "skills");
     }
-    let global = agent007_global_home().join("skills");
-    push_unique(&mut dirs, global);
+    push_home_asset_dirs(&mut dirs, &agent007_global_home(), "skills");
     dirs
 }
 
@@ -62,14 +81,13 @@ pub fn skills_search_dirs() -> Vec<PathBuf> {
 pub fn workflow_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
-        push_unique(&mut dirs, PathBuf::from(home).join("workflows"));
+        push_home_asset_dirs(&mut dirs, &PathBuf::from(home), "workflows");
         return dirs;
     }
     if let Some(project) = agent007_project_home() {
-        push_unique(&mut dirs, project.join("workflows"));
+        push_home_asset_dirs(&mut dirs, &project, "workflows");
     }
-    let global = agent007_global_home().join("workflows");
-    push_unique(&mut dirs, global);
+    push_home_asset_dirs(&mut dirs, &agent007_global_home(), "workflows");
     dirs
 }
 
@@ -78,14 +96,27 @@ pub fn workflow_search_dirs() -> Vec<PathBuf> {
 pub fn persona_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("AGENT007_HOME") {
-        push_unique(&mut dirs, PathBuf::from(home).join("personas"));
+        push_home_asset_dirs(&mut dirs, &PathBuf::from(home), "personas");
         return dirs;
     }
     if let Some(project) = agent007_project_home() {
-        push_unique(&mut dirs, project.join("personas"));
+        push_home_asset_dirs(&mut dirs, &project, "personas");
     }
-    let global = agent007_global_home().join("personas");
-    push_unique(&mut dirs, global);
+    push_home_asset_dirs(&mut dirs, &agent007_global_home(), "personas");
+    dirs
+}
+
+/// Return ordered tool directories, including enabled pack overlays.
+pub fn tool_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = std::env::var("AGENT007_HOME") {
+        push_home_asset_dirs(&mut dirs, &PathBuf::from(home), "tools");
+        return dirs;
+    }
+    if let Some(project) = agent007_project_home() {
+        push_home_asset_dirs(&mut dirs, &project, "tools");
+    }
+    push_home_asset_dirs(&mut dirs, &agent007_global_home(), "tools");
     dirs
 }
 
@@ -117,4 +148,40 @@ pub fn agent007_write_home() -> PathBuf {
         }
     }
     agent007_global_home()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enabled_pack_assets_are_versioned_overlays() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let skill_dir = home.join("packs/example/1.2.3/skills");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::create_dir_all(home.join("packs")).unwrap();
+        std::fs::write(
+            home.join("packs/lock.json"),
+            r#"{
+              "schema_version": 1,
+              "packs": {
+                "example": {
+                  "id": "example",
+                  "version": "1.2.3",
+                  "enabled": true,
+                  "installed_at": "2026-06-18T00:00:00Z",
+                  "registry": "fixture",
+                  "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "history": []
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(enabled_pack_asset_dirs(home, "skills"), vec![skill_dir]);
+        assert!(enabled_pack_asset_dirs(home, "workflows").is_empty());
+    }
 }

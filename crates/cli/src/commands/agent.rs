@@ -317,9 +317,10 @@ fn build_persona_orchestrator(
         .clone()
         .unwrap_or_else(|| persona.name.clone());
     let scoped = Arc::new(memory_store.scoped(&ns));
-    let skills_dir = agent007_core::paths::agent007_home().join("skills");
     let skill_provider: Arc<dyn agent007_skills::SkillContentProvider> =
-        match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+        match agent007_skills::SkillLoader::load_from_dirs(
+            agent007_core::paths::skills_search_dirs(),
+        ) {
             Ok(skills) => Arc::new(agent007_skills::SkillIndex::from_skills(skills)),
             Err(_) => Arc::new(agent007_skills::NoOpSkillContentProvider),
         };

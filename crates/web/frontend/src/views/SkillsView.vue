@@ -8,6 +8,7 @@ const registry = ref([])
 const activeTab = ref('installed')
 const showForm = ref(false)
 const editingTrigger = ref(null) // null = creating, string = editing existing
+const editingSource = ref(null)
 const importUrl = ref('')
 const browseStatus = ref(null)
 const importStatus = ref(null)
@@ -243,9 +244,22 @@ function compactRef(value) {
 function skillScopeChips(item) {
   const variants = Array.isArray(item?.variants) ? item.variants : []
   if (!variants.length) {
-    return [item?.source === 'global' ? 'global' : 'proj']
+    return [catalogSourceLabel(item?.source)]
   }
-  return variants.map(v => `${v?.source === 'global' ? 'global' : 'proj'}${v?.version ? ` v${v.version}` : ''}`)
+  return variants.map(v => `${catalogSourceLabel(v?.source)}${v?.version ? ` v${v.version}` : ''}`)
+}
+
+function catalogSourceLabel(source) {
+  return ({
+    project: 'proj',
+    global: 'global',
+    'project-pack': 'proj pack',
+    'global-pack': 'global pack',
+  })[source] || source || 'proj'
+}
+
+function isReadOnlyCatalogSource(source) {
+  return source === 'project-pack' || source === 'global-pack'
 }
 
 function skillHasVersionDrift(item) {
@@ -278,6 +292,7 @@ function autoTrigger(name, category) {
 
 function openCreate() {
   editingTrigger.value = null
+  editingSource.value = null
   form.value = { name: '', trigger: '/', description: '', model: 'codex', category: 'custom', template: DEFAULT_TEMPLATE }
   showForm.value = true
 }
@@ -291,6 +306,7 @@ watch([() => form.value.name, () => form.value.category], ([name, category]) => 
 
 async function openEdit(skill) {
   editingTrigger.value = skill.trigger
+  editingSource.value = skill.source || null
   // Strip leading "/" for API call
   const triggerParam = skill.trigger.replace(/^\//, '')
   try {
@@ -331,6 +347,7 @@ async function saveSkill() {
   await api.saveSkill(form.value)
   showForm.value = false
   editingTrigger.value = null
+  editingSource.value = null
   await loadSkills()
 }
 
@@ -604,13 +621,14 @@ async function installFromPreview() {
                       @click.stop="promoteSkill(s)"
                     >↑ promote</button>
                     <button
+                      v-if="s.can_delete !== false"
                       class="btn btn-xs btn-ghost font-mono text-[10px] px-1.5 h-6 min-h-0 leading-none text-error/60 hover:text-error"
                       :class="{ 'loading loading-spinner': deletingTrigger === s.trigger.replace(/^\//, '') }"
                       :disabled="deletingTrigger === s.trigger.replace(/^\//, '')"
                       title="Delete this skill"
                       @click.stop="deleteSkill(s)"
                     >✕ del</button>
-                    <span class="text-base-content/30 font-mono text-[10px]">◦ edit</span>
+                    <span class="text-base-content/30 font-mono text-[10px]">◦ {{ isReadOnlyCatalogSource(s.source) ? 'override' : 'edit' }}</span>
                   </div>
                 </div>
               </div>
@@ -933,13 +951,16 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
         <!-- Header bar -->
         <div class="flex items-center justify-between px-5 py-3 bg-base-200 border-b border-base-300">
           <span class="text-[11px] font-mono font-bold uppercase tracking-widest text-base-content/50">
-            {{ editingTrigger ? `edit · ${editingTrigger}` : 'create skill' }}
+            {{ editingTrigger ? `${isReadOnlyCatalogSource(editingSource) ? 'override' : 'edit'} · ${editingTrigger}` : 'create skill' }}
           </span>
           <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showForm = false; editingTrigger = null">✕</button>
         </div>
 
         <!-- Body -->
         <div class="p-5 space-y-4">
+          <div v-if="isReadOnlyCatalogSource(editingSource)" class="rounded border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] font-mono text-warning/80">
+            This skill comes from an enabled pack. Saving creates a writable project/global override; the verified pack file is not modified.
+          </div>
           <!-- Name + Trigger row -->
           <div class="grid grid-cols-5 gap-3">
             <div class="col-span-3">
@@ -1034,7 +1055,7 @@ Use &#123;&#123;args&#125;&#125; for input and &#123;&#123;task&#125;&#125; for 
             class="btn btn-sm btn-primary font-mono text-xs px-4"
             @click="saveSkill"
             :disabled="!form.name || !form.trigger || !form.template"
-          >{{ editingTrigger ? 'save changes' : 'save skill' }}</button>
+          >{{ editingTrigger ? (isReadOnlyCatalogSource(editingSource) ? 'save override' : 'save changes') : 'save skill' }}</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showForm = false; editingTrigger = null">close</button></form>

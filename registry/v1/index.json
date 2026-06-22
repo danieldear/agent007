@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-06-18T00:00:00Z",
+  "packs": [
+    {
+      "id": "example-hello",
+      "name": "Example Hello",
+      "description": "Harmless example pack used to validate registry installation and activation.",
+      "categories": ["example", "testing"],
+      "tags": ["hello", "smoke-test"],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "min_agent007": "0.6.0",
+          "manifest_url": "../../packs/example-hello/pack.toml",
+          "manifest_sha256": "a6b903fbcba713751e1ce59392fbfbdd1bf48fafca0768716859b6a73f9f270e",
+          "artifact_url": "../../packs/example-hello/dist/example-hello-1.0.0.a7bundle",
+          "artifact_sha256": "73ad0a9ea5b2d67e16d4a0a41c9e19afce68b711c3edafaf7c806b18000f551a",
+          "size_bytes": 611,
+          "published_at": "2026-06-18T00:00:00Z",
+          "yanked": false
+        }
+      ]
+    }
+  ]
+}

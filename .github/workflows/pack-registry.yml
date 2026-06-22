@@ -1,0 +1,109 @@
+name: Pack Registry
+
+on:
+  pull_request:
+    paths:
+      - "crates/packs/**"
+      - "crates/cli/**"
+      - "crates/core/**"
+      - "crates/skills/**"
+      - "crates/workflows/**"
+      - "crates/web/**"
+      - "packs/**"
+      - "registry/**"
+      - ".github/workflows/pack-registry.yml"
+      - ".github/workflows/publish-pack.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/packs/**"
+      - "crates/cli/**"
+      - "crates/core/**"
+      - "crates/skills/**"
+      - "crates/workflows/**"
+      - "crates/web/**"
+      - "packs/**"
+      - "registry/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 1
+      RUSTFLAGS: -C debuginfo=0
+      AGENT007_SKIP_FRONTEND_BUILD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test pack lifecycle and validation
+        run: cargo test -p agent007-packs --locked -j 1
+
+      - name: Rebuild example artifact reproducibly
+        run: |
+          cargo run -q -p agent007 -- pack build packs/example-hello \
+            --output /tmp/example-hello-1.0.0.a7bundle --json
+          cmp /tmp/example-hello-1.0.0.a7bundle \
+            packs/example-hello/dist/example-hello-1.0.0.a7bundle
+
+      - name: Verify registry, manifests, artifacts, and entry hashes
+        run: cargo run -q -p agent007 -- pack verify-registry --registry registry/v1/index.json --refresh
+
+      - name: Smoke test fresh init and pack lifecycle
+        run: |
+          cargo build -q -p agent007
+          export HOME="$(mktemp -d)"
+          project="$(mktemp -d)"
+          registry="$GITHUB_WORKSPACE/registry/v1/index.json"
+          cd "$project"
+          "$GITHUB_WORKSPACE/target/debug/agent007" init --no-ide
+          test ! -e "$HOME/.agent007/packs/lock.json"
+          "$GITHUB_WORKSPACE/target/debug/agent007" pack install example-hello \
+            --registry "$registry" --refresh --json
+          "$GITHUB_WORKSPACE/target/debug/agent007" pack list --json \
+            | python3 -c 'import json,sys; p=json.load(sys.stdin)["packs"]["example-hello"]; assert p["id"] == "example-hello" and p["enabled"]'
+          test -f "$HOME/.claude/commands/agent007-example-hello.md"
+          "$GITHUB_WORKSPACE/target/debug/agent007" pack disable example-hello --json
+          test ! -e "$HOME/.claude/commands/agent007-example-hello.md"
+          "$GITHUB_WORKSPACE/target/debug/agent007" pack enable example-hello --json
+          test -f "$HOME/.claude/commands/agent007-example-hello.md"
+          "$GITHUB_WORKSPACE/target/debug/agent007" pack uninstall example-hello --yes --json
+          test ! -d "$HOME/.agent007/packs/example-hello"
+
+      - name: Smoke test Hub pack API
+        run: |
+          export HOME="$(mktemp -d)"
+          export AGENT007_PACK_REGISTRY="$GITHUB_WORKSPACE/registry/v1/index.json"
+          "$GITHUB_WORKSPACE/target/debug/agent007" hub --port 18086 --no-open >/tmp/agent007-hub.log 2>&1 &
+          hub_pid=$!
+          trap 'kill "$hub_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18086/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18086/api/packs \
+            | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p["packs"][0]["id"] == "example-hello"'
+          token="$(curl -fsS http://127.0.0.1:18086/ | sed -n 's/.*name="agent007-hub-token" content="\([^"]*\)".*/\1/p')"
+          test -n "$token"
+          mutate() {
+            curl -fsS -X POST \
+              -H "Host: 127.0.0.1:18086" \
+              -H "Origin: http://127.0.0.1:18086" \
+              -H "X-Agent007-Hub-Token: $token" \
+              -H "Content-Type: application/json" "$@"
+          }
+          mutate -d '{"refresh":true}' http://127.0.0.1:18086/api/packs/example-hello/install >/dev/null
+          mutate http://127.0.0.1:18086/api/packs/example-hello/disable >/dev/null
+          curl -fsS -X DELETE \
+            -H "Host: 127.0.0.1:18086" \
+            -H "Origin: http://127.0.0.1:18086" \
+            -H "X-Agent007-Hub-Token: $token" \
+            http://127.0.0.1:18086/api/packs/example-hello >/dev/null
+
+      - name: Validate JSON schemas and registry document
+        run: |
+          python3 -m pip install --disable-pip-version-check check-jsonschema
+          check-jsonschema --check-metaschema registry/v1/index.schema.json registry/v1/pack.schema.json
+          check-jsonschema --schemafile registry/v1/index.schema.json registry/v1/index.json

@@ -20,6 +20,14 @@ agent007 runs as an MCP server that gives your AI editor a broad orchestration t
 - **LSP context controls** — configure LSP servers + category injection from config and dashboard (`/api/lsp/config`)
 - **ETR built-ins** — low-latency deterministic extraction/query/metrics tools to reduce shell+parsing overhead
 
+The default catalog is intentionally domain-neutral: discovery, planning,
+delivery, quality, release, and council capabilities belong in core; finance,
+travel, and project-specific systems belong in explicitly installed domain packs.
+See [Catalog Architecture](docs/catalog-architecture.md).
+
+Optional capability bundles are available through the integrity-pinned domain
+pack registry. See [Domain Packs](docs/domain-packs.md).
+
 ---
 
 ## Install
@@ -158,6 +166,36 @@ agent007 workflow status <session>              Check session state
 agent007 workflow approve <session>             Approve a pending gate
 agent007 workflow resume <session>              Resume a paused workflow
 ```
+
+### `agent007 pack`
+
+Discover and manage optional, versioned domain capabilities:
+
+```bash
+agent007 pack search [query]                    Search the registry
+agent007 pack info <id>                         Inspect contents and permissions
+agent007 pack install <id> [--scope project]   Verify, install, and enable
+agent007 pack list [--scope project]           Show installed state
+agent007 pack disable|enable <id>               Change catalog activation
+agent007 pack update|rollback <id>              Upgrade or restore a version
+agent007 pack uninstall <id> --yes              Remove pack-owned versions
+agent007 pack verify-registry --refresh         Verify all registry artifacts
+```
+
+Packs are absent from a fresh init and become catalog overlays only while
+enabled. See [docs/domain-packs.md](docs/domain-packs.md) for trust, precedence,
+authoring, publishing, offline, and recovery details.
+
+### `agent007 hub`
+
+Start the browser-based multi-project control surface:
+
+```bash
+agent007 hub --port 8006
+```
+
+The Hub groups provider-agnostic threads beneath projects and manages global
+assets, provider keys, memory inventory, and global domain-pack lifecycle.
 
 ### `agent007 agent`
 
@@ -339,7 +377,7 @@ You are a helpful assistant. Given: {{args}}
 Do the following...
 ```
 
-### Built-in skills (core set + optional specializations)
+### Built-in domain-neutral skills
 
 | Trigger | Description |
 |---------|-------------|
@@ -377,6 +415,11 @@ agent007 skill install https://example.com/my-skill.md
 
 Workflows are YAML pipelines in `~/.agent007/workflows/`. Steps without dependencies run in parallel; steps with `depends_on` run sequentially.
 
+Choose by intent and depth: `brainstorm`/`ideation` are discovery profiles;
+`tdd`/`sparc`/`feature` are bounded, greenfield, and full delivery profiles.
+The current names remain compatibility entry points while the catalog moves toward
+intent-based routing. See [Catalog Architecture](docs/catalog-architecture.md).
+
 | Workflow | Steps | Use for |
 |----------|-------|---------|
 | `tdd` | 3 | Red → Green → Refactor cycle |
@@ -387,6 +430,7 @@ Workflows are YAML pipelines in `~/.agent007/workflows/`. Steps without dependen
 | `ideation` | 7 | Research → PRD → architecture → project plan |
 | `security-audit` | 5 | OWASP + secrets + threat model + dependencies in parallel |
 | `brainstorm` | lightweight | Ideation → approval → PRD/doc output |
+| `llm-council` | deep | Multi-perspective deliberation → challenges → revisions → decision memo |
 
 ---
 
@@ -465,6 +509,8 @@ See [docs/architecture.md](docs/architecture.md) for the crate map and data flow
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md) — crate map, data flow, key interfaces
+- [docs/catalog-architecture.md](docs/catalog-architecture.md) — generic technical core, workflow profiles, and optional domain packs
+- [docs/domain-packs.md](docs/domain-packs.md) — registry lifecycle, trust model, authoring, publishing, and recovery
 - [docs/skills.md](docs/skills.md) — skills system deep-dive
 - [docs/workflows.md](docs/workflows.md) — workflow reference
 - [docs/configuration.md](docs/configuration.md) — config.toml + hooks.toml schema

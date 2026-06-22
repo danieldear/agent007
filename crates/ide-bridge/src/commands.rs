@@ -88,31 +88,18 @@ pub(crate) async fn handle_run(
 pub(crate) async fn handle_skill_list(
     _config: Arc<BridgeConfig>,
 ) -> Result<Option<Value>, IdeBridgeError> {
-    let skills_dir = agent007_home().join("skills");
-
-    // If the directory does not exist yet, return an empty array gracefully.
-    if !skills_dir.exists() {
-        return Ok(Some(Value::Array(vec![])));
-    }
-
-    let mut entries = tokio::fs::read_dir(&skills_dir)
-        .await
-        .map_err(IdeBridgeError::Io)?;
-
-    let mut skills: Vec<Value> = Vec::new();
-
-    while let Some(entry) = entries.next_entry().await.map_err(IdeBridgeError::Io)? {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let content = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(IdeBridgeError::Io)?;
-        if let Some(fm) = parse_frontmatter(&content) {
-            skills.push(fm);
-        }
-    }
+    let skills =
+        agent007_skills::SkillLoader::load_from_dirs(agent007_core::paths::skills_search_dirs())
+            .map_err(|error| IdeBridgeError::Transport(error.to_string()))?
+            .into_iter()
+            .map(|skill| {
+                serde_json::json!({
+                    "trigger": skill.trigger(),
+                    "name": skill.name(),
+                    "description": skill.frontmatter.description,
+                })
+            })
+            .collect();
 
     Ok(Some(Value::Array(skills)))
 }
@@ -169,11 +156,9 @@ pub(crate) async fn handle_skill_run(
     let executor = agent007_skills::SkillExecutor::new(mock_model, retriever, memory)
         .with_global_memory(global_memory);
 
-    let skills_dir = agent007_home().join("skills");
-    let loader = agent007_skills::SkillLoader::new(&skills_dir);
-    let skills = loader
-        .load_all()
-        .map_err(|e| IdeBridgeError::Transport(e.to_string()))?;
+    let skills =
+        agent007_skills::SkillLoader::load_from_dirs(agent007_core::paths::skills_search_dirs())
+            .map_err(|e| IdeBridgeError::Transport(e.to_string()))?;
 
     let skill = skills
         .into_iter()
@@ -186,49 +171,6 @@ pub(crate) async fn handle_skill_run(
         .map_err(|e| IdeBridgeError::Transport(e.to_string()))?;
 
     Ok(Some(Value::String(output)))
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-fn agent007_home() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("AGENT007_HOME") {
-        return std::path::PathBuf::from(p);
-    }
-    let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    loop {
-        let candidate = dir.join(".agent007");
-        if candidate.is_dir() {
-            return candidate;
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".agent007")
-}
-
-/// Parse YAML frontmatter from a skill `.md` file into a JSON object with
-/// keys `trigger`, `name`, `description`.
-fn parse_frontmatter(content: &str) -> Option<Value> {
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        return None;
-    }
-    #[derive(serde::Deserialize)]
-    struct Fm {
-        name: String,
-        description: String,
-        trigger: String,
-    }
-    let fm: Fm = serde_yaml::from_str(parts[1]).ok()?;
-    Some(serde_json::json!({
-        "trigger": fm.trigger,
-        "name": fm.name,
-        "description": fm.description,
-    }))
 }
 
 /// No-op VectorDB used in dry-run mode.

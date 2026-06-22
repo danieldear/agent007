@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent007.dev/schemas/pack-v1.json",
+  "title": "agent007 pack manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pack"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "description", "license"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 80 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$" },
+        "description": { "type": "string", "minLength": 1 },
+        "license": { "type": "string", "minLength": 1 },
+        "authors": { "type": "array", "items": { "type": "string" }, "default": [] }
+      }
+    },
+    "contents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skills": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "workflows": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "personas": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "tools": { "type": "array", "items": { "type": "string" }, "default": [] }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": { "type": "boolean", "default": false },
+        "external_actions": { "type": "boolean", "default": false },
+        "approval_required": { "type": "array", "items": { "type": "string" }, "default": [] }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "packs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+              "version": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

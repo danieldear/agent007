@@ -125,23 +125,24 @@ pub async fn execute(_config: Arc<Config>, action: CatalogAction) -> Result<()> 
 
 fn configured_dirs_for_scope(kind: &str, scope: CatalogScope) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    let mut push_home = |home: PathBuf| {
+        dirs.push(home.join(kind));
+        dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(&home, kind));
+    };
     match scope {
         CatalogScope::Project => {
             if let Some(project_home) = agent007_project_home() {
-                dirs.push(project_home.join(kind));
+                push_home(project_home);
             }
         }
         CatalogScope::Global => {
-            dirs.push(agent007_global_home().join(kind));
+            push_home(agent007_global_home());
         }
         CatalogScope::Both => {
             if let Some(project_home) = agent007_project_home() {
-                dirs.push(project_home.join(kind));
+                push_home(project_home);
             }
-            let global = agent007_global_home().join(kind);
-            if !dirs.iter().any(|d| d == &global) {
-                dirs.push(global);
-            }
+            push_home(agent007_global_home());
         }
     }
     dirs

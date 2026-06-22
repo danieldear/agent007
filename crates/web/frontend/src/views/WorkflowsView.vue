@@ -175,9 +175,26 @@ onMounted(async () => {
 function workflowScopeChips(item) {
   const variants = Array.isArray(item?.variants) ? item.variants : []
   if (!variants.length) {
-    return [item?.source === 'global' ? 'global' : 'proj']
+    return [catalogSourceLabel(item?.source)]
   }
-  return variants.map(v => (v?.source === 'global' ? 'global' : 'proj'))
+  return variants.map(v => catalogSourceLabel(v?.source))
+}
+
+function catalogSourceLabel(source) {
+  return ({
+    project: 'proj',
+    global: 'global',
+    'project-pack': 'proj pack',
+    'global-pack': 'global pack',
+  })[source] || source || 'proj'
+}
+
+function isReadOnlyCatalogSource(source) {
+  return source === 'project-pack' || source === 'global-pack'
+}
+
+function selectedWorkflowSource() {
+  return workflows.value.find(w => w.name === selectedWorkflow.value)?.source || null
 }
 
 onConnect((params) => {
@@ -723,6 +740,7 @@ async function loadTemplate(tplName) {
                   @click.stop="promoteWorkflow(w.name)"
                 >↑</button>
                 <button
+                  v-if="w.can_delete !== false"
                   class="btn btn-ghost btn-xs px-1 font-mono text-base-content/40 hover:text-error"
                   :class="{ 'loading loading-spinner': deletingWorkflow === w.name }"
                   :disabled="deletingWorkflow === w.name"
@@ -1000,6 +1018,9 @@ async function loadTemplate(tplName) {
           <button class="btn btn-ghost btn-xs font-mono text-base-content/40 hover:text-base-content px-1" @click="showSaveDialog = false">✕</button>
         </div>
         <div class="p-5 space-y-4">
+          <div v-if="isReadOnlyCatalogSource(selectedWorkflowSource())" class="rounded border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] font-mono text-warning/80">
+            This workflow comes from an enabled pack. Saving creates a writable project/global override; the verified pack file is not modified.
+          </div>
           <div>
             <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">Name</div>
             <input v-model="workflowName" class="wf-input w-full" placeholder="my-workflow" />
@@ -1011,7 +1032,7 @@ async function loadTemplate(tplName) {
         </div>
         <div class="flex items-center justify-end gap-2 px-5 py-3 bg-base-200 border-t border-base-300">
           <button class="btn btn-sm btn-ghost font-mono text-xs px-4" @click="showSaveDialog = false">Cancel</button>
-          <button class="btn btn-sm btn-primary font-mono text-xs px-4" :disabled="!workflowName" @click="saveWorkflow">Save</button>
+          <button class="btn btn-sm btn-primary font-mono text-xs px-4" :disabled="!workflowName" @click="saveWorkflow">{{ isReadOnlyCatalogSource(selectedWorkflowSource()) ? 'Save override' : 'Save' }}</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showSaveDialog = false">close</button></form>

@@ -1200,14 +1200,13 @@ fn load_step_template(step: &StepDef) -> Result<String, WorkflowError> {
         return Ok(prompt.clone());
     }
     if let Some(skill_trigger) = &step.skill {
-        let skills_dir = agent007_core::paths::agent007_home().join("skills");
-        let loader = agent007_skills::SkillLoader::new(&skills_dir);
-        let skills = loader
-            .load_all()
-            .map_err(|error| WorkflowError::StepFailed {
-                id: step.id.clone(),
-                reason: format!("failed to load skills: {error}"),
-            })?;
+        let skills = agent007_skills::SkillLoader::load_from_dirs(
+            agent007_core::paths::skills_search_dirs(),
+        )
+        .map_err(|error| WorkflowError::StepFailed {
+            id: step.id.clone(),
+            reason: format!("failed to load skills: {error}"),
+        })?;
         return skills
             .into_iter()
             .find(|skill| skill.trigger() == skill_trigger)

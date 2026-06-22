@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use commands::checkpoint::CheckpointArgs;
 use commands::git::GitArgs;
 use commands::operator_tui::TuiArgs;
+use commands::pack::PackArgs;
 use commands::projects::ProjectsArgs;
 use commands::runtime_status::StatusArgs;
 
@@ -90,6 +91,8 @@ pub enum Commands {
     Persona(PersonaArgs),
     /// Manage the global project registry used by the agent007 Hub
     Projects(ProjectsArgs),
+    /// Discover and manage optional domain packs
+    Pack(PackArgs),
     /// Start the browser-based multi-project agent007 Hub
     Hub {
         /// Port to listen on (default: 8006)
@@ -341,6 +344,7 @@ async fn main() -> anyhow::Result<()> {
     // directory contains a missing or malformed project-local config.
     let command = match cli.command {
         Commands::Projects(projects) => return commands::projects::execute(projects.action).await,
+        Commands::Pack(pack) => return commands::pack::execute(pack.action).await,
         Commands::Hub { port, no_open } => return commands::hub::execute(port, !no_open).await,
         command => command,
     };
@@ -412,7 +416,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Simulate(args) => commands::simulate::execute(config, args).await,
         Commands::Test(args) => commands::test_pipeline::execute(config, args).await,
         Commands::Persona(p) => commands::persona::execute(config, p.action).await,
-        Commands::Projects(_) | Commands::Hub { .. } => unreachable!("handled before config load"),
+        Commands::Projects(_) | Commands::Pack(_) | Commands::Hub { .. } => {
+            unreachable!("handled before config load")
+        }
         Commands::Git(g) => commands::git::execute(config, g.action).await,
         Commands::Checkpoint(c) => commands::checkpoint::execute(config, c.action).await,
         Commands::Rollback { to } => {

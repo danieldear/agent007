@@ -1,0 +1,21 @@
+[package]
+name = "agent007-packs"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+agent007-sharing = { path = "../sharing" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+toml = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

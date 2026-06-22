@@ -4,6 +4,11 @@ Skills are reusable prompt templates triggered by `/slash-commands`. They're Mar
 
 Skills can be placed directly in the skills directory or organized into **subdirectories (skill folders)**. The loader scans recursively, so `~/.agent007/skills/my-team/review.md` is loaded the same as `~/.agent007/skills/review.md`. Folders are purely organizational; the trigger still controls routing.
 
+The built-in catalog is domain-neutral. Specialized finance, travel, scientific,
+or project-specific skills should ship as explicitly installed, namespaced domain
+packs rather than appearing in every initialized project. See
+[Catalog Architecture](./catalog-architecture.md).
+
 ## Frontmatter schema
 
 ```yaml
@@ -75,7 +80,7 @@ agent007 skill list
 # ...
 ```
 
-## Built-in skills (core set + optional specializations)
+## Built-in domain-neutral skills
 
 All built-in skills ship compiled into the binary and are available immediately after `agent007 init`.
 

@@ -21,6 +21,24 @@ agent007 workflow run tdd "Add rate limiting to the API"
 
 `agent007_dispatch` is additive convenience. Direct workflow tools still work.
 
+## Choose by intent, then depth
+
+The catalog groups workflows by user intent. Some workflows share an intent but
+apply a different level of ceremony; they are profiles, not exact duplicates.
+
+| Intent | Lightweight | Standard/specialized | Full-cycle |
+|---|---|---|---|
+| Discover | `brainstorm` | - | `ideation` |
+| Deliver | - | `tdd`, `sparc` | `feature` |
+| Review | `code-review` | - | `security-audit` for deep security assurance |
+| Diagnose | `log-analysis` | focused debugging skills | - |
+| Deliberate | - | - | `llm-council` |
+
+Use `tdd` for a bounded behavior with tests first, `sparc` for greenfield design,
+and `feature` when production delivery needs approvals, parallel reviews,
+documentation, and release sign-off. See [Catalog Architecture](./catalog-architecture.md)
+for the long-term intent/profile model and optional domain-pack boundary.
+
 ## Hosted-MCP mode
 
 For multi-step workflows where the host LLM executes each step:
@@ -164,6 +182,17 @@ Typical flow:
 ```
 brainstorm -> approval -> PRD + ideation doc
 ```
+
+---
+
+### `llm-council` — Deep peer deliberation
+**Use when:** An ambiguous or high-impact question benefits from independent
+perspectives, direct challenges, revised positions, and explicit dissent.
+
+The council frames the question, gathers parallel specialist views, routes
+cross-examination questions, asks each member to revise its position, and produces
+a decision memo with consensus, dissent, risks, evidence gaps, and next actions.
+It is intentionally heavier than `brainstorm` and remains advisory.
 
 ---
 

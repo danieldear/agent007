@@ -69,14 +69,8 @@ pub struct Stack {
 }
 
 fn configured_persona_registry() -> PersonaRegistry {
-    let mut dirs = Vec::new();
-    if let Some(project_home) = agent007_project_home() {
-        dirs.push(project_home.join("personas"));
-    }
-    let global_dir = agent007_global_home().join("personas");
-    if !dirs.iter().any(|dir| dir == &global_dir) {
-        dirs.push(global_dir);
-    }
+    let mut dirs = agent007_core::paths::persona_search_dirs();
+    dirs.reverse();
     PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
         .unwrap_or_else(|_| PersonaRegistry::built_in())
 }
@@ -655,6 +649,7 @@ async fn build_stack_inner(config: &Config, skip_rag_warmup: bool) -> Result<Sta
 
     // 10. SkillExecutor — needs Retriever (EmbeddingProvider + VectorDB) + ScopedMemoryStore
     let skills_dir = home.join("skills");
+    let skill_search_dirs = agent007_core::paths::skills_search_dirs();
     let vectordb_path = home.join("vectordb");
     std::fs::create_dir_all(&vectordb_path)?;
     let vectordb_path_str = vectordb_path.to_string_lossy().to_string();
@@ -672,7 +667,7 @@ async fn build_stack_inner(config: &Config, skip_rag_warmup: bool) -> Result<Sta
         config,
         &vectordb_path_str,
         &memory_store,
-        &skills_dir,
+        &skill_search_dirs,
         is_dry_run,
         skip_rag_warmup,
     )
@@ -777,7 +772,7 @@ async fn build_skill_executor(
     config: &Config,
     vectordb_path: &str,
     memory_store: &Arc<MemoryStore>,
-    skills_dir: &std::path::Path,
+    skill_dirs: &[std::path::PathBuf],
     is_dry_run: bool,
     skip_rag_warmup: bool,
 ) -> Result<(SkillExecutor, usize)> {
@@ -843,7 +838,7 @@ async fn build_skill_executor(
         // Warmup is optional (e.g. skipped by build_stack_for_web), but
         // write-path indexing should always run when RAG is enabled.
         if !skip_rag_warmup {
-            match warmup_retrieval_index(config, memory_store, skills_dir, &indexer).await {
+            match warmup_retrieval_index(config, memory_store, skill_dirs, &indexer).await {
                 Ok(count) => {
                     indexed_docs = count;
                 }
@@ -903,7 +898,7 @@ fn rag_warmup_enabled() -> bool {
 async fn warmup_retrieval_index(
     config: &Config,
     memory_store: &Arc<MemoryStore>,
-    skills_dir: &std::path::Path,
+    skill_dirs: &[std::path::PathBuf],
     indexer: &Indexer,
 ) -> Result<usize> {
     if !rag_warmup_enabled() {
@@ -917,7 +912,7 @@ async fn warmup_retrieval_index(
     let global_store = Arc::new(MemoryStore::new(agent007_global_home().join("memory")));
     indexed_docs += index_memory_scope(indexer, &global_store, "global").await?;
 
-    indexed_docs += index_skill_templates(indexer, skills_dir).await?;
+    indexed_docs += index_skill_templates(indexer, skill_dirs).await?;
     indexed_docs += index_configured_paths(indexer, config).await?;
 
     tracing::debug!(indexed_docs, "RAG warmup completed");
@@ -955,13 +950,11 @@ async fn index_memory_scope(
     Ok(indexed)
 }
 
-async fn index_skill_templates(indexer: &Indexer, skills_dir: &std::path::Path) -> Result<usize> {
-    if !skills_dir.exists() {
-        return Ok(0);
-    }
-    let loader = agent007_skills::SkillLoader::new(skills_dir);
-    let skills = loader
-        .load_all()
+async fn index_skill_templates(
+    indexer: &Indexer,
+    skill_dirs: &[std::path::PathBuf],
+) -> Result<usize> {
+    let skills = agent007_skills::SkillLoader::load_from_dirs(skill_dirs.iter().cloned())
         .map_err(|e| anyhow::anyhow!("failed to load skills for indexing: {}", e))?;
 
     let mut indexed = 0usize;
@@ -1239,15 +1232,10 @@ fn resolve_skill_template(
 ) -> Option<String> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     dirs.push(preferred_skills_dir.to_path_buf());
-    if let Some(project_home) = agent007_project_home() {
-        let project_dir = project_home.join("skills");
-        if !dirs.iter().any(|d| d == &project_dir) {
-            dirs.push(project_dir);
+    for dir in agent007_core::paths::skills_search_dirs() {
+        if !dirs.iter().any(|existing| existing == &dir) {
+            dirs.push(dir);
         }
-    }
-    let global_dir = agent007_global_home().join("skills");
-    if !dirs.iter().any(|d| d == &global_dir) {
-        dirs.push(global_dir);
     }
 
     let aliases = skill_name_aliases(skill_name);

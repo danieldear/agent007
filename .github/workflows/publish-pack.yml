@@ -1,0 +1,68 @@
+name: Publish Domain Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      pack_id:
+        description: Pack directory name under packs/
+        required: true
+        type: string
+      version:
+        description: Semantic version declared by pack.toml
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 1
+      RUSTFLAGS: -C debuginfo=0
+      AGENT007_SKIP_FRONTEND_BUILD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate requested identity
+        env:
+          PACK_ID: ${{ inputs.pack_id }}
+          PACK_VERSION: ${{ inputs.version }}
+        run: |
+          test "$PACK_ID" = "$(sed -n 's/^id = "\([^"]*\)"/\1/p' "packs/$PACK_ID/pack.toml")"
+          test "$PACK_VERSION" = "$(sed -n 's/^version = "\([^"]*\)"/\1/p' "packs/$PACK_ID/pack.toml")"
+
+      - name: Test and verify registry
+        run: |
+          cargo test -p agent007-packs --locked -j 1
+          cargo run -q -p agent007 -- pack verify-registry --registry registry/v1/index.json --refresh
+
+      - name: Build release artifact
+        env:
+          PACK_ID: ${{ inputs.pack_id }}
+          PACK_VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p dist
+          cargo run -q -p agent007 -- pack build "packs/$PACK_ID" \
+            --output "dist/$PACK_ID-$PACK_VERSION.a7bundle" --json
+          cp "packs/$PACK_ID/pack.toml" "dist/$PACK_ID-$PACK_VERSION.toml"
+          shasum -a 256 "dist/$PACK_ID-$PACK_VERSION.a7bundle" \
+            "dist/$PACK_ID-$PACK_VERSION.toml" > "dist/$PACK_ID-$PACK_VERSION.sha256"
+
+      - name: Publish immutable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACK_ID: ${{ inputs.pack_id }}
+          PACK_VERSION: ${{ inputs.version }}
+        run: |
+          tag="pack-$PACK_ID-v$PACK_VERSION"
+          gh release create "$tag" \
+            "dist/$PACK_ID-$PACK_VERSION.a7bundle" \
+            "dist/$PACK_ID-$PACK_VERSION.toml" \
+            "dist/$PACK_ID-$PACK_VERSION.sha256" \
+            --title "$PACK_ID $PACK_VERSION" \
+            --notes "agent007 domain pack $PACK_ID version $PACK_VERSION"

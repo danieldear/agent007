@@ -42,8 +42,8 @@ impl RepoBrainBuilder {
         let ecosystems = self.detect_ecosystems();
         let entrypoints = self.find_entrypoints();
         let workflows =
-            collect_file_stems(&self.agent_home.join("workflows"), &["toml", "yaml", "yml"])?;
-        let skills = collect_file_stems(&self.agent_home.join("skills"), &["md"])?;
+            collect_catalog_stems(&self.agent_home, "workflows", &["toml", "yaml", "yml"])?;
+        let skills = collect_catalog_stems(&self.agent_home, "skills", &["md"])?;
         let mut memory_notes =
             collect_file_stems(&self.agent_home.join("memory").join("project"), &["md"])?;
         memory_notes.extend(collect_sqlite_memory_keys(
@@ -174,6 +174,16 @@ fn collect_file_stems(dir: &Path, exts: &[&str]) -> Result<Vec<String>, CoreErro
         }
     }
     names.sort();
+    Ok(names)
+}
+
+fn collect_catalog_stems(home: &Path, kind: &str, exts: &[&str]) -> Result<Vec<String>, CoreError> {
+    let mut names = collect_file_stems(&home.join(kind), exts)?;
+    for dir in crate::paths::enabled_pack_asset_dirs(home, kind) {
+        names.extend(collect_file_stems(&dir, exts)?);
+    }
+    names.sort();
+    names.dedup();
     Ok(names)
 }
 

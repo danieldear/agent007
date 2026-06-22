@@ -92,8 +92,16 @@ fn collect_skill_specs(write_home: &Path) -> Vec<(String, String, String)> {
     let mut specs = Vec::new();
     let mut seen = HashSet::new();
 
-    for home in asset_homes_for_sync(write_home) {
-        let skills_dir = home.join("skills");
+    for skills_dir in asset_homes_for_sync(write_home)
+        .into_iter()
+        .flat_map(|home| {
+            let mut dirs = vec![home.join("skills")];
+            dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(
+                &home, "skills",
+            ));
+            dirs
+        })
+    {
         if !skills_dir.exists() {
             continue;
         }
@@ -122,8 +130,17 @@ fn collect_workflow_specs(write_home: &Path) -> Vec<(String, String)> {
     let mut specs = Vec::new();
     let mut seen = HashSet::new();
 
-    for home in asset_homes_for_sync(write_home) {
-        let workflows_dir = home.join("workflows");
+    for workflows_dir in asset_homes_for_sync(write_home)
+        .into_iter()
+        .flat_map(|home| {
+            let mut dirs = vec![home.join("workflows")];
+            dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(
+                &home,
+                "workflows",
+            ));
+            dirs
+        })
+    {
         if !workflows_dir.exists() {
             continue;
         }

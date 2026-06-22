@@ -2,6 +2,7 @@ use super::run::{agent007_home, build_stack};
 use crate::config::Config;
 use anyhow::Result;
 use clap::Subcommand;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -50,26 +51,15 @@ pub enum WorkflowAction {
 }
 
 pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> {
-    let workflows_dir = agent007_home().join("workflows");
-    let loader = agent007_workflows::WorkflowLoader::new(workflows_dir.clone());
-
     match action {
         WorkflowAction::List => {
-            let names = loader.list_names()?;
-            if names.is_empty() {
-                println!("No workflows found in {}", workflows_dir.display());
-                println!(
-                    "Add TOML files to {} to create workflows.",
-                    workflows_dir.display()
-                );
+            let workflows = available_workflows()?;
+            if workflows.is_empty() {
+                println!("No workflows found in configured project, global, or pack catalogs.");
             } else {
-                println!("Available workflows (in {}):", workflows_dir.display());
-                for name in &names {
-                    let desc = loader
-                        .load_named(name)
-                        .ok()
-                        .and_then(|d| d.description)
-                        .unwrap_or_default();
+                println!("Available workflows:");
+                for (name, def) in workflows {
+                    let desc = def.description.unwrap_or_default();
                     if desc.is_empty() {
                         println!("  {}", name);
                     } else {
@@ -80,7 +70,7 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
         }
 
         WorkflowAction::Validate { name } => {
-            let def = loader.load_named(&name)?;
+            let def = load_workflow(&name)?;
             // DAG validation is intentionally structural-only.  Do not build the
             // full runtime stack here: doing so initializes model routing,
             // memory/vector indexes, and repo-graph watchers, which makes a
@@ -104,7 +94,7 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
         }
 
         WorkflowAction::Show { name } => {
-            let def = loader.load_named(&name)?;
+            let def = load_workflow(&name)?;
             println!("Workflow: {}", def.name);
             if let Some(desc) = &def.description {
                 println!("Description: {}", desc);
@@ -146,7 +136,7 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
         }
 
         WorkflowAction::Run { name, task } => {
-            let def = loader.load_named(&name)?;
+            let def = load_workflow(&name)?;
             println!("Running workflow '{}' with task: {}", name, task);
             execute_workflow_run(config.clone(), def, task, "workflow-cli", None, Some(name))
                 .await?;
@@ -165,7 +155,7 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
                 .unwrap_or_else(|| request.workflow.clone());
             let state: agent007_workflows::WorkflowRunState =
                 store.read_json_artifact(&session, "workflow-state.json")?;
-            let def = loader.load_named(&workflow_ref)?;
+            let def = load_workflow(&workflow_ref)?;
             println!(
                 "Resuming workflow '{}' from session {} ({}/{} steps complete)",
                 request.workflow, session, state.steps_completed, state.steps_total,
@@ -211,6 +201,42 @@ pub async fn execute(config: Arc<Config>, action: WorkflowAction) -> Result<()> 
     }
 
     Ok(())
+}
+
+fn load_workflow(name: &str) -> Result<agent007_workflows::WorkflowDef> {
+    for dir in agent007_core::paths::workflow_search_dirs() {
+        let loader = agent007_workflows::WorkflowLoader::new(dir);
+        match loader.load_named(name) {
+            Ok(def) => return Ok(def),
+            Err(agent007_workflows::WorkflowError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    anyhow::bail!(
+        "workflow '{}' not found in configured project, global, or pack catalogs",
+        name
+    )
+}
+
+fn available_workflows() -> Result<BTreeMap<String, agent007_workflows::WorkflowDef>> {
+    let mut workflows = BTreeMap::new();
+    for dir in agent007_core::paths::workflow_search_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        let loader = agent007_workflows::WorkflowLoader::new(dir);
+        for name in loader.list_names()? {
+            if workflows.contains_key(&name) {
+                continue;
+            }
+            workflows.insert(name.clone(), loader.load_named(&name)?);
+        }
+    }
+    Ok(workflows)
 }
 
 pub async fn execute_workflow_run(

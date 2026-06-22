@@ -6,6 +6,7 @@ const { api, loading } = useApi()
 const personas = ref([])
 const showForm = ref(false)
 const editTarget = ref(null)
+const editSource = ref(null)
 
 const KNOWN_TOOLS = [
   { name: 'bash',       desc: 'shell execution' },
@@ -35,12 +36,14 @@ async function loadPersonas() {
 
 function openCreate() {
   editTarget.value = null
+  editSource.value = null
   form.value = { name: '', description: '', preferred_model: 'claude-sonnet-4-6', allowed_tools: [], custom_tools: '', system_prompt: '' }
   showForm.value = true
 }
 
 function openEdit(p) {
   editTarget.value = p.name
+  editSource.value = p.source || null
   const all = p.allowed_tools || []
   form.value = {
     name: p.name,
@@ -64,7 +67,22 @@ async function savePersona() {
   }
   await api.savePersona(payload)
   showForm.value = false
+  editSource.value = null
   await loadPersonas()
+}
+
+function sourceLabel(source) {
+  return ({
+    project: 'proj',
+    global: 'global',
+    'project-pack': 'proj pack',
+    'global-pack': 'global pack',
+    'built-in': 'built in',
+  })[source] || source || 'built in'
+}
+
+function isReadOnlySource(source) {
+  return source === 'project-pack' || source === 'global-pack' || source === 'built-in'
 }
 
 async function deletePersona(name) {
@@ -104,11 +122,12 @@ function clearAllTools() {
                 <p class="text-[11px] font-mono text-base-content/45 mt-1 leading-relaxed">{{ p.description }}</p>
               </div>
               <div class="flex gap-1 shrink-0">
-                <button class="btn btn-ghost btn-xs font-mono text-[11px]" @click="openEdit(p)">edit</button>
-                <button class="btn btn-ghost btn-xs font-mono text-[11px] text-error/70 hover:text-error" @click="deletePersona(p.name)">del</button>
+                <button class="btn btn-ghost btn-xs font-mono text-[11px]" @click="openEdit(p)">{{ isReadOnlySource(p.source) ? 'override' : 'edit' }}</button>
+                <button v-if="p.can_delete !== false" class="btn btn-ghost btn-xs font-mono text-[11px] text-error/70 hover:text-error" @click="deletePersona(p.name)">del</button>
               </div>
             </div>
             <div class="mt-3 flex flex-wrap gap-1.5">
+              <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-warning/25 text-warning/70 bg-warning/5">{{ sourceLabel(p.source) }}</span>
               <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-info/30 text-info/70 bg-info/5">{{ p.preferred_model }}</span>
               <span
                 v-for="tool in (p.allowed_tools || []).slice(0, 5)"
@@ -149,6 +168,9 @@ function clearAllTools() {
 
         <!-- Body -->
         <div class="p-5 space-y-4">
+          <div v-if="isReadOnlySource(editSource)" class="rounded border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] font-mono text-warning/80">
+            This persona is {{ editSource === 'built-in' ? 'built in' : 'provided by an enabled pack' }}. Saving creates a writable project/global override; the original is not modified.
+          </div>
           <!-- Name -->
           <div>
             <div class="text-[10px] font-mono text-base-content/40 uppercase tracking-widest mb-1.5">name</div>
@@ -242,7 +264,7 @@ function clearAllTools() {
             class="btn btn-sm btn-primary font-mono text-xs px-4"
             @click="savePersona"
             :disabled="!form.name"
-          >{{ editTarget ? 'save changes' : 'save agent' }}</button>
+          >{{ editTarget ? (isReadOnlySource(editSource) ? 'save override' : 'save changes') : 'save agent' }}</button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop"><button @click="showForm = false; editTarget = null">close</button></form>

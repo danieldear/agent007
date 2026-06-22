@@ -95,7 +95,7 @@ mod tests {
     fn report_roundtrip() {
         let r = SimulationReport {
             run_id: "r1".into(),
-            template_name: "wifi-rtt".into(),
+            template_name: "checkout-flow".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
             scenarios_run: 5,
             scenarios_passed: 5,
@@ -106,7 +106,7 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: SimulationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back.run_id, "r1");
-        assert_eq!(back.template_name, "wifi-rtt");
+        assert_eq!(back.template_name, "checkout-flow");
     }
 
     #[test]
