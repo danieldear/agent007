@@ -11,9 +11,10 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -983,7 +984,7 @@ pub fn enabled_pack_roots(home: &Path) -> Vec<PathBuf> {
     };
     lock.packs
         .values()
-        .filter(|pack| pack.enabled)
+        .filter(|pack| pack.enabled && locked_pack_has_safe_root_components(pack))
         .map(|pack| pack_version_dir(home, &pack.id, &pack.version))
         .filter(|path| path.is_dir())
         .collect()
@@ -991,6 +992,24 @@ pub fn enabled_pack_roots(home: &Path) -> Vec<PathBuf> {
 
 pub fn pack_version_dir(home: &Path, id: &str, version: &str) -> PathBuf {
     home.join("packs").join(id).join(version)
+}
+
+fn locked_pack_has_safe_root_components(pack: &LockedPack) -> bool {
+    validate_pack_id(&pack.id).is_ok()
+        && Version::parse(&pack.version).is_ok()
+        && is_safe_lock_path_component(&pack.id)
+        && is_safe_lock_path_component(&pack.version)
+}
+
+fn is_safe_lock_path_component(value: &str) -> bool {
+    if value.is_empty() || value.contains(['/', '\\']) {
+        return false;
+    }
+    let mut components = Path::new(value).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(component)), None) if component == OsStr::new(value)
+    )
 }
 
 /// Build a text-safe `.a7bundle` v1 artifact from a pack source directory.
@@ -1550,6 +1569,46 @@ packs = []
         manager.uninstall("example-hello").unwrap();
         assert!(!install_home.join("packs/example-hello").exists());
         assert!(manager.load_lock().unwrap().packs.is_empty());
+    }
+
+    #[test]
+    fn enabled_pack_roots_ignores_tampered_lock_path_components() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path().join("home");
+        let good_root = pack_version_dir(&home, "lock-good", "1.0.0");
+        fs::create_dir_all(&good_root).unwrap();
+        fs::create_dir_all(home.join("escaped/1.0.0")).unwrap();
+        fs::create_dir_all(home.join("packs/evil")).unwrap();
+
+        let locked = |id: &str, version: &str| LockedPack {
+            id: id.to_string(),
+            version: version.to_string(),
+            enabled: true,
+            installed_at: Utc::now().to_rfc3339(),
+            registry: "fixture".to_string(),
+            artifact_sha256: "a".repeat(64),
+            manifest_sha256: "b".repeat(64),
+            history: vec![],
+        };
+
+        let mut lock = PackLock::default();
+        lock.packs
+            .insert("bad-id".to_string(), locked("../escaped", "1.0.0"));
+        lock.packs.insert(
+            "bad-version".to_string(),
+            locked("example-hello", "../evil"),
+        );
+        lock.packs
+            .insert("valid".to_string(), locked("lock-good", "1.0.0"));
+
+        fs::create_dir_all(home.join("packs")).unwrap();
+        fs::write(
+            home.join("packs/lock.json"),
+            serde_json::to_vec_pretty(&lock).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(enabled_pack_roots(&home), vec![good_root]);
     }
 
     #[tokio::test]
