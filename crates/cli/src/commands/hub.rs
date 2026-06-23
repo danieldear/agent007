@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use agent007_core::{RunStatus, RunStore};
+use agent007_packs::{LockedPack, PackInspection, PackManager, RegistryPack, DEFAULT_REGISTRY_URL};
 use anyhow::{Context, Result};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -28,6 +29,7 @@ struct HubState {
     registry_path: PathBuf,
     ports_path: PathBuf,
     global_home: PathBuf,
+    pack_registry: String,
     mutation_token: String,
 }
 
@@ -143,12 +145,41 @@ struct SetCredentialRequest {
     api_key: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct PackMutationRequest {
+    version: Option<String>,
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct HubPack {
+    id: String,
+    name: String,
+    description: String,
+    categories: Vec<String>,
+    versions: Vec<String>,
+    latest_version: Option<String>,
+    installed_version: Option<String>,
+    enabled: bool,
+    update_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct HubPackInventory {
+    registry: String,
+    from_cache: bool,
+    packs: Vec<HubPack>,
+}
+
 pub async fn execute(port: u16, open_browser: bool) -> Result<()> {
     let global_home = agent007_core::paths::agent007_global_home();
     let state = HubState {
         registry_path: default_registry_path(),
         ports_path: global_home.join("ports.toml"),
         global_home,
+        pack_registry: std::env::var("AGENT007_PACK_REGISTRY")
+            .unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string()),
         mutation_token: Uuid::new_v4().to_string(),
     };
     let app = router(state);
@@ -175,6 +206,16 @@ fn router(state: HubState) -> Router {
         .route("/api/health", get(api_health))
         .route("/api/projects", get(api_hub))
         .route("/api/hub", get(api_hub))
+        .route("/api/packs", get(api_packs))
+        .route(
+            "/api/packs/{id}",
+            get(api_inspect_pack).delete(api_uninstall_pack),
+        )
+        .route("/api/packs/{id}/install", post(api_install_pack))
+        .route("/api/packs/{id}/enable", post(api_enable_pack))
+        .route("/api/packs/{id}/disable", post(api_disable_pack))
+        .route("/api/packs/{id}/update", post(api_update_pack))
+        .route("/api/packs/{id}/rollback", post(api_rollback_pack))
         .route(
             "/api/credentials/{provider}",
             put(api_set_credential).delete(api_delete_credential),
@@ -188,6 +229,179 @@ fn router(state: HubState) -> Router {
                 .delete(api_delete_asset),
         )
         .with_state(state)
+}
+
+async fn api_inspect_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<PackInspection>, AssetApiError> {
+    hub_pack_manager(&state)?
+        .inspect(&id, None, false)
+        .await
+        .map(Json)
+        .map_err(pack_bad_request)
+}
+
+fn hub_pack_manager(state: &HubState) -> Result<PackManager, AssetApiError> {
+    PackManager::new(
+        &state.global_home,
+        &state.pack_registry,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .map_err(|error| AssetError::Io(error.to_string()).into())
+}
+
+async fn api_packs(State(state): State<HubState>) -> Result<Json<HubPackInventory>, AssetApiError> {
+    let manager = hub_pack_manager(&state)?;
+    let snapshot = manager
+        .registry(false)
+        .await
+        .map_err(|error| AssetError::Io(error.to_string()))?;
+    let lock = manager
+        .load_lock()
+        .map_err(|error| AssetError::Io(error.to_string()))?;
+    let mut packs = snapshot
+        .index
+        .packs
+        .into_iter()
+        .map(|pack| {
+            let installed = lock.packs.get(&pack.id);
+            hub_pack_record(pack, installed)
+        })
+        .collect::<Vec<_>>();
+    packs.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(Json(HubPackInventory {
+        registry: snapshot.source,
+        from_cache: snapshot.from_cache,
+        packs,
+    }))
+}
+
+async fn api_install_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<PackMutationRequest>,
+) -> Result<Json<Value>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    let result = manager
+        .install(&id, request.version.as_deref(), true, request.refresh)
+        .await
+        .map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(serde_json::to_value(result).unwrap_or(Value::Null)))
+}
+
+async fn api_enable_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<LockedPack>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    let pack = manager.enable(&id).map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(pack))
+}
+
+async fn api_disable_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<LockedPack>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    let pack = manager.disable(&id).map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(pack))
+}
+
+async fn api_update_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<PackMutationRequest>,
+) -> Result<Json<Value>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    let result = manager
+        .update(&id, request.refresh)
+        .await
+        .map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(serde_json::to_value(result).unwrap_or(Value::Null)))
+}
+
+async fn api_rollback_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<LockedPack>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    let pack = manager.rollback(&id).map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(pack))
+}
+
+async fn api_uninstall_pack(
+    State(state): State<HubState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AssetApiError> {
+    require_mutation_access(&headers, &state)?;
+    let manager = hub_pack_manager(&state)?;
+    manager.uninstall(&id).map_err(pack_bad_request)?;
+    sync_pack_commands(&manager);
+    Ok(Json(json!({"status": "removed", "id": id})))
+}
+
+fn sync_pack_commands(manager: &PackManager) {
+    if let Err(error) = super::slash_commands::sync_claude_slash_commands_for_home(manager.home()) {
+        tracing::warn!("pack state changed but slash-command sync failed: {error}");
+    }
+}
+
+fn pack_bad_request(error: anyhow::Error) -> AssetApiError {
+    AssetError::BadRequest(error.to_string()).into()
+}
+
+fn hub_pack_record(pack: RegistryPack, installed: Option<&LockedPack>) -> HubPack {
+    let mut versions = pack
+        .versions
+        .iter()
+        .filter(|version| !version.yanked)
+        .filter_map(|version| semver::Version::parse(&version.version).ok())
+        .collect::<Vec<_>>();
+    versions.sort();
+    let latest_version = versions.last().map(ToString::to_string);
+    let installed_version = installed.map(|pack| pack.version.clone());
+    let update_available = match (&latest_version, &installed_version) {
+        (Some(latest), Some(installed)) => match (
+            semver::Version::parse(latest),
+            semver::Version::parse(installed),
+        ) {
+            (Ok(latest), Ok(installed)) => latest > installed,
+            _ => false,
+        },
+        _ => false,
+    };
+    HubPack {
+        id: pack.id,
+        name: pack.name,
+        description: pack.description,
+        categories: pack.categories,
+        versions: versions
+            .into_iter()
+            .rev()
+            .map(|version| version.to_string())
+            .collect(),
+        latest_version,
+        installed_version,
+        enabled: installed.is_some_and(|pack| pack.enabled),
+        update_available,
+    }
 }
 
 async fn api_set_credential(
@@ -255,7 +469,7 @@ async fn api_get_asset(
 ) -> Result<Json<AssetDocument>, AssetApiError> {
     let kind = AssetKind::parse(&kind)?;
     GlobalAssetStore::new(state.global_home)
-        .get(kind, &id)
+        .get_effective(kind, &id)
         .map(Json)
         .map_err(Into::into)
 }
@@ -604,9 +818,11 @@ fn dashboard_port_for(path: &str, ports: &HashMap<String, u16>) -> Option<u16> {
 fn load_assets(global_home: &Path) -> AssetInventory {
     let store = GlobalAssetStore::new(global_home);
     AssetInventory {
-        skills: store.list(AssetKind::Skill).unwrap_or_default(),
-        workflows: store.list(AssetKind::Workflow).unwrap_or_default(),
-        personas: store.list(AssetKind::Persona).unwrap_or_default(),
+        skills: store.list_effective(AssetKind::Skill).unwrap_or_default(),
+        workflows: store
+            .list_effective(AssetKind::Workflow)
+            .unwrap_or_default(),
+        personas: store.list_effective(AssetKind::Persona).unwrap_or_default(),
     }
 }
 
@@ -853,6 +1069,7 @@ mod tests {
             registry_path,
             ports_path,
             global_home,
+            pack_registry: DEFAULT_REGISTRY_URL.to_string(),
             mutation_token: "test-token".to_string(),
         })
         .await
@@ -930,6 +1147,11 @@ mod tests {
         assert!(HUB_HTML.contains("treeInitialized"));
         assert!(HUB_HTML.contains("data-view=\"skills\""));
         assert!(HUB_HTML.contains("data-view=\"settings\""));
+        assert!(HUB_HTML.contains("data-view=\"packs\""));
+        assert!(HUB_HTML.contains("/api/packs/"));
+        assert!(HUB_HTML.contains("id=\"pack-search\""));
+        assert!(HUB_HTML.contains("global scope"));
+        assert!(HUB_HTML.contains("Verified before activation"));
         assert!(HUB_HTML.contains("api('/api/hub'"));
         assert!(HUB_HTML.contains("/api/credentials/"));
         assert!(HUB_HTML.contains("type=\"password\""));
@@ -942,7 +1164,59 @@ mod tests {
         }
         assert!(HUB_HTML.contains("id=\"asset-source\""));
         assert!(HUB_HTML.contains("id=\"asset-bump\""));
+        assert!(HUB_HTML.contains("class=\"asset-copy\""));
+        assert!(HUB_HTML.contains("class=\"asset-title-line\""));
+        assert!(HUB_HTML.contains("class=\"asset-row-meta\""));
         assert!(HUB_HTML.contains("X-Agent007-Hub-Token"));
+    }
+
+    #[test]
+    fn hub_pack_record_uses_semver_and_local_state() {
+        let pack = RegistryPack {
+            id: "example".to_string(),
+            name: "Example".to_string(),
+            description: "Example pack".to_string(),
+            categories: vec!["testing".to_string()],
+            tags: vec![],
+            versions: vec![
+                agent007_packs::RegistryPackVersion {
+                    version: "1.9.0".to_string(),
+                    min_agent007: "0.6.0".to_string(),
+                    manifest_url: "manifest".to_string(),
+                    manifest_sha256: "a".repeat(64),
+                    artifact_url: "artifact".to_string(),
+                    artifact_sha256: "b".repeat(64),
+                    size_bytes: 1,
+                    published_at: "2026-06-18T00:00:00Z".to_string(),
+                    yanked: false,
+                },
+                agent007_packs::RegistryPackVersion {
+                    version: "1.10.0".to_string(),
+                    min_agent007: "0.6.0".to_string(),
+                    manifest_url: "manifest".to_string(),
+                    manifest_sha256: "a".repeat(64),
+                    artifact_url: "artifact".to_string(),
+                    artifact_sha256: "b".repeat(64),
+                    size_bytes: 1,
+                    published_at: "2026-06-18T00:00:00Z".to_string(),
+                    yanked: false,
+                },
+            ],
+        };
+        let installed = LockedPack {
+            id: "example".to_string(),
+            version: "1.9.0".to_string(),
+            enabled: true,
+            installed_at: "2026-06-18T00:00:00Z".to_string(),
+            registry: "fixture".to_string(),
+            artifact_sha256: "b".repeat(64),
+            manifest_sha256: "a".repeat(64),
+            history: vec![],
+        };
+        let record = hub_pack_record(pack, Some(&installed));
+        assert_eq!(record.latest_version.as_deref(), Some("1.10.0"));
+        assert!(record.enabled);
+        assert!(record.update_available);
     }
 
     #[test]
@@ -951,6 +1225,7 @@ mod tests {
             registry_path: PathBuf::new(),
             ports_path: PathBuf::new(),
             global_home: PathBuf::new(),
+            pack_registry: DEFAULT_REGISTRY_URL.to_string(),
             mutation_token: "secret".to_string(),
         };
         let mut headers = HeaderMap::new();

@@ -46,6 +46,24 @@ impl WorkflowLoader {
         )))
     }
 
+    /// Resolve a workflow from ordered directories, returning the first match.
+    pub fn load_named_from_dirs(
+        dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+        name: &str,
+    ) -> Result<WorkflowDef, WorkflowError> {
+        for dir in dirs.into_iter().map(Into::into) {
+            match Self::new(dir).load_named(name) {
+                Ok(def) => return Ok(def),
+                Err(WorkflowError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(WorkflowError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("workflow '{name}' not found in configured catalogs"),
+        )))
+    }
+
     /// Return all short names (stem of .toml/.yaml/.yml files) in the loader directory.
     /// Returns empty vec if the directory does not exist.
     pub fn list_names(&self) -> Result<Vec<String>, WorkflowError> {
@@ -134,6 +152,29 @@ output = "notes"
         let loader = WorkflowLoader::new(dir.path().to_path_buf());
         let def = loader.load_named("my-flow").unwrap();
         assert_eq!(def.name, "Sample");
+    }
+
+    #[test]
+    fn load_named_from_dirs_uses_first_match() {
+        let manual = tempdir().unwrap();
+        let pack = tempdir().unwrap();
+        fs::write(
+            manual.path().join("flow.toml"),
+            SAMPLE_TOML.replace("Sample", "Manual"),
+        )
+        .unwrap();
+        fs::write(
+            pack.path().join("flow.toml"),
+            SAMPLE_TOML.replace("Sample", "Pack"),
+        )
+        .unwrap();
+
+        let def = WorkflowLoader::load_named_from_dirs(
+            [manual.path().to_path_buf(), pack.path().to_path_buf()],
+            "flow",
+        )
+        .unwrap();
+        assert_eq!(def.name, "Manual");
     }
 
     #[test]

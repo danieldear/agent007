@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Write;
@@ -84,8 +85,12 @@ pub struct AssetSummary {
     pub version: String,
     pub format: String,
     pub revision: String,
-    pub source: &'static str,
+    pub source: String,
     pub editable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack_version: Option<String>,
     pub valid: bool,
     pub validation_errors: Vec<String>,
 }
@@ -172,10 +177,80 @@ impl GlobalAssetStore {
         Ok(assets)
     }
 
+    /// List user-managed global assets plus assets contributed by enabled packs.
+    ///
+    /// Pack assets are deliberately read-only here. Their bytes are verified and
+    /// lifecycle-managed by the pack manager, so edits must happen in the source
+    /// pack followed by a versioned registry update rather than in-place.
+    pub fn list_effective(&self, kind: AssetKind) -> Result<Vec<AssetSummary>, AssetError> {
+        let mut assets = self.list(kind)?;
+        let mut seen = assets
+            .iter()
+            .map(|asset| asset.id.clone())
+            .collect::<HashSet<_>>();
+
+        for root in agent007_packs::enabled_pack_roots(&self.global_home) {
+            let Some((pack_id, pack_version)) = pack_identity(&root) else {
+                continue;
+            };
+            for (id, path) in asset_files(&root.join(kind.plural()), kind)? {
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                if let Ok(document) = self.read_document_at(
+                    kind,
+                    path,
+                    id,
+                    "pack",
+                    false,
+                    Some(pack_id.clone()),
+                    Some(pack_version.clone()),
+                ) {
+                    assets.push(document.summary);
+                }
+            }
+        }
+
+        assets.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        Ok(assets)
+    }
+
     pub fn get(&self, kind: AssetKind, id: &str) -> Result<AssetDocument, AssetError> {
         validate_id(id)?;
         let path = self.find_existing(kind, id)?;
         self.read_document(kind, path)
+    }
+
+    /// Open a global asset or, when no global override exists, an enabled pack
+    /// asset. Global assets retain the same precedence as runtime catalog loading.
+    pub fn get_effective(&self, kind: AssetKind, id: &str) -> Result<AssetDocument, AssetError> {
+        validate_id(id)?;
+        match self.get(kind, id) {
+            Ok(document) => return Ok(document),
+            Err(AssetError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+
+        for root in agent007_packs::enabled_pack_roots(&self.global_home) {
+            let Some((pack_id, pack_version)) = pack_identity(&root) else {
+                continue;
+            };
+            for (candidate_id, path) in asset_files(&root.join(kind.plural()), kind)? {
+                if candidate_id == id {
+                    return self.read_document_at(
+                        kind,
+                        path,
+                        candidate_id,
+                        "pack",
+                        false,
+                        Some(pack_id),
+                        Some(pack_version),
+                    );
+                }
+            }
+        }
+
+        Err(AssetError::NotFound(format!("{kind} '{id}' was not found")))
     }
 
     pub fn validate(
@@ -349,6 +424,25 @@ impl GlobalAssetStore {
     }
 
     fn read_document(&self, kind: AssetKind, path: PathBuf) -> Result<AssetDocument, AssetError> {
+        let id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| AssetError::Forbidden("asset filename is not valid UTF-8".to_string()))?
+            .to_string();
+        self.read_document_at(kind, path, id, "global", true, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn read_document_at(
+        &self,
+        kind: AssetKind,
+        path: PathBuf,
+        id: String,
+        source: &str,
+        editable: bool,
+        pack_id: Option<String>,
+        pack_version: Option<String>,
+    ) -> Result<AssetDocument, AssetError> {
         ensure_safe_file(&path)?;
         let metadata =
             fs::metadata(&path).map_err(|error| io_error("inspect global asset", error))?;
@@ -365,11 +459,6 @@ impl GlobalAssetStore {
             .and_then(|value| value.to_str())
             .unwrap_or(kind.default_extension())
             .to_ascii_lowercase();
-        let id = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| AssetError::Forbidden("asset filename is not valid UTF-8".to_string()))?
-            .to_string();
         let (identity, valid, validation_errors) =
             match validate_content(kind, &extension, &content) {
                 Ok(identity) => (identity, true, Vec::new()),
@@ -393,8 +482,10 @@ impl GlobalAssetStore {
                 version: identity.version,
                 format: extension,
                 revision: revision(content.as_bytes()),
-                source: "global",
-                editable: true,
+                source: source.to_string(),
+                editable,
+                pack_id,
+                pack_version,
                 valid,
                 validation_errors,
             },
@@ -425,6 +516,43 @@ impl GlobalAssetStore {
             .map(|_| ())
             .map_err(|error| io_error("back up global asset", error))
     }
+}
+
+fn pack_identity(root: &Path) -> Option<(String, String)> {
+    let version = root.file_name()?.to_str()?.to_string();
+    let id = root.parent()?.file_name()?.to_str()?.to_string();
+    Some((id, version))
+}
+
+fn asset_files(root: &Path, kind: AssetKind) -> Result<Vec<(String, PathBuf)>, AssetError> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    ensure_safe_directory(root)?;
+    let mut files = fs::read_dir(root)
+        .map_err(|error| io_error("read pack asset directory", error))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_symlink() {
+                return None;
+            }
+            let path = entry.path();
+            if kind == AssetKind::Skill && file_type.is_dir() {
+                let manifest = path.join("SKILL.md");
+                let id = path.file_name()?.to_str()?.to_string();
+                return manifest.is_file().then_some((id, manifest));
+            }
+            if !file_type.is_file() {
+                return None;
+            }
+            let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+            let id = path.file_stem()?.to_str()?.to_string();
+            kind.supports_extension(&extension).then_some((id, path))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
 }
 
 #[derive(Debug)]
@@ -1017,5 +1145,89 @@ system_prompt = "Do excellent work."
         let opened = store.get(AssetKind::Skill, "broken").unwrap();
         assert_eq!(opened.summary.name, "Broken");
         assert!(opened.content.contains("trigger: invalid"));
+    }
+
+    #[test]
+    fn enabled_pack_assets_are_visible_and_read_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let pack_root = home.join("packs/example/1.2.3");
+        fs::create_dir_all(pack_root.join("skills")).unwrap();
+        fs::write(pack_root.join("skills/packed.md"), SKILL).unwrap();
+        fs::create_dir_all(pack_root.join("skills/package-skill")).unwrap();
+        fs::write(pack_root.join("skills/package-skill/SKILL.md"), SKILL).unwrap();
+        fs::write(
+            home.join("packs/lock.json"),
+            r#"{
+              "schema_version": 1,
+              "packs": {
+                "example": {
+                  "id": "example",
+                  "version": "1.2.3",
+                  "enabled": true,
+                  "installed_at": "2026-06-19T00:00:00Z",
+                  "registry": "fixture",
+                  "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "history": []
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let store = GlobalAssetStore::new(home);
+        let listed = store.list_effective(AssetKind::Skill).unwrap();
+        assert_eq!(listed.len(), 2);
+        let packed = listed.iter().find(|asset| asset.id == "packed").unwrap();
+        assert_eq!(packed.source, "pack");
+        assert!(!packed.editable);
+        assert_eq!(packed.pack_id.as_deref(), Some("example"));
+        assert_eq!(packed.pack_version.as_deref(), Some("1.2.3"));
+
+        let opened = store.get_effective(AssetKind::Skill, "packed").unwrap();
+        assert_eq!(opened.summary.source, "pack");
+        assert!(!opened.summary.editable);
+        assert!(opened.content.contains("Do the demo work"));
+        let package = store
+            .get_effective(AssetKind::Skill, "package-skill")
+            .unwrap();
+        assert_eq!(package.summary.source, "pack");
+        assert!(package.content.contains("Do the demo work"));
+    }
+
+    #[test]
+    fn disabled_pack_assets_are_not_in_effective_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let pack_root = home.join("packs/example/1.2.3");
+        fs::create_dir_all(pack_root.join("skills")).unwrap();
+        fs::write(pack_root.join("skills/packed.md"), SKILL).unwrap();
+        fs::write(
+            home.join("packs/lock.json"),
+            r#"{
+              "schema_version": 1,
+              "packs": {
+                "example": {
+                  "id": "example",
+                  "version": "1.2.3",
+                  "enabled": false,
+                  "installed_at": "2026-06-19T00:00:00Z",
+                  "registry": "fixture",
+                  "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "history": []
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let store = GlobalAssetStore::new(home);
+        assert!(store.list_effective(AssetKind::Skill).unwrap().is_empty());
+        assert!(matches!(
+            store.get_effective(AssetKind::Skill, "packed"),
+            Err(AssetError::NotFound(_))
+        ));
     }
 }

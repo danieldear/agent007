@@ -2108,9 +2108,10 @@ impl ServerHandler for Agent007Server {
                         .clone()
                         .unwrap_or_else(|| persona.name.clone());
                     let scoped = Arc::new(stack.memory_store.scoped(&ns));
-                    let skills_dir = agent007_home().join("skills");
                     let skill_provider: Arc<dyn agent007_skills::SkillContentProvider> =
-                        match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                        match agent007_skills::SkillLoader::load_from_dirs(
+                            agent007_core::paths::skills_search_dirs(),
+                        ) {
                             Ok(skills) => {
                                 Arc::new(agent007_skills::SkillIndex::from_skills(skills))
                             }
@@ -2470,45 +2471,24 @@ struct DynamicWorkflowTool {
     description: Option<String>,
 }
 
-fn configured_agent007_homes() -> Vec<PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![PathBuf::from(home)];
-    }
-
-    let mut homes = Vec::new();
-    if let Some(project_home) = agent007_project_home() {
-        homes.push(project_home);
-    }
-    let global_home = agent007_global_home();
-    if !homes.iter().any(|home| home == &global_home) {
-        homes.push(global_home);
-    }
-    homes
-}
-
 fn configured_skill_dirs() -> Vec<PathBuf> {
-    configured_agent007_homes()
-        .into_iter()
-        .map(|home| home.join("skills"))
-        .collect()
+    agent007_core::paths::skills_search_dirs()
 }
 
 fn configured_workflow_dirs() -> Vec<PathBuf> {
-    configured_agent007_homes()
-        .into_iter()
-        .map(|home| home.join("workflows"))
-        .collect()
+    agent007_core::paths::workflow_search_dirs()
 }
 
 fn configured_persona_dirs() -> Vec<PathBuf> {
-    configured_agent007_homes()
-        .into_iter()
-        .map(|home| home.join("personas"))
-        .collect()
+    agent007_core::paths::persona_search_dirs()
 }
 
 fn configured_persona_registry() -> agent007_personas::PersonaRegistry {
-    let dirs = configured_persona_dirs();
+    // Search directories are highest-precedence first, while PersonaRegistry
+    // applies later directories last. Reverse so project/user assets keep their
+    // precedence over global and pack-provided defaults.
+    let mut dirs = configured_persona_dirs();
+    dirs.reverse();
     agent007_personas::PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
         .unwrap_or_else(|_| agent007_personas::PersonaRegistry::built_in())
 }

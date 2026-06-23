@@ -175,19 +175,7 @@ fn default_skills_dir() -> PathBuf {
 }
 
 fn configured_skill_dirs() -> Vec<PathBuf> {
-    if let Ok(home) = std::env::var("AGENT007_HOME") {
-        return vec![PathBuf::from(home).join("skills")];
-    }
-
-    let mut dirs = Vec::new();
-    if let Some(project_home) = crate::commands::run::agent007_project_home() {
-        dirs.push(project_home.join("skills"));
-    }
-    let global_dir = crate::commands::run::agent007_global_home().join("skills");
-    if !dirs.iter().any(|dir| dir == &global_dir) {
-        dirs.push(global_dir);
-    }
-    dirs
+    agent007_core::paths::skills_search_dirs()
 }
 
 fn load_skills_with_precedence() -> Result<Vec<agent007_skills::Skill>> {

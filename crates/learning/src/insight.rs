@@ -385,37 +385,40 @@ mod tests {
 
         // 2 successes, 3 failures → failure rate = 60%
         store
-            .record_feedback(&make_entry("rtt-analyze", Outcome::Success))
+            .record_feedback(&make_entry("dependency-audit", Outcome::Success))
             .unwrap();
         store
-            .record_feedback(&make_entry("rtt-analyze", Outcome::Success))
+            .record_feedback(&make_entry("dependency-audit", Outcome::Success))
             .unwrap();
         for _ in 0..3 {
             store
                 .record_feedback(&make_entry(
-                    "rtt-analyze",
+                    "dependency-audit",
                     Outcome::Failure {
-                        reason: "negative bias".to_string(),
+                        reason: "stale advisory database".to_string(),
                     },
                 ))
                 .unwrap();
         }
 
-        let insight_text = "## Insight: Check AP antenna height for negative bias\nWhen RTT shows negative bias, check AP antenna height before adjusting algorithm parameters.";
+        let insight_text = "## Insight: Refresh advisory data before auditing\nWhen dependency findings are stale, refresh the advisory database before changing package constraints.";
         let gen = InsightGenerator::new(
             InsightConfig::default(),
             StubProvider::ok(insight_text),
             ms.scoped("project"),
         );
 
-        let result = gen.maybe_generate("rtt-analyze", &store).await.unwrap();
+        let result = gen
+            .maybe_generate("dependency-audit", &store)
+            .await
+            .unwrap();
         assert!(result.is_some(), "expected insight to be generated");
 
         let entry = result.unwrap();
-        assert_eq!(entry.skill_name, "rtt-analyze");
+        assert_eq!(entry.skill_name, "dependency-audit");
         assert!(entry.failure_rate > 0.5);
         assert_eq!(entry.sample_size, 5);
-        assert!(entry.memory_key.starts_with("insight_rtt-analyze_"));
+        assert!(entry.memory_key.starts_with("insight_dependency-audit_"));
 
         // Verify it was written to project memory (second handle, same underlying store)
         let verify_scope = ms.scoped("project");
@@ -424,7 +427,7 @@ mod tests {
             stored.is_some(),
             "insight should be persisted in project scope"
         );
-        assert!(stored.unwrap().contains("negative bias"));
+        assert!(stored.unwrap().contains("advisory database"));
     }
 
     /// Suppresses generation when per-skill cap is reached.

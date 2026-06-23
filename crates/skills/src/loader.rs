@@ -42,6 +42,26 @@ impl SkillLoader {
         Ok(skills_by_trigger.into_values().collect())
     }
 
+    /// Load skills from ordered catalog directories with first-directory
+    /// precedence. Missing directories are skipped, which makes optional pack
+    /// overlays safe to include in the search path.
+    pub fn load_from_dirs(
+        dirs: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Result<Vec<Skill>, SkillError> {
+        let mut skills_by_trigger: BTreeMap<String, Skill> = BTreeMap::new();
+        for dir in dirs.into_iter().map(Into::into) {
+            if !dir.is_dir() {
+                continue;
+            }
+            for skill in Self::new(dir).load_all()? {
+                skills_by_trigger
+                    .entry(skill.trigger().to_string())
+                    .or_insert(skill);
+            }
+        }
+        Ok(skills_by_trigger.into_values().collect())
+    }
+
     fn load_entry(&self, entry_path: &Path) -> Result<Option<Skill>, SkillError> {
         if entry_path.is_file() {
             if entry_path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -230,5 +250,25 @@ mod tests {
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].version(), "2.0.0");
         assert_eq!(skills[0].template(), "new");
+    }
+
+    #[test]
+    fn ordered_directories_keep_manual_override_precedence() {
+        let manual = TempDir::new().unwrap();
+        let pack = TempDir::new().unwrap();
+        fs::write(
+            manual.path().join("skill.md"),
+            "---\nname: manual\ndescription: manual\ntrigger: /dup\nversion: 1.0.0\n---\nmanual\n",
+        )
+        .unwrap();
+        fs::write(
+            pack.path().join("skill.md"),
+            "---\nname: pack\ndescription: pack\ntrigger: /dup\nversion: 9.0.0\n---\npack\n",
+        )
+        .unwrap();
+
+        let skills = SkillLoader::load_from_dirs([manual.path(), pack.path()]).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name(), "manual");
     }
 }

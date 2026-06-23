@@ -101,9 +101,9 @@ Each manifest declares:
 
 ```toml
 [tool]
-name        = "ftm_burst_summary"
+name        = "dataset_quality_summary"
 version     = "1.0.0"
-description = "Summarize FTM burst-level KPIs from a dataset directory"
+description = "Summarize quality metrics for files in a dataset directory"
 executor    = "python"           # python | shell | node | ruby | wasm | binary
 entry       = "run.py"           # relative to plugin directory; for "binary" this is the compiled executable
 
@@ -150,9 +150,9 @@ Tools are called with a structured object matching the MCP tool-call convention 
 {
   "tool": "etr.csv_slice",
   "input": {
-    "path": "may5/6690/rtt_20260501_143200.csv",
-    "columns": ["burst_id", "range_m", "t4_del"],
-    "filter_expr": "t4_del > 5000",
+    "path": "data/orders_20260501.csv",
+    "columns": ["order_id", "total", "processing_ms"],
+    "filter_expr": "processing_ms > 5000",
     "limit": 50
   }
 }
@@ -219,7 +219,7 @@ workspace_root      = "."        # all relative paths resolve inside here
 
 ```
 agent007 etr install ./my_plugin/          # from local directory
-agent007 etr install @agent007/ftm-tools   # from registry (future)
+agent007 etr install @agent007/data-tools  # from registry (future)
 ```
 
 The installer:
@@ -231,7 +231,7 @@ The installer:
 ### Uninstalling
 
 ```
-agent007 etr uninstall ftm_burst_summary
+agent007 etr uninstall dataset_quality_summary
 ```
 
 ### Writing a new plugin
@@ -273,7 +273,7 @@ Real token savings only occur when ALL three conditions are met:
 
 If any condition fails (e.g., the output is large prose that the LLM must read verbatim), ETR adds latency without saving tokens. The compactor and manifest schema exist to enforce conditions 2 and 3. Condition 1 is enforced by making ETR calls typed structured objects, not bash strings.
 
-Estimated savings for an FTM analysis session:
+Estimated savings for a large dataset analysis session:
 - Without ETR: ~40 LLM turns of `bash` + output parsing = ~120K tokens
 - With ETR (L1/L2 for CSV slicing, log grep, JSON extraction): ~15 LLM turns of structured calls + compact JSON = ~40K tokens
 - Net: ~67% token reduction on deterministic work; synthesis/narrative cost unchanged
@@ -314,10 +314,10 @@ The ETR design is SwiftBash-inspired at the architectural level (typed manifests
 - Implement plugin loader: scan `.agent007/plugins/`, validate, register.
 - Implement subprocess launcher with stdin/stdout JSON protocol (language-agnostic).
 - Implement path-binding jail enforced at the Rust boundary (not inside the plugin).
-- Migrate `ftm_burst_report.py` and `ftm_pipeline_bridge.py` to L2 plugin manifests (executor = "python").
+- Migrate representative report-generation and data-normalization helpers to L2 plugin manifests (executor = "python").
 - Implement `agent007 etr install` / `uninstall` CLI commands.
 
-**Deliverable:** FTM workflow steps call `etr.ftm_burst_summary` instead of embedding Python paths in YAML. Plugin authors can use Python, Shell, Node, Go binary, or any language — the framework doesn't care.
+**Deliverable:** workflow steps call a registered tool such as `etr.dataset_quality_summary` instead of embedding Python paths in YAML. Plugin authors can use Python, Shell, Node, Go binary, or any language — the framework doesn't care.
 
 ### Phase 3 — L3 Gated Shell
 

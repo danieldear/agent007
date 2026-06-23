@@ -53,12 +53,39 @@ fn write_agent_home(home: &Path) {
     fs::write(home.join("workflows").join("ship.toml"), "name = 'ship'\n").unwrap();
     fs::write(
         home.join("skills").join("review.md"),
-        "---\ntrigger: /review\nprompt: Review {{ args }}\n---\n",
+        "---\nname: Review\ndescription: Review fixture changes\ntrigger: /review\nversion: \"1.0.0\"\n---\nReview {{args}}.\n",
     )
     .unwrap();
     fs::write(
         home.join("memory").join("project").join("auth.md"),
         "# Auth\nUse context compilation before broad repository scans.\n",
+    )
+    .unwrap();
+
+    let pack_skill_dir = home.join("packs/fixture-pack/1.0.0/skills");
+    fs::create_dir_all(&pack_skill_dir).unwrap();
+    fs::write(
+        pack_skill_dir.join("packed-review.md"),
+        "---\nname: Packed Review\ndescription: Skill supplied by an enabled test pack\ntrigger: /packed-review\nversion: \"1.0.0\"\n---\nReview {{args}} from the pack.\n",
+    )
+    .unwrap();
+    fs::write(
+        home.join("packs/lock.json"),
+        r#"{
+          "schema_version": 1,
+          "packs": {
+            "fixture-pack": {
+              "id": "fixture-pack",
+              "version": "1.0.0",
+              "enabled": true,
+              "installed_at": "2026-06-19T00:00:00Z",
+              "registry": "fixture",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "history": []
+            }
+          }
+        }"#,
     )
     .unwrap();
 }
@@ -147,6 +174,16 @@ async fn live_mcp_server_exposes_and_records_new_compact_context_tools() {
             "missing MCP tool {expected:?}"
         );
     }
+
+    let skills = client
+        .call_tool("agent007_skill_list", json!({}))
+        .await
+        .unwrap();
+    let skills_text = extract_text(&skills).unwrap();
+    assert!(
+        skills_text.contains("/packed-review"),
+        "enabled pack skill missing from MCP catalog: {skills_text}"
+    );
 
     let store = RunStore::new(agent_home.join("sessions"));
 

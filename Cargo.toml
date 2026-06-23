@@ -23,6 +23,7 @@ members = [
     "crates/p2p",
     "crates/extensions",
     "crates/etr",
+    "crates/packs",
 ]
 resolver = "2"
 
@@ -55,6 +56,7 @@ globset = "0.4"
 axum  = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 petgraph = "0.6"
+semver = { version = "1", features = ["serde"] }
 
 [profile.release]
 lto = "thin"

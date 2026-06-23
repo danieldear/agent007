@@ -322,22 +322,16 @@ impl WorkflowRunner {
                                         reason: "sub-workflow step missing 'workflow' field"
                                             .to_string(),
                                     })?;
-                            let wf_path = agent007_core::paths::agent007_home()
-                                .join("workflows")
-                                .join(format!("{wf_name}.toml"));
-                            let toml_str = std::fs::read_to_string(&wf_path).map_err(|e| {
+                            let sub_def = crate::loader::WorkflowLoader::load_named_from_dirs(
+                                agent007_core::paths::workflow_search_dirs(),
+                                &wf_name,
+                            )
+                            .map_err(|e| {
                                 WorkflowError::StepFailed {
                                     id: step.id.clone(),
-                                    reason: format!("failed to read sub-workflow '{wf_name}': {e}"),
+                                    reason: format!("failed to load sub-workflow '{wf_name}': {e}"),
                                 }
                             })?;
-                            let sub_def: crate::types::WorkflowDef = toml::from_str(&toml_str)
-                                .map_err(|e| WorkflowError::StepFailed {
-                                    id: step.id.clone(),
-                                    reason: format!(
-                                        "failed to parse sub-workflow '{wf_name}': {e}"
-                                    ),
-                                })?;
                             let sub_runner = WorkflowRunner::new(
                                 persona_provider.clone(),
                                 router.clone(),
@@ -387,9 +381,9 @@ impl WorkflowRunner {
                                      from disk for this step. Use with_skill_provider() at runner \
                                      construction to avoid per-step disk reads."
                                 );
-                                let skills_dir =
-                                    agent007_core::paths::agent007_home().join("skills");
-                                match agent007_skills::SkillLoader::new(&skills_dir).load_all() {
+                                match agent007_skills::SkillLoader::load_from_dirs(
+                                    agent007_core::paths::skills_search_dirs(),
+                                ) {
                                     Ok(skills) => {
                                         Arc::new(agent007_skills::SkillIndex::from_skills(skills))
                                     }
@@ -536,9 +530,9 @@ impl WorkflowRunner {
                         let prompt_template = if let Some(ref prompt) = step.prompt {
                             prompt.clone()
                         } else if let Some(ref skill_trigger) = step.skill {
-                            let skills_dir = agent007_core::paths::agent007_home().join("skills");
-                            let loader = agent007_skills::SkillLoader::new(&skills_dir);
-                            match loader.load_all() {
+                            match agent007_skills::SkillLoader::load_from_dirs(
+                                agent007_core::paths::skills_search_dirs(),
+                            ) {
                                 Ok(skills) => {
                                     match skills.into_iter().find(|s| s.trigger() == skill_trigger)
                                     {

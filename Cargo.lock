@@ -22,6 +22,7 @@ dependencies = [
  "agent007-mcp",
  "agent007-memory",
  "agent007-models",
+ "agent007-packs",
  "agent007-personas",
  "agent007-sharing",
  "agent007-simulation",
@@ -43,6 +44,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "security-framework",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -62,6 +64,7 @@ version = "0.6.0"
 dependencies = [
  "agent007-mcp",
  "agent007-models",
+ "agent007-packs",
  "agent007-zones",
  "async-trait",
  "chrono",
@@ -297,6 +300,25 @@ dependencies = [
  "serde",
  "sha2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "agent007-packs"
+version = "0.6.0"
+dependencies = [
+ "agent007-sharing",
+ "anyhow",
+ "chrono",
+ "hex",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "uuid",
 ]
 
 [[package]]
@@ -5525,6 +5547,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "seq-macro"

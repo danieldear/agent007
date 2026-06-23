@@ -59,8 +59,17 @@ fn available_skill_command_specs(home: &Path, global: bool) -> Vec<(String, Stri
     let mut specs = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    for agent_home in configured_asset_homes_for_init(home, global) {
-        let skills_dir = agent_home.join("skills");
+    for skills_dir in configured_asset_homes_for_init(home, global)
+        .into_iter()
+        .flat_map(|agent_home| {
+            let mut dirs = vec![agent_home.join("skills")];
+            dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(
+                &agent_home,
+                "skills",
+            ));
+            dirs
+        })
+    {
         if !skills_dir.exists() {
             continue;
         }
@@ -85,8 +94,17 @@ fn available_workflow_command_specs(home: &Path, global: bool) -> Vec<(String, S
     let mut specs = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    for agent_home in configured_asset_homes_for_init(home, global) {
-        let workflows_dir = agent_home.join("workflows");
+    for workflows_dir in configured_asset_homes_for_init(home, global)
+        .into_iter()
+        .flat_map(|agent_home| {
+            let mut dirs = vec![agent_home.join("workflows")];
+            dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(
+                &agent_home,
+                "workflows",
+            ));
+            dirs
+        })
+    {
         if !workflows_dir.exists() {
             continue;
         }
@@ -928,13 +946,14 @@ pub async fn execute(
     let skill_count = available_skill_command_specs(&home, global).len();
     let persona_count = {
         let mut dirs = Vec::new();
-        if !global {
-            dirs.push(home.join("personas"));
+        for agent_home in configured_asset_homes_for_init(&home, global) {
+            dirs.push(agent_home.join("personas"));
+            dirs.extend(agent007_core::paths::enabled_pack_asset_dirs(
+                &agent_home,
+                "personas",
+            ));
         }
-        let global_dir = super::run::agent007_global_home().join("personas");
-        if !dirs.iter().any(|dir| dir == &global_dir) {
-            dirs.push(global_dir);
-        }
+        dirs.reverse();
         let registry = agent007_personas::PersonaRegistry::load_from_dirs(
             dirs.iter().map(|dir| dir.as_path()),
         )

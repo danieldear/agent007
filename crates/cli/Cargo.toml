@@ -23,6 +23,7 @@ agent007-workflows = { path = "../workflows" }
 agent007-web = { path = "../web" }
 agent007-sharing  = { path = "../sharing" }
 agent007-etr       = { path = "../etr" }
+agent007-packs     = { path = "../packs" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
@@ -33,6 +34,7 @@ tracing-subscriber = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+semver = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 clap = { version = "4", features = ["derive"] }
 rmcp = { workspace = true }

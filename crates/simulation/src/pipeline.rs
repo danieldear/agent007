@@ -408,13 +408,13 @@ mod tests {
             memory: Arc::clone(&memory),
         };
 
-        let report = reporter.run("wifi-rtt", 3, vec![]).unwrap();
+        let report = reporter.run("checkout-flow", 3, vec![]).unwrap();
         assert_eq!(report.scenarios_run, 3);
-        assert_eq!(report.template_name, "wifi-rtt");
+        assert_eq!(report.template_name, "checkout-flow");
 
         // Load back via memory directly
         let raw = memory
-            .read(&Reporter::memory_key("wifi-rtt"))
+            .read(&Reporter::memory_key("checkout-flow"))
             .unwrap()
             .unwrap();
         let loaded: SimulationReport = serde_json::from_str(&raw).unwrap();

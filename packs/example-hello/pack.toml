@@ -1,0 +1,23 @@
+schema_version = 1
+
+[pack]
+id = "example-hello"
+name = "Example Hello"
+version = "1.0.0"
+description = "Harmless example pack used to validate registry installation and activation"
+license = "Apache-2.0"
+authors = ["agent007 maintainers"]
+
+[contents]
+skills = ["/example-hello"]
+workflows = []
+personas = []
+tools = []
+
+[permissions]
+network = false
+external_actions = false
+approval_required = []
+
+[dependencies]
+packs = []

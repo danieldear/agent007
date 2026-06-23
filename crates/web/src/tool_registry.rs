@@ -387,8 +387,14 @@ fn tool_scope_dirs(
     global_home: PathBuf,
 ) -> Vec<(ToolScope, PathBuf)> {
     let mut dirs = Vec::new();
+    for dir in agent007_core::paths::enabled_pack_asset_dirs(&global_home, "tools") {
+        dirs.push((ToolScope::Global, dir));
+    }
     dirs.push((ToolScope::Global, global_home.join("tools")));
     if let Some(project_home) = project_home {
+        for dir in agent007_core::paths::enabled_pack_asset_dirs(&project_home, "tools") {
+            dirs.push((ToolScope::Project, dir));
+        }
         dirs.push((ToolScope::Project, project_home.join("tools")));
     }
     dirs

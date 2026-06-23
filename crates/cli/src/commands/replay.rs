@@ -40,9 +40,10 @@ pub async fn execute(config: Arc<Config>, session: String, model: String) -> Res
             )?
             .map(|source| source.workflow_ref)
             .unwrap_or_else(|| request.workflow.clone());
-        let loader =
-            agent007_workflows::WorkflowLoader::new(super::run::agent007_home().join("workflows"));
-        let def = loader.load_named(&workflow_ref)?;
+        let def = agent007_workflows::WorkflowLoader::load_named_from_dirs(
+            agent007_core::paths::workflow_search_dirs(),
+            &workflow_ref,
+        )?;
         println!("  workflow: {}", request.workflow,);
         return super::workflow::execute_workflow_run(
             Arc::new(replay_config),

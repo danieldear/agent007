@@ -1,5 +1,4 @@
 // crates/cli/src/commands/persona.rs
-use super::run::{agent007_global_home, agent007_project_home};
 use crate::PersonaAction;
 use agent007_core::PersonaProvider;
 use agent007_personas::PersonaRegistry;
@@ -8,14 +7,8 @@ use std::sync::Arc;
 
 /// Top-level dispatch for `agent007 persona <action>`.
 pub async fn execute(_config: Arc<crate::config::Config>, action: PersonaAction) -> Result<()> {
-    let mut dirs = Vec::new();
-    if let Some(project_home) = agent007_project_home() {
-        dirs.push(project_home.join("personas"));
-    }
-    let global_dir = agent007_global_home().join("personas");
-    if !dirs.iter().any(|dir| dir == &global_dir) {
-        dirs.push(global_dir);
-    }
+    let mut dirs = agent007_core::paths::persona_search_dirs();
+    dirs.reverse();
     let registry = PersonaRegistry::load_from_dirs(dirs.iter().map(|dir| dir.as_path()))
         .unwrap_or_else(|e| {
             tracing::warn!("failed to load persona overrides: {}", e);
