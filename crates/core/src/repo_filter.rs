@@ -82,8 +82,6 @@ pub fn should_skip_dir_name(name: &str) -> bool {
             | "coverage"
             | "out"
             | ".cache"
-            | "tmp"
-            | "temp"
     ) || name.starts_with(".agent007")
 }
 
@@ -170,7 +168,7 @@ pub fn is_sensitive_file_name(name: &str) -> bool {
         || lower == "id_dsa"
         || lower == "credentials.json"
         || lower == "secrets.json"
-        || lower.contains("api_key")
+        || (sensitive_data_ext && lower.contains("api_key"))
         || (sensitive_data_ext && sensitive_stem)
 }
 
@@ -219,14 +217,19 @@ mod tests {
         assert!(should_skip_file_name(".env.local"));
         assert!(should_skip_file_name("credentials.json"));
         assert!(should_skip_file_name("openai_token.txt"));
+        assert!(should_skip_file_name("openai_api_key.json"));
         assert!(should_skip_file_name("private-key.pem"));
         assert!(!should_skip_file_name("tokenizer.rs"));
         assert!(!should_skip_file_name("auth_token.rs"));
+        assert!(!should_skip_file_name("api_key.rs"));
         assert!(!should_skip_file_name("api.yaml"));
     }
 
     #[test]
     fn repo_filter_skips_agent007_runtime_and_generated_guidance() {
+        assert!(!should_skip_repo_path(Path::new(
+            "/tmp/agent007-smoke/src/lib.rs"
+        )));
         assert!(should_skip_repo_path(Path::new(
             ".agent007.bak.20260503-142745/sessions/context-bundle.json"
         )));

@@ -18,6 +18,7 @@ const MAX_STRUCTURAL_CONTEXT_CHARS: usize = 6_000;
 const MAX_FILE_EXCERPT_CHARS: usize = 4_000;
 const MAX_MEMORY_NOTE_EXCERPT_CHARS: usize = 2_000;
 const SQLITE_MEMORY_VALUE_MAX_CHARS: i64 = 16_000;
+const TRUNCATION_SUFFIX: &str = "\n...[truncated by agent007 prompt hygiene budget]";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextFile {
@@ -781,8 +782,13 @@ fn bound_text(raw: &str, max_chars: usize) -> String {
     if raw.chars().count() <= max_chars {
         return raw.to_string();
     }
-    let mut out = raw.chars().take(max_chars).collect::<String>();
-    out.push_str("\n...[truncated by agent007 prompt hygiene budget]");
+    let suffix_chars = TRUNCATION_SUFFIX.chars().count();
+    if max_chars <= suffix_chars {
+        return TRUNCATION_SUFFIX.chars().take(max_chars).collect();
+    }
+    let kept_chars = max_chars - suffix_chars;
+    let mut out = raw.chars().take(kept_chars).collect::<String>();
+    out.push_str(TRUNCATION_SUFFIX);
     out
 }
 
@@ -950,6 +956,19 @@ mod tests {
             .relevant_files
             .iter()
             .all(|file| file.path != "crates/web/src/api.rs"));
+    }
+
+    #[test]
+    fn bound_text_respects_hard_char_limit() {
+        let bounded = bound_text("abcdefghijklmnopqrstuvwxyz", 12);
+        assert_eq!(bounded.chars().count(), 12);
+        let raw = "abcdefghijklmnopqrstuvwxyz".repeat(4);
+        let bounded = bound_text(&raw, TRUNCATION_SUFFIX.chars().count() + 4);
+        assert_eq!(
+            bounded.chars().count(),
+            TRUNCATION_SUFFIX.chars().count() + 4
+        );
+        assert!(bounded.ends_with(TRUNCATION_SUFFIX));
     }
 
     #[test]
