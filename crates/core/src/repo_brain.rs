@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::repo_filter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoBrain {
@@ -52,6 +53,13 @@ impl RepoBrainBuilder {
         )?);
         memory_notes.sort();
         memory_notes.dedup();
+        let memory_note_count = memory_notes.len();
+        let memory_key_limit = repo_filter::repo_brain_memory_key_limit();
+        if memory_notes.len() > memory_key_limit {
+            let omitted = memory_notes.len() - memory_key_limit;
+            memory_notes.truncate(memory_key_limit);
+            memory_notes.push(format!("... {omitted} more memory key(s) omitted"));
+        }
         let conventions = self.collect_conventions();
         let recommended_commands = recommended_commands(&ecosystems);
         let ecosystem_label = if ecosystems.is_empty() {
@@ -65,7 +73,7 @@ impl RepoBrainBuilder {
             ecosystem_label,
             workflows.len(),
             skills.len(),
-            memory_notes.len(),
+            memory_note_count,
         );
 
         Ok(RepoBrain {
@@ -315,5 +323,33 @@ mod tests {
 
         assert!(brain.memory_notes.contains(&"database_pool".to_string()));
         assert!(brain.summary.contains("1 project memory note"));
+    }
+
+    #[test]
+    fn repo_brain_caps_memory_key_inventory_metadata() {
+        std::env::remove_var("AGENT007_REPO_BRAIN_MAX_MEMORY_KEYS");
+        let root = tempfile::tempdir().unwrap();
+        let agent_home = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        let project_memory = agent_home.path().join("memory").join("project");
+        fs::create_dir_all(&project_memory).unwrap();
+        for idx in 0..70 {
+            fs::write(project_memory.join(format!("note_{idx:02}.md")), "memory\n").unwrap();
+        }
+
+        let brain = RepoBrainBuilder::new(root.path(), agent_home.path())
+            .build()
+            .unwrap();
+
+        assert_eq!(brain.memory_notes.len(), 65);
+        assert!(brain
+            .memory_notes
+            .last()
+            .is_some_and(|note| note.contains("6 more memory key(s) omitted")));
+        assert!(brain.summary.contains("70 project memory note"));
     }
 }

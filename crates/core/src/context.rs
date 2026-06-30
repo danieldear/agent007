@@ -9,9 +9,16 @@ use crate::budget::{estimate_tokens, BudgetEstimate, CompactLevel, TokenBudget};
 use crate::compact::compact_command_output;
 use crate::error::CoreError;
 use crate::repo_brain::{RepoBrain, RepoBrainBuilder};
+use crate::repo_filter;
 use crate::repo_graph::{context_bundle_for_query, load_or_build_graph};
 use crate::repo_readiness::{write_repo_intelligence_readiness, RepoIntelligenceOptions};
 use crate::run_store::{RunMetadata, RunStore};
+
+const MAX_STRUCTURAL_CONTEXT_CHARS: usize = 6_000;
+const MAX_FILE_EXCERPT_CHARS: usize = 4_000;
+const MAX_MEMORY_NOTE_EXCERPT_CHARS: usize = 2_000;
+const SQLITE_MEMORY_VALUE_MAX_CHARS: i64 = 16_000;
+const TRUNCATION_SUFFIX: &str = "\n...[truncated by agent007 prompt hygiene budget]";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextFile {
@@ -30,6 +37,23 @@ pub struct ContextMemoryNote {
     pub tokens: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextPromptManifest {
+    pub sections: Vec<ContextPromptSection>,
+    pub total_tokens: u64,
+    pub total_chars: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPromptSection {
+    pub name: String,
+    pub tokens: u64,
+    pub chars: usize,
+    pub item_count: usize,
+    pub included: bool,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBundle {
     pub task: String,
@@ -44,6 +68,7 @@ pub struct ContextBundle {
     pub compiled_context: String,
     pub estimated_tokens: u64,
     pub budget_report: BudgetEstimate,
+    pub prompt_manifest: ContextPromptManifest,
 }
 
 pub struct ContextCompiler {
@@ -120,6 +145,14 @@ impl ContextCompiler {
         );
         let estimated_tokens = estimate_tokens(&compiled_context);
         let budget_report = self.budget.estimate_prompt(estimated_tokens);
+        let prompt_manifest = build_prompt_manifest(
+            task,
+            &repo_brain,
+            &structural_context,
+            &relevant_files,
+            &memory_notes,
+            &recent_runs,
+        );
 
         Ok(ContextBundle {
             task: task.to_string(),
@@ -134,6 +167,7 @@ impl ContextCompiler {
             compiled_context,
             estimated_tokens,
             budget_report,
+            prompt_manifest,
         })
     }
 
@@ -160,7 +194,7 @@ impl ContextCompiler {
                 continue;
             }
             let reason = file_reason(&relative, keywords);
-            let excerpt = summarize_file(&raw, task);
+            let excerpt = bound_text(&summarize_file(&raw, task), MAX_FILE_EXCERPT_CHARS);
             let raw_tokens = estimate_tokens(&raw);
             let excerpt_tokens = estimate_tokens(&excerpt);
             scored.push(ContextFile {
@@ -218,7 +252,10 @@ impl ContextCompiler {
             return (String::new(), Vec::new());
         };
         let bundle = context_bundle_for_query(&graph, task, 6, 2);
-        (bundle.text, bundle.files)
+        (
+            bound_text(&bundle.text, MAX_STRUCTURAL_CONTEXT_CHARS),
+            bundle.files,
+        )
     }
 }
 
@@ -268,7 +305,10 @@ fn collect_memory_notes_recursive(
             if score <= 0.0 {
                 continue;
             }
-            let excerpt = summarize_markdown_note(&content);
+            let excerpt = bound_text(
+                &summarize_markdown_note(&content),
+                MAX_MEMORY_NOTE_EXCERPT_CHARS,
+            );
             scored.push((
                 score,
                 ContextMemoryNote {
@@ -293,23 +333,55 @@ fn collect_sqlite_memory_notes(
     }
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
-    let mut stmt = match conn
-        .prepare("SELECT key, value, updated_at, access_count FROM memory WHERE namespace = ?1")
-    {
-        Ok(stmt) => stmt,
-        Err(_) => return Ok(()),
-    };
-    let rows = stmt
-        .query_map([namespace], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-            ))
-        })
-        .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
-    for (key, value, updated_at, access_count) in rows.flatten() {
+    let mut rows = Vec::new();
+    let summary_result = conn
+        .prepare(
+            "SELECT key, substr(COALESCE(NULLIF(summary, ''), value), 1, ?2), updated_at, access_count \
+             FROM memory WHERE namespace = ?1",
+        )
+        .and_then(|mut stmt| {
+            let mapped = stmt.query_map(
+                rusqlite::params![namespace, SQLITE_MEMORY_VALUE_MAX_CHARS],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )?;
+            for row in mapped.flatten() {
+                rows.push(row);
+            }
+            Ok::<_, rusqlite::Error>(())
+        });
+    if summary_result.is_err() {
+        let mut stmt = match conn.prepare(
+            "SELECT key, substr(value, 1, ?2), updated_at, access_count \
+             FROM memory WHERE namespace = ?1",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return Ok(()),
+        };
+        let mapped = stmt
+            .query_map(
+                rusqlite::params![namespace, SQLITE_MEMORY_VALUE_MAX_CHARS],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )
+            .map_err(|error| CoreError::io(db_path, std::io::Error::other(error)))?;
+        for row in mapped.flatten() {
+            rows.push(row);
+        }
+    }
+    for (key, value, updated_at, access_count) in rows {
         let meta = MemoryFrontmatterMeta {
             updated_at: updated_at
                 .as_deref()
@@ -320,7 +392,10 @@ fn collect_sqlite_memory_notes(
         if score <= 0.0 && !task.trim().is_empty() {
             continue;
         }
-        let excerpt = summarize_markdown_note(&value);
+        let excerpt = bound_text(
+            &summarize_markdown_note(&value),
+            MAX_MEMORY_NOTE_EXCERPT_CHARS,
+        );
         scored.push((
             score,
             ContextMemoryNote {
@@ -444,6 +519,130 @@ fn render_context(
     out
 }
 
+fn build_prompt_manifest(
+    task: &str,
+    repo_brain: &RepoBrain,
+    structural_context: &str,
+    relevant_files: &[ContextFile],
+    memory_notes: &[ContextMemoryNote],
+    recent_runs: &[RunMetadata],
+) -> ContextPromptManifest {
+    let mut sections = Vec::new();
+    push_text_section(&mut sections, "task", task, 1, "user task");
+    push_text_section(
+        &mut sections,
+        "repo_brain.summary",
+        &repo_brain.summary,
+        1,
+        "compact project summary only",
+    );
+    push_text_section(
+        &mut sections,
+        "repo_brain.conventions",
+        &repo_brain.conventions.join("\n"),
+        repo_brain.conventions.len(),
+        "top project instructions and conventions",
+    );
+    push_text_section(
+        &mut sections,
+        "repo_brain.recommended_commands",
+        &repo_brain.recommended_commands.join("\n"),
+        repo_brain.recommended_commands.len(),
+        "validation commands",
+    );
+    push_text_section(
+        &mut sections,
+        "structural_repo_graph",
+        structural_context,
+        if structural_context.is_empty() { 0 } else { 1 },
+        "bounded structural context from repo graph",
+    );
+    let relevant_text = relevant_files
+        .iter()
+        .map(|file| format!("{} {}\n{}", file.path, file.reason, file.excerpt))
+        .collect::<Vec<_>>()
+        .join("\n");
+    push_text_section(
+        &mut sections,
+        "relevant_files",
+        &relevant_text,
+        relevant_files.len(),
+        "bounded excerpts from selected relevant files",
+    );
+    let memory_text = memory_notes
+        .iter()
+        .map(|note| format!("{}:\n{}", note.key, note.excerpt))
+        .collect::<Vec<_>>()
+        .join("\n");
+    push_text_section(
+        &mut sections,
+        "project_memory_notes",
+        &memory_text,
+        memory_notes.len(),
+        "bounded memory snippets selected by task keywords",
+    );
+    let run_text = recent_runs
+        .iter()
+        .map(|run| {
+            format!(
+                "{} [{}] {}",
+                run.id,
+                run.kind,
+                run.output_preview.as_deref().unwrap_or("no preview")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    push_text_section(
+        &mut sections,
+        "recent_runs",
+        &run_text,
+        recent_runs.len(),
+        "short run previews only",
+    );
+    sections.push(ContextPromptSection {
+        name: "repo_brain.memory_note_keys".to_string(),
+        tokens: 0,
+        chars: 0,
+        item_count: repo_brain.memory_notes.len(),
+        included: false,
+        reason: "memory key inventory stays in metadata and is not rendered into the prompt"
+            .to_string(),
+    });
+    let total_tokens = sections
+        .iter()
+        .filter(|section| section.included)
+        .map(|section| section.tokens)
+        .sum();
+    let total_chars = sections
+        .iter()
+        .filter(|section| section.included)
+        .map(|section| section.chars)
+        .sum();
+    ContextPromptManifest {
+        sections,
+        total_tokens,
+        total_chars,
+    }
+}
+
+fn push_text_section(
+    sections: &mut Vec<ContextPromptSection>,
+    name: &str,
+    text: &str,
+    item_count: usize,
+    reason: &str,
+) {
+    sections.push(ContextPromptSection {
+        name: name.to_string(),
+        tokens: estimate_tokens(text),
+        chars: text.chars().count(),
+        item_count,
+        included: !text.trim().is_empty(),
+        reason: reason.to_string(),
+    });
+}
+
 fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -458,14 +657,16 @@ fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if is_ignored_dir(name) && path.is_dir() {
-                continue;
-            }
-            if is_generated_agent_guidance_file(name) {
+            if path.is_dir() && repo_filter::should_skip_dir_name(name) {
                 continue;
             }
             if path.is_dir() {
                 stack.push(path);
+                continue;
+            }
+            if repo_filter::should_skip_prompt_path(&path)
+                || !repo_filter::file_is_within_prompt_budget(&path)
+            {
                 continue;
             }
             if is_candidate_file(&path) {
@@ -476,26 +677,10 @@ fn collect_candidate_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
     Ok(files)
 }
 
-fn is_generated_agent_guidance_file(name: &str) -> bool {
-    matches!(name, "AGENTS.agent007.generated.md")
-}
-
-fn is_ignored_dir(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | ".agent007"
-            | ".next"
-            | ".idea"
-            | ".vscode"
-            | "target"
-            | "node_modules"
-            | "dist"
-            | "build"
-    ) || name.starts_with(".agent007.bak")
-}
-
 fn is_candidate_file(path: &Path) -> bool {
+    if repo_filter::should_skip_prompt_path(path) {
+        return false;
+    }
     let ext = path
         .extension()
         .and_then(|value| value.to_str())
@@ -565,9 +750,9 @@ fn file_reason(path: &str, keywords: &[String]) -> String {
 fn is_high_value_path(path: &str) -> bool {
     matches!(
         path,
-        "AGENTS.md" | "README.md" | "Cargo.toml" | "package.json"
-    ) || path.starts_with("src/")
-        || path.starts_with("crates/")
+        "AGENTS.md" | "README.md" | "Cargo.toml" | "package.json" | "src/lib.rs" | "src/main.rs"
+    ) || path.ends_with("/Cargo.toml")
+        || path.ends_with("/package.json")
 }
 
 fn summarize_file(raw: &str, task: &str) -> String {
@@ -591,6 +776,20 @@ fn summarize_markdown_note(raw: &str) -> String {
         .take(8)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn bound_text(raw: &str, max_chars: usize) -> String {
+    if raw.chars().count() <= max_chars {
+        return raw.to_string();
+    }
+    let suffix_chars = TRUNCATION_SUFFIX.chars().count();
+    if max_chars <= suffix_chars {
+        return TRUNCATION_SUFFIX.chars().take(max_chars).collect();
+    }
+    let kept_chars = max_chars - suffix_chars;
+    let mut out = raw.chars().take(kept_chars).collect::<String>();
+    out.push_str(TRUNCATION_SUFFIX);
+    out
 }
 
 #[cfg(test)]
@@ -632,6 +831,17 @@ mod tests {
         assert_eq!(bundle.memory_notes.len(), 1);
         assert!(bundle.compiled_context.contains("Repo brain"));
         assert!(bundle.compiled_context.contains("Structural repo graph"));
+        assert!(bundle.prompt_manifest.total_tokens > 0);
+        assert!(bundle
+            .prompt_manifest
+            .sections
+            .iter()
+            .any(|section| section.name == "relevant_files" && section.included));
+        assert!(bundle
+            .prompt_manifest
+            .sections
+            .iter()
+            .any(|section| { section.name == "repo_brain.memory_note_keys" && !section.included }));
     }
 
     #[test]
@@ -667,6 +877,26 @@ mod tests {
             r#"{"workflow":"gate","approval":"runtime"}"#,
         )
         .unwrap();
+        fs::create_dir_all(
+            root.path()
+                .join(".agent007.bak.20260503-142745")
+                .join("sessions"),
+        )
+        .unwrap();
+        fs::write(
+            root.path()
+                .join(".agent007.bak.20260503-142745")
+                .join("sessions")
+                .join("workflow-state.json"),
+            r#"{"workflow":"gate","approval":"backup"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("package-lock.json"),
+            r#"{"packages":{"node_modules/noise":{"version":"1.0.0"}}}"#,
+        )
+        .unwrap();
+        fs::write(root.path().join(".env"), "OPENAI_API_KEY=secret").unwrap();
 
         let compiler = ContextCompiler::new(root.path(), agent_home.path(), TokenBudget::default());
         let bundle = compiler
@@ -680,7 +910,65 @@ mod tests {
         assert!(bundle
             .relevant_files
             .iter()
+            .all(|file| !file.path.starts_with(".agent007.bak")));
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .all(|file| file.path != "package-lock.json" && file.path != ".env"));
+        assert!(bundle
+            .relevant_files
+            .iter()
             .any(|file| file.path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn compiler_does_not_promote_unrelated_crate_files_without_relevance() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_home = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/core\", \"crates/web\"]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("crates/core/src")).unwrap();
+        fs::create_dir_all(root.path().join("crates/web/src")).unwrap();
+        fs::write(
+            root.path().join("crates/core/src/context.rs"),
+            "pub fn prompt_manifest_token_accounting() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("crates/web/src/api.rs"),
+            "pub fn websocket_dashboard_routes() {}\n",
+        )
+        .unwrap();
+
+        let compiler = ContextCompiler::new(root.path(), agent_home.path(), TokenBudget::default());
+        let bundle = compiler
+            .compile("fix prompt manifest token accounting", 8, 4)
+            .unwrap();
+
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .any(|file| file.path == "crates/core/src/context.rs"));
+        assert!(bundle
+            .relevant_files
+            .iter()
+            .all(|file| file.path != "crates/web/src/api.rs"));
+    }
+
+    #[test]
+    fn bound_text_respects_hard_char_limit() {
+        let bounded = bound_text("abcdefghijklmnopqrstuvwxyz", 12);
+        assert_eq!(bounded.chars().count(), 12);
+        let raw = "abcdefghijklmnopqrstuvwxyz".repeat(4);
+        let bounded = bound_text(&raw, TRUNCATION_SUFFIX.chars().count() + 4);
+        assert_eq!(
+            bounded.chars().count(),
+            TRUNCATION_SUFFIX.chars().count() + 4
+        );
+        assert!(bounded.ends_with(TRUNCATION_SUFFIX));
     }
 
     #[test]
