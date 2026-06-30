@@ -5,6 +5,7 @@ pub mod error;
 pub mod hash;
 pub mod paths;
 pub mod repo_brain;
+pub mod repo_filter;
 pub mod repo_graph;
 pub mod repo_readiness;
 pub mod tool_executor;
@@ -22,7 +23,10 @@ pub mod worker;
 
 pub use budget::{estimate_tokens, BudgetEstimate, CompactLevel, TokenBudget};
 pub use compact::{compact_command_output, CompactOutput};
-pub use context::{ContextBundle, ContextCompiler, ContextFile, ContextMemoryNote};
+pub use context::{
+    ContextBundle, ContextCompiler, ContextFile, ContextMemoryNote, ContextPromptManifest,
+    ContextPromptSection,
+};
 pub use dispatcher::{Dispatcher, LocalDispatcher};
 pub use error::CoreError;
 pub use events::AgentEvent;

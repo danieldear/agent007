@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::repo_filter;
 use crate::tree_sitter_support::{
     enrich_parsed_file_with_tree_sitter, parse_source_with_tree_sitter_only,
 };
@@ -286,7 +287,7 @@ impl RepoGraphBuilder {
         for path in &all_files {
             let rel = relative_path(&root, path);
             let path_str = rel.to_string_lossy().to_string();
-            if is_doc_file(path) {
+            if is_doc_file(path) && is_repo_graph_trackable_path(path) {
                 counts.doc_files += 1;
                 counts.files += 1;
                 counts.docs += 1;
@@ -383,8 +384,22 @@ pub fn dirty_paths_path_for_root(root: &Path) -> PathBuf {
 }
 
 pub fn load_graph(path: &Path) -> Result<RepoGraph, CoreError> {
+    if !repo_filter::graph_json_is_within_load_budget(path) {
+        return Err(CoreError::io(
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "repo graph exceeds load budget ({} bytes); rebuild required",
+                    repo_filter::max_graph_json_bytes()
+                ),
+            ),
+        ));
+    }
     let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
-    serde_json::from_str(&text).map_err(CoreError::from)
+    serde_json::from_str(&text)
+        .map(sanitize_loaded_graph)
+        .map_err(CoreError::from)
 }
 
 pub fn save_graph(graph: &RepoGraph, path: &Path) -> Result<(), CoreError> {
@@ -417,6 +432,9 @@ pub fn refresh_graph_for_paths(
         .map(PathBuf::from)
         .unwrap_or_else(|| default_graph_path_for_root(&root));
     if requested_paths.is_empty() || !target.exists() {
+        return build_and_save_graph(&root, Some(&target));
+    }
+    if !repo_filter::graph_json_is_within_load_budget(&target) {
         return build_and_save_graph(&root, Some(&target));
     }
 
@@ -516,7 +534,7 @@ pub fn refresh_graph_for_paths(
                 &mut pending_calls,
                 &mut counts,
             )?;
-        } else if is_doc_file(&abs_path) {
+        } else if is_doc_file(&abs_path) && is_repo_graph_trackable_path(&abs_path) {
             patch_doc_file(
                 &abs_path,
                 rel_path,
@@ -600,6 +618,25 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
             last_error: None,
         };
     }
+    if !repo_filter::graph_json_is_within_load_budget(path) {
+        return RepoGraphStatus {
+            exists: true,
+            graph_path: path.display().to_string(),
+            root: None,
+            built_at: None,
+            version: None,
+            counts: None,
+            stale: true,
+            stale_files: 0,
+            missing_files: 0,
+            freshness: RepoGraphFreshnessState::StaleLarge,
+            dirty_paths: Vec::new(),
+            last_error: Some(format!(
+                "repo graph exceeds load budget ({} bytes); rebuild required",
+                repo_filter::max_graph_json_bytes()
+            )),
+        };
+    }
     let graph = match load_graph(path) {
         Ok(graph) => graph,
         Err(err) => {
@@ -668,6 +705,9 @@ pub fn graph_status(path: &Path) -> RepoGraphStatus {
 }
 
 pub fn graph_stale_paths(path: &Path, max_paths: usize) -> Result<Vec<String>, CoreError> {
+    if !repo_filter::graph_json_is_within_load_budget(path) {
+        return Ok(Vec::new());
+    }
     let graph = load_graph(path)?;
     let root = PathBuf::from(&graph.root);
     let built_at = chrono::DateTime::parse_from_rfc3339(&graph.built_at)
@@ -727,6 +767,24 @@ pub fn freshen_graph_if_needed(
             requested_paths: Vec::new(),
             after: before.clone(),
             before,
+        });
+    }
+    if before
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("repo graph exceeds load budget"))
+    {
+        let graph = build_and_save_graph(&root, Some(&target))?;
+        let after = graph_status(&target);
+        return Ok(RepoGraphFreshenReport {
+            refreshed: true,
+            strategy: "full_rebuild_oversized_graph".into(),
+            requested_paths: Vec::new(),
+            before,
+            after: RepoGraphStatus {
+                counts: Some(graph.counts),
+                ..after
+            },
         });
     }
     let requested = graph_stale_paths(&target, max_incremental_paths.saturating_add(1))?;
@@ -828,13 +886,7 @@ pub fn repo_graph_trackable_files(root: &Path) -> Result<Vec<PathBuf>, CoreError
 }
 
 pub fn is_repo_graph_trackable_path(path: &Path) -> bool {
-    if path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .map(should_skip_name)
-            .unwrap_or(false)
-    }) {
+    if repo_filter::should_skip_repo_path(path) || !repo_filter::file_is_within_graph_budget(path) {
         return false;
     }
     detect_source_language(path).is_some() || is_doc_file(path)
@@ -853,9 +905,55 @@ pub fn resolve_graph_path(root: Option<&Path>, graph_path: Option<&Path>) -> Pat
 pub fn load_or_build_graph(root: &Path, graph_path: Option<&Path>) -> Result<RepoGraph, CoreError> {
     let path = resolve_graph_path(Some(root), graph_path);
     if path.exists() {
-        return load_graph(&path);
+        if repo_filter::graph_json_is_within_load_budget(&path) {
+            return load_graph(&path);
+        }
+        return build_and_save_graph(root, Some(&path));
     }
     build_and_save_graph(root, Some(&path))
+}
+
+fn sanitize_loaded_graph(mut graph: RepoGraph) -> RepoGraph {
+    let skipped_paths = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.path.as_ref())
+        .filter(|path| !is_repo_graph_trackable_rel_path(path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if skipped_paths.is_empty() {
+        return graph;
+    }
+
+    graph.nodes.retain(|node| {
+        node.path
+            .as_ref()
+            .map(|path| !skipped_paths.contains(path))
+            .unwrap_or(true)
+    });
+    let kept_ids = graph
+        .nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    graph.edges.retain(|edge| {
+        edge.path
+            .as_ref()
+            .map(|path| !skipped_paths.contains(path))
+            .unwrap_or(true)
+            && kept_ids.contains(&edge.from)
+            && kept_ids.contains(&edge.to)
+    });
+    let referenced_ids = graph
+        .edges
+        .iter()
+        .flat_map(|edge| [edge.from.clone(), edge.to.clone()])
+        .collect::<BTreeSet<_>>();
+    graph
+        .nodes
+        .retain(|node| node.path.is_some() || referenced_ids.contains(&node.id));
+    graph.counts = recalculate_counts(&graph.nodes, &graph.edges);
+    graph
 }
 
 fn dedupe_nodes(nodes: &mut Vec<RepoGraphNode>, counts: &mut RepoGraphCounts) {
@@ -1127,22 +1225,7 @@ fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
 }
 
 fn should_skip_name(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | "target"
-            | "node_modules"
-            | ".venv"
-            | "venv"
-            | ".idea"
-            | ".zed"
-            | ".agent007" // skip runtime artifacts (vectordb, sessions, etc.)
-            | "dist"
-            | "build"
-            | ".next"
-            | "coverage"
-            | "out"
-    )
+    repo_filter::should_skip_dir_name(name) || repo_filter::should_skip_file_name(name)
 }
 
 fn is_doc_file(path: &Path) -> bool {
@@ -1153,6 +1236,9 @@ fn is_doc_file(path: &Path) -> bool {
 }
 
 fn detect_source_language(path: &Path) -> Option<&'static str> {
+    if repo_filter::should_skip_repo_path(path) || !repo_filter::file_is_within_graph_budget(path) {
+        return None;
+    }
     match path
         .extension()
         .and_then(|s| s.to_str())
@@ -1169,8 +1255,8 @@ fn detect_source_language(path: &Path) -> Option<&'static str> {
         "html" | "htm" => Some("html"),
         "vue" => Some("vue"),
         "xml" => Some("xml"),
-        "json" => Some("json"),
-        "yaml" | "yml" => Some("yaml"),
+        "json" if repo_filter::data_file_symbol_indexing_enabled() => Some("json"),
+        "yaml" | "yml" if repo_filter::data_file_symbol_indexing_enabled() => Some("yaml"),
         _ => None,
     }
 }
@@ -2010,6 +2096,12 @@ pub fn gamma() { beta(); }
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::create_dir_all(dir.path().join("target")).unwrap();
         fs::create_dir_all(dir.path().join(".agent007/runtime")).unwrap();
+        fs::create_dir_all(
+            dir.path()
+                .join(".agent007.bak.20260503-142745")
+                .join("sessions"),
+        )
+        .unwrap();
         fs::create_dir_all(dir.path().join("dist")).unwrap();
         fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
         fs::write(dir.path().join("target/generated.rs"), "pub fn bad() {}\n").unwrap();
@@ -2018,7 +2110,17 @@ pub fn gamma() { beta(); }
             "{}",
         )
         .unwrap();
+        fs::write(
+            dir.path()
+                .join(".agent007.bak.20260503-142745")
+                .join("sessions")
+                .join("workflow-state.json"),
+            "{}",
+        )
+        .unwrap();
         fs::write(dir.path().join("dist/bundle.js"), "function bundled() {}\n").unwrap();
+        fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        fs::write(dir.path().join(".env"), "OPENAI_API_KEY=secret").unwrap();
 
         let files = repo_graph_trackable_files(dir.path()).unwrap();
         let rels: Vec<_> = files
@@ -2026,6 +2128,146 @@ pub fn gamma() { beta(); }
             .map(|p| relative_path(dir.path(), p).to_string_lossy().to_string())
             .collect();
         assert_eq!(rels, vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn graph_skips_json_and_yaml_data_files_by_default() {
+        std::env::remove_var("AGENT007_REPO_GRAPH_INDEX_DATA_FILES");
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"scripts":{"test":"cargo test"},"nested":{"key":true}}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("config.yaml"), "auth:\n  token: secret\n").unwrap();
+
+        let graph = RepoGraphBuilder::new(dir.path()).build().unwrap();
+        assert!(graph
+            .nodes
+            .iter()
+            .all(|node| node.path.as_deref() != Some("config.json")
+                && node.path.as_deref() != Some("config.yaml")));
+        assert_eq!(symbol_lookup(&graph, "alpha", true).len(), 1);
+        assert_eq!(symbol_lookup(&graph, "scripts", true).len(), 0);
+        assert_eq!(symbol_lookup(&graph, "auth", true).len(), 0);
+    }
+
+    #[test]
+    fn load_graph_sanitizes_legacy_runtime_and_data_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph_path = dir.path().join("repo_graph_v1.json");
+        let legacy_graph = RepoGraph {
+            version: GRAPH_VERSION,
+            root: dir.path().display().to_string(),
+            built_at: Utc::now().to_rfc3339(),
+            graph_path: graph_path.display().to_string(),
+            counts: RepoGraphCounts {
+                files: 3,
+                rust_files: 1,
+                doc_files: 0,
+                symbols: 3,
+                modules: 0,
+                docs: 0,
+                edges: 3,
+            },
+            nodes: vec![
+                RepoGraphNode {
+                    id: "file:src/lib.rs".into(),
+                    kind: RepoGraphNodeKind::File,
+                    name: "lib.rs".into(),
+                    path: Some("src/lib.rs".into()),
+                    language: Some("rust".into()),
+                    symbol_kind: None,
+                    line: None,
+                    signature: None,
+                },
+                RepoGraphNode {
+                    id: "symbol:src/lib.rs:alpha:1".into(),
+                    kind: RepoGraphNodeKind::Symbol,
+                    name: "alpha".into(),
+                    path: Some("src/lib.rs".into()),
+                    language: Some("rust".into()),
+                    symbol_kind: Some("function".into()),
+                    line: Some(1),
+                    signature: Some("src/lib.rs::alpha".into()),
+                },
+                RepoGraphNode {
+                    id: "file:.agent007.bak.20260503-142745/sessions/context-bundle.json".into(),
+                    kind: RepoGraphNodeKind::File,
+                    name: "context-bundle.json".into(),
+                    path: Some(".agent007.bak.20260503-142745/sessions/context-bundle.json".into()),
+                    language: Some("json".into()),
+                    symbol_kind: None,
+                    line: None,
+                    signature: None,
+                },
+                RepoGraphNode {
+                    id: "symbol:.agent007.bak.20260503-142745/sessions/context-bundle.json:task:1"
+                        .into(),
+                    kind: RepoGraphNodeKind::Symbol,
+                    name: "task".into(),
+                    path: Some(".agent007.bak.20260503-142745/sessions/context-bundle.json".into()),
+                    language: Some("json".into()),
+                    symbol_kind: Some("property".into()),
+                    line: Some(1),
+                    signature: Some("context-bundle.json::task".into()),
+                },
+                RepoGraphNode {
+                    id: "file:config.yaml".into(),
+                    kind: RepoGraphNodeKind::File,
+                    name: "config.yaml".into(),
+                    path: Some("config.yaml".into()),
+                    language: Some("yaml".into()),
+                    symbol_kind: None,
+                    line: None,
+                    signature: None,
+                },
+                RepoGraphNode {
+                    id: "symbol:config.yaml:auth:1".into(),
+                    kind: RepoGraphNodeKind::Symbol,
+                    name: "auth".into(),
+                    path: Some("config.yaml".into()),
+                    language: Some("yaml".into()),
+                    symbol_kind: Some("mapping".into()),
+                    line: Some(1),
+                    signature: Some("config.yaml::auth".into()),
+                },
+            ],
+            edges: vec![
+                RepoGraphEdge {
+                    kind: RepoGraphEdgeKind::Defines,
+                    from: "file:src/lib.rs".into(),
+                    to: "symbol:src/lib.rs:alpha:1".into(),
+                    path: Some("src/lib.rs".into()),
+                    line: Some(1),
+                },
+                RepoGraphEdge {
+                    kind: RepoGraphEdgeKind::Defines,
+                    from: "file:.agent007.bak.20260503-142745/sessions/context-bundle.json".into(),
+                    to: "symbol:.agent007.bak.20260503-142745/sessions/context-bundle.json:task:1"
+                        .into(),
+                    path: Some(".agent007.bak.20260503-142745/sessions/context-bundle.json".into()),
+                    line: Some(1),
+                },
+                RepoGraphEdge {
+                    kind: RepoGraphEdgeKind::Defines,
+                    from: "file:config.yaml".into(),
+                    to: "symbol:config.yaml:auth:1".into(),
+                    path: Some("config.yaml".into()),
+                    line: Some(1),
+                },
+            ],
+        };
+        save_graph(&legacy_graph, &graph_path).unwrap();
+
+        let graph = load_graph(&graph_path).unwrap();
+        assert_eq!(graph.counts.files, 1);
+        assert_eq!(graph.counts.symbols, 1);
+        assert_eq!(symbol_lookup(&graph, "alpha", true).len(), 1);
+        assert_eq!(symbol_lookup(&graph, "task", true).len(), 0);
+        assert_eq!(symbol_lookup(&graph, "auth", true).len(), 0);
     }
 
     #[test]
