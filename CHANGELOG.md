@@ -8,6 +8,18 @@ for public releases.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-30
+
+### Added
+
+- Hub and domain-pack management improvements for registry search, install/import visibility, and pack-backed global assets.
+- Redb-backed RepoIndex v2 for bounded repo-intelligence lookups without loading the full legacy graph JSON.
+
+### Changed
+
+- Hosted MCP behavior and provider configuration were clarified so host/editor LLM execution stays provider-neutral by default.
+- ETR, MCP, and prompt-context symbol queries now prefer the RepoIndex path while retaining `repo_graph_v1.json` for compatibility.
+
 ## [0.6.0] - 2026-05-27
 
 ### Added

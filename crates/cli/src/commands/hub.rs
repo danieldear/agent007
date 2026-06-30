@@ -1014,7 +1014,7 @@ mod tests {
     async fn spawn_dashboard_health() -> (u16, tokio::task::JoinHandle<()>) {
         let app = Router::new().route(
             "/api/health",
-            get(|| async { Json(json!({"status": "ok", "version": "0.6.0"})) }),
+            get(|| async { Json(json!({"status": "ok", "version": env!("CARGO_PKG_VERSION")})) }),
         );
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
