@@ -30,7 +30,7 @@ const EDGES_TO: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::n
 const FILE_NODES: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("file_nodes");
 const FILE_EDGES: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("file_edges");
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoIndexStatus {
     pub exists: bool,
     pub index_path: String,

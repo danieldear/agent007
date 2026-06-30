@@ -54,7 +54,7 @@ RepoIndexReader
         +-- context:       bounded symbol + neighbor queries
 ```
 
-The legacy JSON graph remains as a compatibility artifact for older APIs while query hot paths move to `RepoIndex`. New code should prefer `RepoIndex` and avoid loading `repo_graph_v1.json` unless maintaining backward compatibility.
+The legacy JSON graph remains only as an explicit compatibility artifact for older graph APIs while query hot paths move to `RepoIndex`. New code should prefer `RepoIndex` and avoid loading or creating `repo_graph_v1.json` unless maintaining backward compatibility.
 
 ## Why redb
 
@@ -87,5 +87,5 @@ Tree-sitter is the baseline indexer today. Future LSP integration should be an o
 - ETR symbol/call/context queries no longer need to materialize the full graph JSON.
 - Prompt-context collection reads bounded index results instead of full graph vectors.
 - The redb file is treated as a runtime artifact and skipped by repo graph/prompt scanning.
-- Missing-index query paths can build `repo_index_v2.redb` directly without emitting legacy JSON.
+- Missing-index query paths and default project init build `repo_index_v2.redb` directly without emitting legacy JSON.
 - Incremental per-file writes can be added behind the same `RepoIndexWriter` shape without changing ETR/MCP callers.

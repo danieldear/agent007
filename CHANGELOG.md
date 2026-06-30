@@ -14,6 +14,7 @@ for public releases.
 
 - Hub and domain-pack management improvements for registry search, install/import visibility, and pack-backed global assets.
 - Redb-backed RepoIndex v2 for bounded repo-intelligence lookups without loading the full legacy graph JSON.
+- Default init and structural preflight now build the RepoIndex directly instead of creating `repo_graph_v1.json`.
 
 ### Changed
 

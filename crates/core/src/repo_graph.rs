@@ -83,7 +83,7 @@ pub struct RepoGraph {
     pub edges: Vec<RepoGraphEdge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoGraphStatus {
     pub exists: bool,
     pub graph_path: String,
@@ -105,9 +105,10 @@ pub struct RepoGraphStatus {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoGraphFreshnessState {
+    #[default]
     Missing,
     Fresh,
     Updating,
@@ -437,7 +438,7 @@ pub fn build_and_save_index(
     let built_at = Utc::now().to_rfc3339();
     let root_string = root.display().to_string();
 
-    crate::repo_index::write_index_with(&target, &root_string, &built_at, |sink| {
+    let status = crate::repo_index::write_index_with(&target, &root_string, &built_at, |sink| {
         let mut counts = RepoGraphCounts::default();
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
         let mut pending_calls = Vec::new();
@@ -599,7 +600,9 @@ pub fn build_and_save_index(
         }
 
         Ok(counts)
-    })
+    })?;
+    let _ = clear_repo_graph_dirty_paths(&root, &[]);
+    Ok(status)
 }
 
 fn count_inserted_node(counts: &mut RepoGraphCounts, node: &RepoGraphNode) {

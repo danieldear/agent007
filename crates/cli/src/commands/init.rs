@@ -1,5 +1,5 @@
 use agent007_core::{
-    build_and_save_graph, write_repo_intelligence_readiness, RepoIntelligenceOptions,
+    build_and_save_index, write_repo_intelligence_readiness, RepoIntelligenceOptions,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -672,13 +672,16 @@ pub async fn execute(
             warn(&format!("Could not seed global home: {e}"));
         }
 
-        section("5c. Building initial repo graph");
-        match build_and_save_graph(&project_dir, None) {
-            Ok(graph) => ok(&format!(
-                "repo graph created ({} files, {} symbols)",
-                graph.counts.files, graph.counts.symbols
-            )),
-            Err(e) => warn(&format!("Could not build initial repo graph: {e}")),
+        section("5c. Building initial repo index");
+        match build_and_save_index(&project_dir, None) {
+            Ok(status) => {
+                let counts = status.counts.unwrap_or_default();
+                ok(&format!(
+                    "repo index created ({} files, {} symbols)",
+                    counts.files, counts.symbols
+                ));
+            }
+            Err(e) => warn(&format!("Could not build initial repo index: {e}")),
         }
         match write_repo_intelligence_readiness(
             &project_dir,
@@ -4370,7 +4373,7 @@ name = "night"
     }
 
     #[tokio::test]
-    async fn project_init_builds_initial_repo_graph() {
+    async fn project_init_builds_initial_repo_index() {
         let temp = tempfile::tempdir().unwrap();
 
         // Guard that restores the working directory even on panic/assertion failure.
@@ -4400,15 +4403,21 @@ name = "night"
             .await
             .unwrap();
 
-        let graph_path = temp.path().join(".agent007/runtime/repo_graph_v1.json");
+        let index_path = temp.path().join(".agent007/runtime/repo_index_v2.redb");
         assert!(
-            graph_path.exists(),
-            "expected repo graph at {}",
-            graph_path.display()
+            index_path.exists(),
+            "expected repo index at {}",
+            index_path.display()
         );
-        let graph: agent007_core::RepoGraph =
-            serde_json::from_str(&std::fs::read_to_string(&graph_path).unwrap()).unwrap();
-        assert!(graph.counts.symbols >= 2);
+        let index = agent007_core::RepoIndex::open(&index_path).unwrap();
+        assert_eq!(index.symbol_lookup("alpha", true).unwrap().len(), 1);
+        assert!(
+            !temp
+                .path()
+                .join(".agent007/runtime/repo_graph_v1.json")
+                .exists(),
+            "init should not create legacy repo_graph_v1.json by default"
+        );
     }
 }
 
