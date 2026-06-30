@@ -188,3 +188,8 @@ For deterministic low-latency extraction/query helpers, use ETR built-ins via:
 
 Policy for core vs optional/plugin tools:
 - [docs/etr-tool-admission-policy.md](etr-tool-admission-policy.md)
+
+## Repo intelligence index
+
+agent007 writes repo-intelligence lookups to `.agent007/runtime/repo_index_v2.redb`. ETR and MCP graph queries prefer this bounded index for symbol lookup, callers/callees, usage graph, doc links, and prompt-context bundles. The older `repo_graph_v1.json` path is kept for compatibility with legacy APIs, but new code should query `RepoIndex` instead of loading the full JSON graph.
+

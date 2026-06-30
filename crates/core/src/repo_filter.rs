@@ -122,6 +122,7 @@ pub fn is_runtime_artifact_file_name(name: &str) -> bool {
     matches!(
         name,
         "repo_graph_v1.json"
+            | "repo_index_v2.redb"
             | "repo_graph_dirty_paths.json"
             | "repo_intelligence_readiness_v1.json"
             | "context-bundle.json"

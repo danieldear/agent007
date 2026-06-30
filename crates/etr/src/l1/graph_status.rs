@@ -7,6 +7,8 @@ pub fn run(input: &Value) -> Result<Value> {
     let root = input_root(input)?;
     let graph_path = input_graph_path(input, &root);
     let status = agent007_core::graph_status(&graph_path);
+    let index_path = agent007_core::index_path_for_graph_path(&graph_path);
+    let index = agent007_core::index_status(&index_path);
     Ok(json!({
         "exists": status.exists,
         "graph_path": status.graph_path,
@@ -20,6 +22,7 @@ pub fn run(input: &Value) -> Result<Value> {
         "freshness": status.freshness,
         "dirty_paths": status.dirty_paths,
         "last_error": status.last_error,
+        "index": index,
     }))
 }
 

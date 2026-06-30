@@ -16,6 +16,7 @@ pub fn run(input: &Value) -> Result<Value> {
         "built": true,
         "root": graph.root,
         "graph_path": graph.graph_path,
+        "index_path": agent007_core::index_path_for_graph_path(std::path::Path::new(&graph.graph_path)).display().to_string(),
         "version": graph.version,
         "counts": graph.counts,
         "readiness": readiness,
@@ -37,5 +38,9 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("repo_graph_v1.json"));
+        assert!(out["index_path"]
+            .as_str()
+            .unwrap()
+            .contains("repo_index_v2.redb"));
     }
 }

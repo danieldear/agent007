@@ -10,7 +10,7 @@ use crate::compact::compact_command_output;
 use crate::error::CoreError;
 use crate::repo_brain::{RepoBrain, RepoBrainBuilder};
 use crate::repo_filter;
-use crate::repo_graph::{context_bundle_for_query, load_or_build_graph};
+
 use crate::repo_readiness::{write_repo_intelligence_readiness, RepoIntelligenceOptions};
 use crate::run_store::{RunMetadata, RunStore};
 
@@ -248,10 +248,11 @@ impl ContextCompiler {
             None,
             &RepoIntelligenceOptions::default(),
         );
-        let Ok(graph) = load_or_build_graph(&self.root, None) else {
+        let Ok(bundle) =
+            crate::repo_index::context_bundle_for_query_index(&self.root, None, task, 6, 2)
+        else {
             return (String::new(), Vec::new());
         };
-        let bundle = context_bundle_for_query(&graph, task, 6, 2);
         (
             bound_text(&bundle.text, MAX_STRUCTURAL_CONTEXT_CHARS),
             bundle.files,

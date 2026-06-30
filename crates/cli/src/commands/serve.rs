@@ -3041,7 +3041,7 @@ fn persist_record_tokens_memory_record(
     let scoped = memory_store().scoped("project");
     let normalized_kind = sanitize_tool_component(kind);
     let repo_root = current_project_root();
-    let graph_refs = agent007_core::evidence_refs_for_text(&repo_root, None, output, 8);
+    let graph_refs = agent007_core::evidence_refs_for_text_index(&repo_root, None, output, 8);
     let record = serde_json::json!({
         "run_id": run_id,
         "kind": kind,
@@ -4043,10 +4043,10 @@ fn read_relevant_memory_block(
 
 fn structural_repo_context(task_or_args: &str) -> String {
     let root = current_project_root();
-    let Ok(graph) = agent007_core::load_or_build_graph(&root, None) else {
+    let Ok(bundle) = agent007_core::context_bundle_for_query_index(&root, None, task_or_args, 6, 2)
+    else {
         return String::new();
     };
-    let bundle = agent007_core::context_bundle_for_query(&graph, task_or_args, 6, 2);
     if bundle.text.trim().is_empty() {
         return String::new();
     }
