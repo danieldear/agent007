@@ -1216,11 +1216,17 @@ pub async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
         }
         let repo_root = FsPath::new(&state.project_path);
         let graph_path = agent007_core::default_graph_path_for_root(repo_root);
+        let index_path = agent007_core::default_index_path_for_root(repo_root);
         let graph_status = agent007_core::graph_status(&graph_path);
+        let index_status = agent007_core::index_status(&index_path);
         let repo_readiness = repo_intelligence_readiness_for_project(repo_root);
         obj.insert(
             "repo_graph".to_string(),
             serde_json::to_value(graph_status).unwrap_or_else(|_| serde_json::json!({})),
+        );
+        obj.insert(
+            "repo_index".to_string(),
+            serde_json::to_value(index_status).unwrap_or_else(|_| serde_json::json!({})),
         );
         obj.insert(
             "repo_intelligence".to_string(),
@@ -7085,6 +7091,7 @@ fn repo_intelligence_readiness_for_project(
             state: agent007_core::RepoIntelligenceState::BaselineOnly,
             baseline_ready: true,
             graph: agent007_core::graph_status(&agent007_core::default_graph_path_for_root(root)),
+            index: agent007_core::index_status(&agent007_core::default_index_path_for_root(root)),
             languages: Vec::new(),
             tree_sitter: agent007_core::TreeSitterReadiness {
                 wired: false,
@@ -7779,10 +7786,14 @@ mod tests {
                 Some("phrase:analyze the code")
             );
             assert_eq!(
-                preflight["readiness"]["graph"]["exists"].as_bool(),
+                preflight["readiness"]["index"]["exists"].as_bool(),
                 Some(true)
             );
             assert!(project
+                .path()
+                .join(".agent007/runtime/repo_index_v2.redb")
+                .exists());
+            assert!(!project
                 .path()
                 .join(".agent007/runtime/repo_graph_v1.json")
                 .exists());
@@ -7843,10 +7854,14 @@ mod tests {
                 Some("skill:/meta-analyze-codebase")
             );
             assert_eq!(
-                preflight["readiness"]["graph"]["exists"].as_bool(),
+                preflight["readiness"]["index"]["exists"].as_bool(),
                 Some(true)
             );
             assert!(project
+                .path()
+                .join(".agent007/runtime/repo_index_v2.redb")
+                .exists());
+            assert!(!project
                 .path()
                 .join(".agent007/runtime/repo_graph_v1.json")
                 .exists());

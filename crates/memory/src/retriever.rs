@@ -164,10 +164,10 @@ impl Retriever {
         let Some(root) = &self.repo_graph_root else {
             return (String::new(), Vec::new(), Vec::new());
         };
-        let Ok(graph) = agent007_core::load_or_build_graph(root, None) else {
+        let Ok(bundle) = agent007_core::context_bundle_for_query_index(root, None, query, 6, 2)
+        else {
             return (String::new(), Vec::new(), Vec::new());
         };
-        let bundle = agent007_core::context_bundle_for_query(&graph, query, 6, 2);
         if bundle.text.trim().is_empty() {
             return (String::new(), Vec::new(), Vec::new());
         }

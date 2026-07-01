@@ -7,6 +7,7 @@ pub mod paths;
 pub mod repo_brain;
 pub mod repo_filter;
 pub mod repo_graph;
+pub mod repo_index;
 pub mod repo_readiness;
 pub mod tool_executor;
 pub mod tree_sitter_support;
@@ -34,17 +35,23 @@ pub use hash::stable_context_hash;
 pub use persona::{NoOpPersonaProvider, PersonaProvider, PersonaSpec};
 pub use repo_brain::{RepoBrain, RepoBrainBuilder};
 pub use repo_graph::{
-    build_and_save_graph, callees_for_symbol, callers_for_symbol, context_bundle_for_query,
-    default_graph_path_for_root, dep_path_between_symbols, dirty_paths_path_for_root,
-    doc_links_for_symbol, evidence_refs_for_text, freshen_graph_if_needed, graph_stale_paths,
-    graph_status, impact_radius_for_symbol, is_repo_graph_trackable_path, load_graph,
-    load_or_build_graph, load_repo_graph_dirty_paths, mark_repo_graph_dirty_paths,
-    refresh_graph_for_paths, repo_graph_trackable_files, resolve_graph_path, symbol_lookup,
-    usage_graph_for_symbol, RepoGraph, RepoGraphBuilder, RepoGraphCounts, RepoGraphDirtySet,
-    RepoGraphEdge, RepoGraphEdgeKind, RepoGraphFreshenReport, RepoGraphFreshnessState,
-    RepoGraphNeighborhood, RepoGraphNode, RepoGraphNodeKind, RepoGraphPathResult,
-    RepoGraphPathStep, RepoGraphQueryContext, RepoGraphStatus,
+    build_and_save_graph, build_and_save_index, callees_for_symbol, callers_for_symbol,
+    context_bundle_for_query, default_graph_path_for_root, dep_path_between_symbols,
+    dirty_paths_path_for_root, doc_links_for_symbol, evidence_refs_for_text,
+    freshen_graph_if_needed, graph_stale_paths, graph_status, impact_radius_for_symbol,
+    is_repo_graph_trackable_path, load_graph, load_or_build_graph, load_repo_graph_dirty_paths,
+    mark_repo_graph_dirty_paths, refresh_graph_for_paths, repo_graph_trackable_files,
+    resolve_graph_path, symbol_lookup, usage_graph_for_symbol, RepoGraph, RepoGraphBuilder,
+    RepoGraphCounts, RepoGraphDirtySet, RepoGraphEdge, RepoGraphEdgeKind, RepoGraphFreshenReport,
+    RepoGraphFreshnessState, RepoGraphNeighborhood, RepoGraphNode, RepoGraphNodeKind,
+    RepoGraphPathResult, RepoGraphPathStep, RepoGraphQueryContext, RepoGraphStatus,
 };
+pub use repo_index::{
+    build_and_save_index_for_graph, context_bundle_for_query_index, default_index_path_for_root,
+    evidence_refs_for_text_index, index_path_for_graph_path, index_status, load_or_build_index,
+    open_index_for_graph_path, save_index, RepoIndex, RepoIndexStatus,
+};
+
 pub use repo_readiness::{
     detect_repo_intelligence_readiness, ensure_repo_graph_ready_for_task,
     ensure_repo_graph_ready_for_trigger, load_repo_intelligence_readiness, readiness_path_for_root,

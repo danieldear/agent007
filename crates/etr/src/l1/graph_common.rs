@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use agent007_core::{
-    build_and_save_graph, default_graph_path_for_root, freshen_graph_if_needed, load_graph,
-    resolve_graph_path, RepoGraph,
+    build_and_save_graph, build_and_save_index, default_graph_path_for_root,
+    freshen_graph_if_needed, index_path_for_graph_path, load_graph, resolve_graph_path, RepoGraph,
+    RepoIndex,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -73,4 +74,45 @@ pub fn resolved_graph_path(input: &Value) -> PathBuf {
     let root = input["root"].as_str().map(PathBuf::from);
     let explicit = input["graph_path"].as_str().map(PathBuf::from);
     resolve_graph_path(root.as_deref(), explicit.as_deref())
+}
+
+pub fn open_index_maybe_build(input: &Value) -> Result<(PathBuf, PathBuf, RepoIndex)> {
+    let root = input_root(input)?;
+    let graph_path = input_graph_path(input, &root);
+    let index_path = input["index_path"]
+        .as_str()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| index_path_for_graph_path(&graph_path));
+    let build_if_missing = input["build_if_missing"].as_bool().unwrap_or(false);
+    let auto_refresh = input["auto_refresh"].as_bool().unwrap_or(true);
+    let max_incremental_paths = input["max_incremental_paths"].as_u64().unwrap_or(500) as usize;
+
+    if auto_refresh && graph_path.exists() {
+        let _ = freshen_graph_if_needed(&root, Some(&graph_path), max_incremental_paths)
+            .with_context(|| {
+                format!(
+                    "failed graph/index freshness preflight for {}",
+                    graph_path.display()
+                )
+            })?;
+    }
+
+    if index_path.exists() {
+        let index = RepoIndex::open(&index_path)
+            .with_context(|| format!("failed to open {}", index_path.display()))?;
+        return Ok((graph_path, index_path, index));
+    }
+
+    if graph_path.exists() || build_if_missing {
+        build_and_save_index(&root, Some(&index_path))
+            .with_context(|| format!("failed to build repo index at {}", index_path.display()))?;
+        let index = RepoIndex::open(&index_path)
+            .with_context(|| format!("failed to open {}", index_path.display()))?;
+        return Ok((graph_path, index_path, index));
+    }
+
+    anyhow::bail!(
+        "repo index not found at {}; run etr.graph_build first or pass build_if_missing=true",
+        index_path.display()
+    )
 }

@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 use crate::repo_graph::{
-    build_and_save_graph, default_graph_path_for_root, graph_status, RepoGraphStatus,
+    build_and_save_index, default_graph_path_for_root, graph_status, load_repo_graph_dirty_paths,
+    RepoGraphStatus,
 };
+use crate::repo_index::{default_index_path_for_root, index_status, RepoIndexStatus};
 use crate::tree_sitter_support::support_summary_for_languages;
 
 const READINESS_VERSION: u32 = 1;
@@ -127,7 +129,10 @@ pub struct RepoIntelligenceReadiness {
     pub generated_at: String,
     pub state: RepoIntelligenceState,
     pub baseline_ready: bool,
+    #[serde(default)]
     pub graph: RepoGraphStatus,
+    #[serde(default)]
+    pub index: RepoIndexStatus,
     pub languages: Vec<LanguageReadiness>,
     pub tree_sitter: TreeSitterReadiness,
     pub recommendations: Vec<InstallRecommendation>,
@@ -179,6 +184,8 @@ pub fn detect_repo_intelligence_readiness(
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let graph_path = default_graph_path_for_root(&root);
     let graph = graph_status(&graph_path);
+    let index_path = default_index_path_for_root(&root);
+    let index = index_status(&index_path);
     let languages = detect_languages(&root)?;
     let mut recommendations = Vec::new();
     let mut enriched_languages = Vec::new();
@@ -265,10 +272,14 @@ pub fn detect_repo_intelligence_readiness(
             "Semantic enrichment is active for at least one detected language.".to_string(),
         ),
     }
-    if !graph.exists {
-        notes.push("Repo graph artifact is missing; build or refresh the graph to enable structural queries.".to_string());
-    } else if graph.stale {
-        notes.push("Repo graph artifact is stale; refresh it to align structural results with the current workspace.".to_string());
+    if !index.exists {
+        notes.push("Repo index artifact is missing; build or refresh repo intelligence to enable structural queries.".to_string());
+    }
+    if graph.exists && graph.stale {
+        notes.push(
+            "Legacy repo graph JSON is stale; RepoIndex is the preferred structural query source."
+                .to_string(),
+        );
     }
 
     Ok(RepoIntelligenceReadiness {
@@ -278,6 +289,7 @@ pub fn detect_repo_intelligence_readiness(
         state,
         baseline_ready: true,
         graph,
+        index,
         languages: enriched_languages,
         tree_sitter,
         recommendations,
@@ -370,14 +382,15 @@ fn ensure_repo_graph_ready(
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut readiness = write_repo_intelligence_readiness(&root, None, options)?;
 
+    let dirty_paths = load_repo_graph_dirty_paths(&root).unwrap_or_default();
     let action = if readiness.state == RepoIntelligenceState::EmptyRepo {
         RepoGraphEnsureAction::EmptyRepo
-    } else if !readiness.graph.exists {
-        let _ = build_and_save_graph(&root, None)?;
+    } else if !readiness.index.exists {
+        let _ = build_and_save_index(&root, None)?;
         readiness = write_repo_intelligence_readiness(&root, None, options)?;
         RepoGraphEnsureAction::Built
-    } else if readiness.graph.stale {
-        let _ = build_and_save_graph(&root, None)?;
+    } else if !dirty_paths.is_empty() || readiness.graph.stale {
+        let _ = build_and_save_index(&root, None)?;
         readiness = write_repo_intelligence_readiness(&root, None, options)?;
         RepoGraphEnsureAction::Refreshed
     } else {
@@ -768,7 +781,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.action, RepoGraphEnsureAction::Built);
-        assert!(result.readiness.graph.exists);
+        assert!(result.readiness.index.exists);
+        assert!(!result.readiness.graph.exists);
+        assert!(default_index_path_for_root(dir.path()).exists());
+        assert!(!default_graph_path_for_root(dir.path()).exists());
     }
 
     #[test]
@@ -783,6 +799,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.action, RepoGraphEnsureAction::EmptyRepo);
+        assert!(!result.readiness.index.exists);
         assert!(!result.readiness.graph.exists);
     }
 }

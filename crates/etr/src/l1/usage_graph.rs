@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::graph_common::load_graph_maybe_build;
+use super::graph_common::open_index_maybe_build;
 
 pub fn run(input: &Value) -> Result<Value> {
     let symbol = input["symbol"]
@@ -9,8 +9,8 @@ pub fn run(input: &Value) -> Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("symbol required"))?;
     let exact = input["exact"].as_bool().unwrap_or(true);
     let max_depth = input["max_depth"].as_u64().unwrap_or(1) as usize;
-    let (_, graph) = load_graph_maybe_build(input)?;
-    let out = agent007_core::usage_graph_for_symbol(&graph, symbol, exact, max_depth);
+    let (_, _index_path, index) = open_index_maybe_build(input)?;
+    let out = index.usage_graph_for_symbol(symbol, exact, max_depth)?;
     Ok(serde_json::to_value(out)?)
 }
 

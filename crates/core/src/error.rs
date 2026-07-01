@@ -25,6 +25,9 @@ pub enum CoreError {
     #[error("resource not configured: {0}")]
     NotConfigured(String),
 
+    #[error("repo index error: {0}")]
+    RepoIndex(String),
+
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
@@ -45,6 +48,10 @@ impl CoreError {
             path: path.as_ref().to_path_buf(),
             source,
         }
+    }
+
+    pub fn repo_index(message: impl Into<String>) -> Self {
+        Self::RepoIndex(message.into())
     }
 }
 

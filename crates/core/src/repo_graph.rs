@@ -83,7 +83,7 @@ pub struct RepoGraph {
     pub edges: Vec<RepoGraphEdge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoGraphStatus {
     pub exists: bool,
     pub graph_path: String,
@@ -105,9 +105,10 @@ pub struct RepoGraphStatus {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoGraphFreshnessState {
+    #[default]
     Missing,
     Fresh,
     Updating,
@@ -418,8 +419,208 @@ pub fn build_and_save_graph(root: &Path, path: Option<&Path>) -> Result<RepoGrap
         .unwrap_or_else(|| default_graph_path_for_root(root));
     graph.graph_path = target.display().to_string();
     save_graph(&graph, &target)?;
+    crate::repo_index::save_index(
+        &graph,
+        &crate::repo_index::index_path_for_graph_path(&target),
+    )?;
     let _ = clear_repo_graph_dirty_paths(root, &[]);
     Ok(graph)
+}
+
+pub fn build_and_save_index(
+    root: &Path,
+    index_path: Option<&Path>,
+) -> Result<crate::repo_index::RepoIndexStatus, CoreError> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let target = index_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::repo_index::default_index_path_for_root(&root));
+    let built_at = Utc::now().to_rfc3339();
+    let root_string = root.display().to_string();
+
+    let status = crate::repo_index::write_index_with(&target, &root_string, &built_at, |sink| {
+        let mut counts = RepoGraphCounts::default();
+        let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+        let mut pending_calls = Vec::new();
+        let mut pending_doc_links = Vec::new();
+        let all_files = walk_repo_files(&root)?;
+
+        for path in &all_files {
+            let rel = relative_path(&root, path);
+            let path_str = rel.to_string_lossy().to_string();
+            if let Some(language) = detect_source_language(path) {
+                let parsed = parse_source_file(path, &path_str, language)?;
+                let file_id = format!("file:{path_str}");
+                let file_node = RepoGraphNode {
+                    id: file_id.clone(),
+                    kind: RepoGraphNodeKind::File,
+                    name: path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&path_str)
+                        .to_string(),
+                    path: Some(path_str.clone()),
+                    language: Some(language.into()),
+                    symbol_kind: None,
+                    line: None,
+                    signature: None,
+                };
+                if sink.insert_node(&file_node)? {
+                    count_inserted_node(&mut counts, &file_node);
+                }
+
+                for import_path in parsed.imports {
+                    let module_id = format!("module:{import_path}");
+                    let module_node = RepoGraphNode {
+                        id: module_id.clone(),
+                        kind: RepoGraphNodeKind::Module,
+                        name: import_path.clone(),
+                        path: None,
+                        language: Some(language.into()),
+                        symbol_kind: None,
+                        line: None,
+                        signature: None,
+                    };
+                    if sink.insert_node(&module_node)? {
+                        count_inserted_node(&mut counts, &module_node);
+                    }
+                    let edge = RepoGraphEdge {
+                        kind: RepoGraphEdgeKind::Imports,
+                        from: file_id.clone(),
+                        to: module_id,
+                        path: Some(path_str.clone()),
+                        line: None,
+                    };
+                    if sink.insert_edge(&edge)? {
+                        counts.edges += 1;
+                    }
+                }
+
+                for symbol in parsed.symbols {
+                    let node_id = format!("symbol:{path_str}:{}:{}", symbol.name, symbol.line);
+                    let symbol_node = RepoGraphNode {
+                        id: node_id.clone(),
+                        kind: RepoGraphNodeKind::Symbol,
+                        name: symbol.name.clone(),
+                        path: Some(path_str.clone()),
+                        language: Some(language.into()),
+                        symbol_kind: Some(symbol.kind.clone()),
+                        line: Some(symbol.line),
+                        signature: Some(symbol.signature.clone()),
+                    };
+                    if sink.insert_node(&symbol_node)? {
+                        count_inserted_node(&mut counts, &symbol_node);
+                    }
+                    symbol_index
+                        .entry(symbol.name.clone())
+                        .or_default()
+                        .push(node_id.clone());
+                    let edge = RepoGraphEdge {
+                        kind: RepoGraphEdgeKind::Defines,
+                        from: file_id.clone(),
+                        to: node_id.clone(),
+                        path: Some(path_str.clone()),
+                        line: Some(symbol.line),
+                    };
+                    if sink.insert_edge(&edge)? {
+                        counts.edges += 1;
+                    }
+                    for call in symbol.calls {
+                        pending_calls.push(PendingCall {
+                            from_symbol_id: node_id.clone(),
+                            target_name: call.name,
+                            path: path_str.clone(),
+                            line: call.line,
+                        });
+                    }
+                }
+            }
+        }
+
+        for path in &all_files {
+            let rel = relative_path(&root, path);
+            let path_str = rel.to_string_lossy().to_string();
+            if is_doc_file(path) && is_repo_graph_trackable_path(path) {
+                let doc_id = format!("doc:{path_str}");
+                let doc_node = RepoGraphNode {
+                    id: doc_id.clone(),
+                    kind: RepoGraphNodeKind::Doc,
+                    name: path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&path_str)
+                        .to_string(),
+                    path: Some(path_str.clone()),
+                    language: Some("markdown".into()),
+                    symbol_kind: None,
+                    line: None,
+                    signature: None,
+                };
+                if sink.insert_node(&doc_node)? {
+                    count_inserted_node(&mut counts, &doc_node);
+                }
+                for symbol_name in extract_doc_symbol_mentions(path)? {
+                    pending_doc_links.push((doc_id.clone(), path_str.clone(), symbol_name));
+                }
+            }
+        }
+
+        for pending in pending_calls {
+            if let Some(targets) = symbol_index.get(&pending.target_name) {
+                for target in targets {
+                    let edge = RepoGraphEdge {
+                        kind: RepoGraphEdgeKind::Calls,
+                        from: pending.from_symbol_id.clone(),
+                        to: target.clone(),
+                        path: Some(pending.path.clone()),
+                        line: Some(pending.line),
+                    };
+                    if sink.insert_edge(&edge)? {
+                        counts.edges += 1;
+                    }
+                }
+            }
+        }
+
+        for (doc_id, doc_path, symbol_name) in pending_doc_links {
+            if let Some(targets) = symbol_index.get(&symbol_name) {
+                for target in targets {
+                    let edge = RepoGraphEdge {
+                        kind: RepoGraphEdgeKind::Documents,
+                        from: doc_id.clone(),
+                        to: target.clone(),
+                        path: Some(doc_path.clone()),
+                        line: None,
+                    };
+                    if sink.insert_edge(&edge)? {
+                        counts.edges += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(counts)
+    })?;
+    let _ = clear_repo_graph_dirty_paths(&root, &[]);
+    Ok(status)
+}
+
+fn count_inserted_node(counts: &mut RepoGraphCounts, node: &RepoGraphNode) {
+    match node.kind {
+        RepoGraphNodeKind::File => {
+            counts.files += 1;
+            if node.language.as_deref() == Some("rust") {
+                counts.rust_files += 1;
+            }
+        }
+        RepoGraphNodeKind::Doc => {
+            counts.files += 1;
+            counts.doc_files += 1;
+            counts.docs += 1;
+        }
+        RepoGraphNodeKind::Symbol => counts.symbols += 1,
+        RepoGraphNodeKind::Module => counts.modules += 1,
+    }
 }
 
 pub fn refresh_graph_for_paths(
@@ -590,6 +791,10 @@ pub fn refresh_graph_for_paths(
         edges,
     };
     save_graph(&refreshed, &target)?;
+    crate::repo_index::save_index(
+        &refreshed,
+        &crate::repo_index::index_path_for_graph_path(&target),
+    )?;
     let _ = clear_repo_graph_dirty_paths(
         &root,
         requested

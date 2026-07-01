@@ -588,8 +588,20 @@ async fn freshen_repo_graph_blocking(
 ) -> Result<(agent007_core::RepoGraphFreshenReport, BTreeSet<PathBuf>), String> {
     tokio::task::spawn_blocking(move || {
         let graph_path = agent007_core::default_graph_path_for_root(&root);
-        let report = agent007_core::freshen_graph_if_needed(&root, Some(&graph_path), max_batch)
-            .map_err(|e| e.to_string())?;
+        let before = agent007_core::graph_status(&graph_path);
+        let report = if graph_path.exists() {
+            agent007_core::freshen_graph_if_needed(&root, Some(&graph_path), max_batch)
+                .map_err(|e| e.to_string())?
+        } else {
+            let _ = agent007_core::build_and_save_index(&root, None).map_err(|e| e.to_string())?;
+            agent007_core::RepoGraphFreshenReport {
+                refreshed: true,
+                strategy: "index_rebuild_no_legacy_json".into(),
+                requested_paths: Vec::new(),
+                before,
+                after: agent007_core::graph_status(&graph_path),
+            }
+        };
         let remaining_dirty = agent007_core::load_repo_graph_dirty_paths(&root)
             .unwrap_or_default()
             .into_iter()
