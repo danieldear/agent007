@@ -38,6 +38,8 @@ pub struct RepoIndexStatus {
     pub built_at: Option<String>,
     pub version: Option<u32>,
     pub counts: Option<RepoGraphCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub fn default_index_path_for_root(root: &Path) -> PathBuf {
@@ -60,6 +62,7 @@ pub fn index_status(path: &Path) -> RepoIndexStatus {
             built_at: None,
             version: None,
             counts: None,
+            error: None,
         };
     }
     match RepoIndex::open(path).and_then(|index| index.status()) {
@@ -68,13 +71,14 @@ pub fn index_status(path: &Path) -> RepoIndexStatus {
             status.index_path = path.display().to_string();
             status
         }
-        Err(_) => RepoIndexStatus {
+        Err(error) => RepoIndexStatus {
             exists: true,
             index_path: path.display().to_string(),
             root: None,
             built_at: None,
             version: None,
             counts: None,
+            error: Some(error.to_string()),
         },
     }
 }
@@ -98,6 +102,9 @@ impl RepoIndexSink<'_> {
             .insert(node.id.as_str(), raw.as_slice())
             .map_err(|e| CoreError::repo_index(format!("write repo index node: {e}")))?
             .is_none();
+        if !inserted {
+            return Ok(false);
+        }
         if node.kind == RepoGraphNodeKind::Symbol {
             self.symbol_name
                 .insert(node.name.to_lowercase().as_str(), node.id.as_str())
@@ -123,6 +130,9 @@ impl RepoIndexSink<'_> {
             .insert(edge_id.as_str(), raw.as_slice())
             .map_err(|e| CoreError::repo_index(format!("write repo index edge: {e}")))?
             .is_none();
+        if !inserted {
+            return Ok(false);
+        }
         self.edges_from
             .insert(edge.from.as_str(), edge_id.as_str())
             .map_err(|e| CoreError::repo_index(format!("write repo index edges_from: {e}")))?;
@@ -214,6 +224,7 @@ pub fn write_index_with(
         built_at: Some(built_at.to_string()),
         version: Some(INDEX_VERSION),
         counts: Some(counts),
+        error: None,
     })
 }
 
@@ -230,110 +241,16 @@ fn stable_edge_id(edge: &RepoGraphEdge) -> String {
 }
 
 pub fn save_index(graph: &RepoGraph, path: &Path) -> Result<(), CoreError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
-    }
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| CoreError::io(path, e))?;
-    }
-    let db = Database::create(path)
-        .map_err(|e| CoreError::repo_index(format!("create repo index: {e}")))?;
-    let write = db
-        .begin_write()
-        .map_err(|e| CoreError::repo_index(format!("open repo index writer: {e}")))?;
-    {
-        let mut meta = write
-            .open_table(META)
-            .map_err(|e| CoreError::repo_index(format!("open repo index meta: {e}")))?;
-        meta.insert("format", "repo_index")
-            .map_err(|e| CoreError::repo_index(format!("write repo index meta: {e}")))?;
-        meta.insert("version", INDEX_VERSION.to_string().as_str())
-            .map_err(|e| CoreError::repo_index(format!("write repo index version: {e}")))?;
-        meta.insert("root", graph.root.as_str())
-            .map_err(|e| CoreError::repo_index(format!("write repo index root: {e}")))?;
-        meta.insert("built_at", graph.built_at.as_str())
-            .map_err(|e| CoreError::repo_index(format!("write repo index built_at: {e}")))?;
-        let counts = serde_json::to_string(&graph.counts)?;
-        meta.insert("counts", counts.as_str())
-            .map_err(|e| CoreError::repo_index(format!("write repo index counts: {e}")))?;
-    }
-    {
-        let mut nodes = write
-            .open_table(NODES)
-            .map_err(|e| CoreError::repo_index(format!("open repo index nodes: {e}")))?;
-        let mut symbol_name = write
-            .open_multimap_table(SYMBOL_NAME)
-            .map_err(|e| CoreError::repo_index(format!("open repo index symbol_name: {e}")))?;
-        let mut module_name = write
-            .open_multimap_table(MODULE_NAME)
-            .map_err(|e| CoreError::repo_index(format!("open repo index module_name: {e}")))?;
-        let mut file_nodes = write
-            .open_multimap_table(FILE_NODES)
-            .map_err(|e| CoreError::repo_index(format!("open repo index file_nodes: {e}")))?;
+    write_index_with(path, &graph.root, &graph.built_at, |sink| {
         for node in &graph.nodes {
-            let raw = serde_json::to_vec(node)?;
-            nodes
-                .insert(node.id.as_str(), raw.as_slice())
-                .map_err(|e| CoreError::repo_index(format!("write repo index node: {e}")))?;
-            if node.kind == RepoGraphNodeKind::Symbol {
-                symbol_name
-                    .insert(node.name.to_lowercase().as_str(), node.id.as_str())
-                    .map_err(|e| {
-                        CoreError::repo_index(format!("write repo index symbol_name: {e}"))
-                    })?;
-            } else if node.kind == RepoGraphNodeKind::Module {
-                module_name
-                    .insert(node.name.to_lowercase().as_str(), node.id.as_str())
-                    .map_err(|e| {
-                        CoreError::repo_index(format!("write repo index module_name: {e}"))
-                    })?;
-            }
-            if let Some(path) = &node.path {
-                file_nodes
-                    .insert(path.as_str(), node.id.as_str())
-                    .map_err(|e| {
-                        CoreError::repo_index(format!("write repo index file_nodes: {e}"))
-                    })?;
-            }
+            let _ = sink.insert_node(node)?;
         }
-    }
-    {
-        let mut edges = write
-            .open_table(EDGES)
-            .map_err(|e| CoreError::repo_index(format!("open repo index edges: {e}")))?;
-        let mut edges_from = write
-            .open_multimap_table(EDGES_FROM)
-            .map_err(|e| CoreError::repo_index(format!("open repo index edges_from: {e}")))?;
-        let mut edges_to = write
-            .open_multimap_table(EDGES_TO)
-            .map_err(|e| CoreError::repo_index(format!("open repo index edges_to: {e}")))?;
-        let mut file_edges = write
-            .open_multimap_table(FILE_EDGES)
-            .map_err(|e| CoreError::repo_index(format!("open repo index file_edges: {e}")))?;
-        for edge in graph.edges.iter() {
-            let edge_id = stable_edge_id(edge);
-            let raw = serde_json::to_vec(edge)?;
-            edges
-                .insert(edge_id.as_str(), raw.as_slice())
-                .map_err(|e| CoreError::repo_index(format!("write repo index edge: {e}")))?;
-            edges_from
-                .insert(edge.from.as_str(), edge_id.as_str())
-                .map_err(|e| CoreError::repo_index(format!("write repo index edges_from: {e}")))?;
-            edges_to
-                .insert(edge.to.as_str(), edge_id.as_str())
-                .map_err(|e| CoreError::repo_index(format!("write repo index edges_to: {e}")))?;
-            if let Some(path) = &edge.path {
-                file_edges
-                    .insert(path.as_str(), edge_id.as_str())
-                    .map_err(|e| {
-                        CoreError::repo_index(format!("write repo index file_edges: {e}"))
-                    })?;
-            }
+        for edge in &graph.edges {
+            let _ = sink.insert_edge(edge)?;
         }
-    }
-    write
-        .commit()
-        .map_err(|e| CoreError::repo_index(format!("commit repo index: {e}")))
+        Ok(graph.counts.clone())
+    })?;
+    Ok(())
 }
 
 pub fn build_and_save_index_for_graph(graph: &RepoGraph) -> Result<PathBuf, CoreError> {
@@ -382,6 +299,7 @@ impl RepoIndex {
             built_at,
             version,
             counts,
+            error: None,
         })
     }
 
@@ -1003,5 +921,92 @@ mod tests {
             .unwrap()
             .nodes
             .is_empty());
+    }
+
+    #[test]
+    fn sink_deduplicates_secondary_indexes_for_repeated_nodes_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = default_index_path_for_root(dir.path());
+        let node = RepoGraphNode {
+            id: "symbol:src/lib.rs:alpha:1".into(),
+            kind: RepoGraphNodeKind::Symbol,
+            name: "Alpha".into(),
+            path: Some("src/lib.rs".into()),
+            language: Some("rust".into()),
+            symbol_kind: Some("function".into()),
+            line: Some(1),
+            signature: Some("fn alpha()".into()),
+        };
+        let edge = RepoGraphEdge {
+            kind: RepoGraphEdgeKind::Defines,
+            from: "file:src/lib.rs".into(),
+            to: node.id.clone(),
+            path: Some("src/lib.rs".into()),
+            line: Some(1),
+        };
+        let edge_id = stable_edge_id(&edge);
+
+        write_index_with(
+            &index_path,
+            dir.path().to_str().unwrap(),
+            "2026-06-30T00:00:00Z",
+            |sink| {
+                assert!(sink.insert_node(&node)?);
+                assert!(!sink.insert_node(&node)?);
+                assert!(sink.insert_edge(&edge)?);
+                assert!(!sink.insert_edge(&edge)?);
+                Ok(RepoGraphCounts {
+                    symbols: 1,
+                    edges: 1,
+                    ..RepoGraphCounts::default()
+                })
+            },
+        )
+        .unwrap();
+
+        let index = RepoIndex::open(&index_path).unwrap();
+        let read = index.db.begin_read().unwrap();
+        let symbol_name = read.open_multimap_table(SYMBOL_NAME).unwrap();
+        let file_nodes = read.open_multimap_table(FILE_NODES).unwrap();
+        let edges_from = read.open_multimap_table(EDGES_FROM).unwrap();
+        let edges_to = read.open_multimap_table(EDGES_TO).unwrap();
+        let file_edges = read.open_multimap_table(FILE_EDGES).unwrap();
+
+        assert_eq!(
+            multimap_values(&symbol_name, "alpha").unwrap(),
+            vec![node.id.clone()]
+        );
+        assert_eq!(
+            multimap_values(&file_nodes, "src/lib.rs").unwrap(),
+            vec![node.id.clone()]
+        );
+        assert_eq!(
+            multimap_values(&edges_from, "file:src/lib.rs").unwrap(),
+            vec![edge_id.clone()]
+        );
+        assert_eq!(
+            multimap_values(&edges_to, node.id.as_str()).unwrap(),
+            vec![edge_id.clone()]
+        );
+        assert_eq!(
+            multimap_values(&file_edges, "src/lib.rs").unwrap(),
+            vec![edge_id]
+        );
+    }
+
+    #[test]
+    fn index_status_reports_corrupt_index_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = default_index_path_for_root(dir.path());
+        std::fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+        std::fs::write(&index_path, b"not a redb database").unwrap();
+
+        let status = index_status(&index_path);
+
+        assert!(status.exists);
+        assert_eq!(status.index_path, index_path.display().to_string());
+        assert!(status.root.is_none());
+        assert!(status.counts.is_none());
+        assert!(status.error.unwrap_or_default().contains("repo index"));
     }
 }
