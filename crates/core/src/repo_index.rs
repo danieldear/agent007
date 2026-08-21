@@ -303,6 +303,30 @@ impl RepoIndex {
         })
     }
 
+    /// Repo-relative paths of every file represented in the index.
+    ///
+    /// Read straight from the index, so freshness checks never need the legacy
+    /// graph JSON.
+    pub fn tracked_paths(&self) -> Result<Vec<String>, CoreError> {
+        let read = self
+            .db
+            .begin_read()
+            .map_err(|e| CoreError::repo_index(format!("read repo index: {e}")))?;
+        let file_nodes = read
+            .open_multimap_table(FILE_NODES)
+            .map_err(|e| CoreError::repo_index(format!("open repo index file_nodes: {e}")))?;
+        let range = file_nodes
+            .iter()
+            .map_err(|e| CoreError::repo_index(format!("scan repo index file_nodes: {e}")))?;
+        let mut out = Vec::new();
+        for entry in range {
+            let (key, _values) =
+                entry.map_err(|e| CoreError::repo_index(format!("read repo index key: {e}")))?;
+            out.push(key.value().to_string());
+        }
+        Ok(out)
+    }
+
     pub fn symbol_lookup(
         &self,
         symbol: &str,
@@ -836,6 +860,85 @@ fn unique_edge_key(
         edge.path.clone(),
         edge.line,
     )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoIndexFreshenReport {
+    pub refreshed: bool,
+    pub strategy: String,
+    pub status: RepoIndexStatus,
+}
+
+/// True when any file the index tracks has been modified or deleted since the
+/// index was built.
+///
+/// Stops at the first stale file: callers rebuild the whole index, so the full
+/// list is never needed and a large repo is not fully stat-ed on the hot path.
+pub fn index_is_stale(index: &RepoIndex) -> Result<bool, CoreError> {
+    let status = index.status()?;
+    let (Some(root), Some(built_at)) = (status.root, status.built_at) else {
+        return Ok(true);
+    };
+    let Ok(built_at) = chrono::DateTime::parse_from_rfc3339(&built_at) else {
+        return Ok(true);
+    };
+    let built_at = built_at.with_timezone(&chrono::Utc);
+    let root = PathBuf::from(root);
+
+    if !crate::repo_graph::load_repo_graph_dirty_paths(&root)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Ok(true);
+    }
+
+    for rel in index.tracked_paths()? {
+        let Ok(meta) = fs::metadata(root.join(&rel)) else {
+            return Ok(true); // tracked file deleted or unreadable
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if chrono::DateTime::<chrono::Utc>::from(modified) > built_at {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Bring the index up to date without touching the legacy graph JSON.
+///
+/// Builds it when missing and rebuilds it when stale; otherwise does nothing,
+/// which keeps repeated symbol queries on the fast path.
+pub fn freshen_index_if_needed(
+    root: &Path,
+    index_path: &Path,
+) -> Result<RepoIndexFreshenReport, CoreError> {
+    if !index_path.exists() {
+        let status = crate::repo_graph::build_and_save_index(root, Some(index_path))?;
+        return Ok(RepoIndexFreshenReport {
+            refreshed: true,
+            strategy: "build_missing".into(),
+            status,
+        });
+    }
+    // Deliberately propagates an open failure rather than treating it as "stale".
+    // Rebuilding on any error turns transient lock contention into a full repo
+    // rebuild; a genuinely corrupt index is repaired explicitly via graph_build.
+    let stale = index_is_stale(&RepoIndex::open(index_path)?)?;
+    if !stale {
+        return Ok(RepoIndexFreshenReport {
+            refreshed: false,
+            strategy: "fresh".into(),
+            status: index_status(index_path),
+        });
+    }
+    let status = crate::repo_graph::build_and_save_index(root, Some(index_path))?;
+    Ok(RepoIndexFreshenReport {
+        refreshed: true,
+        strategy: "rebuild_stale".into(),
+        status,
+    })
 }
 
 pub fn load_or_build_index(root: &Path, graph_path: Option<&Path>) -> Result<RepoIndex, CoreError> {

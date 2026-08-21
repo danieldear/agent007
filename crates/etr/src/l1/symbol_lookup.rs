@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_refreshes_dirty_graph_before_lookup() {
+    fn auto_refreshes_dirty_index_before_lookup() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}").unwrap();
@@ -75,7 +75,65 @@ mod tests {
             "build_if_missing": true
         }))
         .unwrap();
+        // Finding `beta` at all proves the refresh ran. Freshness is now settled
+        // against the index; the legacy graph is no longer on the query path.
         assert_eq!(out["count"].as_u64().unwrap_or(0), 1);
-        assert!(!agent007_core::graph_status(&graph_path).stale);
+        let index = agent007_core::RepoIndex::open(
+            &agent007_core::index_path_for_graph_path(&graph_path),
+        )
+        .unwrap();
+        assert!(!agent007_core::index_is_stale(&index).unwrap());
+    }
+
+    #[test]
+    fn lookup_ignores_oversized_legacy_graph_json() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}").unwrap();
+
+        // Build the index first so the query can be served from it alone.
+        run(&json!({"root": dir.path(), "symbol": "alpha", "build_if_missing": true})).unwrap();
+
+        // Stand in for the real-world failure: a legacy graph JSON past the load
+        // budget. It used to trigger a full rebuild on every single query that
+        // could never bring the file back under budget.
+        let graph_path = dir
+            .path()
+            .join(".agent007/runtime/repo_graph_v1.json");
+        std::fs::create_dir_all(graph_path.parent().unwrap()).unwrap();
+        let oversized = "x".repeat(1024);
+        std::fs::write(&graph_path, &oversized).unwrap();
+
+        let out = run(&json!({"root": dir.path(), "symbol": "alpha", "exact": true})).unwrap();
+        assert_eq!(out["source"], "repo_index_v2");
+        assert!(out["count"].as_u64().unwrap_or(0) >= 1, "index must still answer");
+        assert_eq!(
+            std::fs::read_to_string(&graph_path).unwrap(),
+            oversized,
+            "query path must not rewrite the legacy graph JSON"
+        );
+    }
+
+    #[test]
+    fn lookup_rebuilds_index_when_a_tracked_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn alpha() {}").unwrap();
+        run(&json!({"root": dir.path(), "symbol": "alpha", "build_if_missing": true})).unwrap();
+
+        // A symbol added after the index was built is only visible if the
+        // freshness check actually rebuilds.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn alpha() {}\npub fn added_later() {}",
+        )
+        .unwrap();
+
+        let out = run(&json!({"root": dir.path(), "symbol": "added_later", "exact": true})).unwrap();
+        assert!(
+            out["count"].as_u64().unwrap_or(0) >= 1,
+            "stale index must be refreshed without the legacy graph: {out}"
+        );
     }
 }

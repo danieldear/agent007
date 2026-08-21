@@ -2,6 +2,7 @@ use std::path::{Component, Path};
 
 const DEFAULT_MAX_GRAPH_FILE_BYTES: u64 = 1_000_000;
 const DEFAULT_MAX_GRAPH_JSON_BYTES: u64 = 50_000_000;
+const DEFAULT_MAX_CALL_TARGETS: u64 = 16;
 const DEFAULT_MAX_PROMPT_FILE_BYTES: u64 = 512_000;
 const DEFAULT_REPO_BRAIN_MEMORY_KEY_LIMIT: usize = 64;
 
@@ -10,6 +11,16 @@ pub fn max_graph_file_bytes() -> u64 {
         "AGENT007_REPO_GRAPH_MAX_FILE_BYTES",
         DEFAULT_MAX_GRAPH_FILE_BYTES,
     )
+}
+
+/// Cap on how many definitions a single referenced name may resolve to before
+/// the reference is treated as unresolvable.
+///
+/// Call and doc-link resolution matches on name alone, so a name defined in many
+/// places fans out to every definition. Ubiquitous method names (`new`, `get`,
+/// `build`, `toString`) then dominate the graph without carrying information.
+pub fn max_call_targets() -> usize {
+    env_u64("AGENT007_REPO_GRAPH_MAX_CALL_TARGETS", DEFAULT_MAX_CALL_TARGETS) as usize
 }
 
 pub fn max_prompt_file_bytes() -> u64 {
@@ -50,6 +61,19 @@ pub fn should_skip_repo_path(path: &Path) -> bool {
             .unwrap_or(false),
         _ => false,
     })
+}
+
+/// True when `path` is itself a git working tree — a linked worktree, a
+/// submodule, or a nested clone.
+///
+/// Such a directory is a separate checkout with its own history, so folding it
+/// into the parent repo's index duplicates every symbol it shares with the
+/// parent. It gets its own index, keyed off its own root, instead.
+///
+/// Detects linked worktrees and submodules too: git writes `.git` there as a
+/// file containing a `gitdir:` pointer rather than a directory.
+pub fn is_nested_working_tree(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
 pub fn should_skip_prompt_path(path: &Path) -> bool {
