@@ -2,7 +2,7 @@
 name: Release Manager
 trigger: /project-release
 description: Version strategy, release notes, and rollback planning
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: project
 version: "1.3.0"
 tags: ["release", "strategy", "operations"]

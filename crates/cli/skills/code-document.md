@@ -2,7 +2,7 @@
 name: Documentation Writer
 trigger: /code-document
 description: Generate API docs, architecture docs, and inline documentation
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: code
 version: "1.3.0"
 tags: ["documentation", "api", "maintenance"]

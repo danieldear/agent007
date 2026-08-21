@@ -369,7 +369,7 @@ Skills are Markdown files with YAML frontmatter. They live in `~/.agent007/skill
 name: My Skill
 trigger: /my-skill
 description: Does something useful
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 version: "1.0.0"
 ---
 You are a helpful assistant. Given: {{args}}

@@ -307,7 +307,7 @@ impl Agent007Server {
                         },
                         "model": {
                             "type": "string",
-                            "description": "Model name that was used, e.g. 'claude-sonnet-4-6'"
+                            "description": "Model name that was used, e.g. 'claude-sonnet-5'"
                         },
                         "input_tokens": {
                             "type": "integer",
@@ -2143,6 +2143,9 @@ impl ServerHandler for Agent007Server {
                             ))]));
                         }
                     };
+                    // `def` is a legacy `AgentDef`; the deprecated fields are read
+                    // here to keep existing agent TOML files working.
+                    #[allow(deprecated)]
                     let ns = def
                         .memory_namespace
                         .clone()
@@ -3288,7 +3291,7 @@ fn record_feedback_entry(model: &str, skill_hint: Option<&str>) {
 /// Write a rich one-line status to ~/.agent007/statusline for Claude Code's statusLine feature.
 ///
 /// Format (segments separated by "  ·  "):
-///   ◈ agent007  ◎ claude-sonnet-4-6  ✓12 ✗1 ↺0  ⚡ 8.4k · ~$0.05  ↩ skill/dev-architect [✓]  🗝 6 mem  ⬡ :8007
+///   ◈ agent007  ◎ claude-sonnet-5  ✓12 ✗1 ↺0  ⚡ 8.4k · ~$0.05  ↩ skill/dev-architect [✓]  🗝 6 mem  ⬡ :8007
 fn write_statusline() {
     use agent007_core::run_store::RunStatus;
 
@@ -3360,7 +3363,7 @@ fn write_statusline() {
         }
     }
 
-    // ── Shorten model name: "claude-sonnet-4-6" → "sonnet-4-6" ───────────────
+    // ── Shorten model name: "claude-sonnet-5" → "sonnet-4-6" ───────────────
     let model_short = last_model
         .strip_prefix("claude-")
         .unwrap_or(&last_model)
@@ -6750,7 +6753,7 @@ output = "notes"
         record_actual_tokens(
             &run_id,
             321,
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
             Some("exact output"),
             Some(120),
             Some(80),
@@ -7064,7 +7067,7 @@ output = "notes"
             "/my-skill",
             "does something",
             "Do {{ args }}",
-            "claude-sonnet-4-6",
+            "claude-sonnet-5",
         );
         assert!(result.is_ok(), "skill_create failed: {:?}", result.err());
         let path = tmp.path().join("skills").join("my_skill.md");

@@ -19,7 +19,7 @@ task_queue_capacity = 256   # Task queue depth
 default = "claude"          # Default provider: "claude", "codex", "ollama"
 
 [models.claude]
-default_model = "claude-sonnet-4-6"
+default_model = "claude-sonnet-5"
 
 [models.codex]
 default_model = "gpt-5.3-codex"

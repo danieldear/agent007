@@ -2,7 +2,7 @@
 name: Codebase Analyzer
 trigger: /meta-analyze-codebase
 description: Analyze codebase for tech stack, patterns, and architecture
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: meta
 version: "1.3.0"
 tags: ["analysis", "architecture", "inventory"]

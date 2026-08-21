@@ -2,7 +2,7 @@
 name: Test Generator
 trigger: /code-test-gen
 description: Generate comprehensive test suites with edge cases
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: code
 version: "1.3.0"
 tags: ["testing", "coverage", "qa"]

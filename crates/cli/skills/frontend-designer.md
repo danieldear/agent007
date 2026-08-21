@@ -2,7 +2,7 @@
 name: Frontend Designer
 trigger: /frontend-designer
 description: Design and implement polished, accessible frontend interfaces grounded in the current product and platform constraints
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: frontend
 version: "1.1.0"
 tags: ["frontend", "ui", "ux", "accessibility"]

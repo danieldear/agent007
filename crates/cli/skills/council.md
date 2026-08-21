@@ -2,7 +2,7 @@
 name: LLM Council
 trigger: /council
 description: Domain-general peer-deliberation entry point for ambiguous or high-impact decisions. Prefer the llm-council workflow when available; otherwise produce a compact council-style decision memo.
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: strategy
 version: "1.0.0"
 tags: ["council", "llm-council", "strategy", "decision", "architecture", "product", "finance", "coding", "risk"]

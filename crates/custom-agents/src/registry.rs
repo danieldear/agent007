@@ -1,3 +1,7 @@
+// `AgentDef` is deprecated in favour of `PersonaSpec`, but this module is the
+// backward-compatibility path that keeps existing agent TOML files working.
+#![allow(deprecated)]
+
 use crate::loader::load_all;
 use crate::{AgentDef, AgentType, CustomAgentError};
 use std::collections::HashMap;

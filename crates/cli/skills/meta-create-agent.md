@@ -2,7 +2,7 @@
 name: Agent Creator
 trigger: /meta-create-agent
 description: Guided wizard to create a custom agent persona
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: meta
 version: "1.3.0"
 tags: ["meta", "persona", "generation"]

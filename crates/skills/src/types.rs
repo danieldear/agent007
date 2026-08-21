@@ -23,7 +23,7 @@ fn default_category() -> String {
 }
 
 fn default_model() -> String {
-    "claude-sonnet-4-6".to_string()
+    "claude-sonnet-5".to_string()
 }
 
 fn default_version() -> String {

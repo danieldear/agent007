@@ -2,7 +2,7 @@
 name: PR Reviewer
 trigger: /dev-pr-review
 description: Thorough pull request review with actionable feedback
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: dev
 version: "1.3.0"
 tags: ["review", "quality", "security"]

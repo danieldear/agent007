@@ -7,7 +7,7 @@ crates/web/static/dist/
 .DS_Store
 
 # Local agent / assistant state
-/.agent007/
+.agent007/
 /.claude/
 /.claude-flow/
 /.codex/
@@ -15,5 +15,7 @@ crates/web/static/dist/
 /.zed/
 /.cursor/
 AGENTS.md
+AGENTS.agent007.generated.md
+AGENT007.md
 CLAUDE.md
 .agent007.bak*

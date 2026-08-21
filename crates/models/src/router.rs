@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn router_resolves_model_aliases() {
         let mut r = make_router();
-        r.alias("claude-sonnet-4-6", "claude");
+        r.alias("claude-sonnet-5", "claude");
         r.alias("gpt-5.3-codex", "codex");
 
         let resp = r
@@ -265,11 +265,11 @@ mod tests {
                 name: "ollama/qwen2.5-coder:7b",
             }),
         );
-        r.alias("claude-sonnet-4-6", "claude");
+        r.alias("claude-sonnet-5", "claude");
 
         let resp = r
             .complete(CompletionRequest {
-                model: "claude-sonnet-4-6".into(),
+                model: "claude-sonnet-5".into(),
                 messages: vec![Message {
                     role: Role::User,
                     content: "write code".into(),
@@ -322,13 +322,13 @@ mod tests {
             }),
         );
         r.add_rule("reasoning", "ollama");
-        r.alias("claude-sonnet-4-6", "claude");
+        r.alias("claude-sonnet-5", "claude");
 
         let resp = r
             .complete_for_task_type(
                 "reasoning",
                 CompletionRequest {
-                    model: "claude-sonnet-4-6".into(),
+                    model: "claude-sonnet-5".into(),
                     messages: vec![Message {
                         role: Role::User,
                         content: "plan".into(),

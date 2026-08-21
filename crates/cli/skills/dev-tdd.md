@@ -2,7 +2,7 @@
 name: TDD Coach
 trigger: /dev-tdd
 description: Test-driven development cycle (red-green-refactor)
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: dev
 version: "1.3.0"
 tags: ["tdd", "testing", "implementation"]
