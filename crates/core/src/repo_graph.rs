@@ -199,6 +199,7 @@ impl RepoGraphBuilder {
         let mut edges = Vec::new();
         let mut counts = RepoGraphCounts::default();
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+        let max_call_targets = repo_filter::max_call_targets();
         let mut pending_calls = Vec::new();
 
         // ── Pass 1: Source files — build symbol_index first so doc links work ──
@@ -308,7 +309,9 @@ impl RepoGraphBuilder {
                     signature: None,
                 });
                 for symbol_name in extract_doc_symbol_mentions(path)? {
-                    if let Some(matches) = resolve_symbol_targets(&symbol_index, &symbol_name) {
+                    if let Some(matches) =
+                        resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+                    {
                         for symbol_id in matches {
                             edges.push(RepoGraphEdge {
                                 kind: RepoGraphEdgeKind::Documents,
@@ -324,7 +327,9 @@ impl RepoGraphBuilder {
         }
 
         for pending in pending_calls {
-            if let Some(targets) = resolve_symbol_targets(&symbol_index, &pending.target_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+            {
                 for target in targets {
                     edges.push(RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Calls,
@@ -441,6 +446,7 @@ pub fn build_and_save_index(
     let status = crate::repo_index::write_index_with(&target, &root_string, &built_at, |sink| {
         let mut counts = RepoGraphCounts::default();
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+        let max_call_targets = repo_filter::max_call_targets();
         let mut pending_calls = Vec::new();
         let mut pending_doc_links = Vec::new();
         let all_files = walk_repo_files(&root)?;
@@ -566,7 +572,9 @@ pub fn build_and_save_index(
         }
 
         for pending in pending_calls {
-            if let Some(targets) = resolve_symbol_targets(&symbol_index, &pending.target_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+            {
                 for target in targets {
                     let edge = RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Calls,
@@ -583,7 +591,9 @@ pub fn build_and_save_index(
         }
 
         for (doc_id, doc_path, symbol_name) in pending_doc_links {
-            if let Some(targets) = resolve_symbol_targets(&symbol_index, &symbol_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+            {
                 for target in targets {
                     let edge = RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Documents,
@@ -716,6 +726,7 @@ pub fn refresh_graph_for_paths(
     let mut edges = retained_edges;
     let mut counts = RepoGraphCounts::default();
     let mut symbol_index: HashMap<String, Vec<String>> = build_symbol_index(&nodes);
+    let max_call_targets = repo_filter::max_call_targets();
     let mut pending_calls = Vec::new();
     let mut pending_doc_links = Vec::new();
 
@@ -747,7 +758,9 @@ pub fn refresh_graph_for_paths(
     }
 
     for pending in pending_calls.into_iter().chain(rebound_calls.into_iter()) {
-        if let Some(targets) = resolve_symbol_targets(&symbol_index, &pending.target_name) {
+        if let Some(targets) =
+            resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+        {
             for target in targets {
                 edges.push(RepoGraphEdge {
                     kind: RepoGraphEdgeKind::Calls,
@@ -764,7 +777,8 @@ pub fn refresh_graph_for_paths(
         .into_iter()
         .chain(rebound_docs.into_iter())
     {
-        if let Some(targets) = resolve_symbol_targets(&symbol_index, &symbol_name) {
+        if let Some(targets) = resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+        {
             for target in targets {
                 edges.push(RepoGraphEdge {
                     kind: RepoGraphEdgeKind::Documents,
@@ -1225,9 +1239,10 @@ fn recalculate_counts(nodes: &[RepoGraphNode], edges: &[RepoGraphEdge]) -> RepoG
 fn resolve_symbol_targets<'a>(
     symbol_index: &'a HashMap<String, Vec<String>>,
     name: &str,
+    max_targets: usize,
 ) -> Option<&'a Vec<String>> {
     let targets = symbol_index.get(name)?;
-    if targets.len() > repo_filter::max_call_targets() {
+    if targets.len() > max_targets {
         return None;
     }
     Some(targets)

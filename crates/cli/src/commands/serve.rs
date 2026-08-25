@@ -3363,7 +3363,7 @@ fn write_statusline() {
         }
     }
 
-    // ── Shorten model name: "claude-sonnet-5" → "sonnet-4-6" ───────────────
+    // ── Shorten model name: "claude-sonnet-5" → "sonnet-5" ─────────────────
     let model_short = last_model
         .strip_prefix("claude-")
         .unwrap_or(&last_model)
