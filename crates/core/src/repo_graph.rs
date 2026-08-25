@@ -2530,13 +2530,19 @@ pub extern "C" fn tubeai_version() -> *const c_char {
         // A linked worktree: git writes `.git` as a file, not a directory.
         let worktree = root.join(".worktrees/feature");
         std::fs::create_dir_all(worktree.join("src")).unwrap();
-        std::fs::write(&worktree.join(".git"), "gitdir: /repo/.git/worktrees/feature").unwrap();
+        std::fs::write(
+            &worktree.join(".git"),
+            "gitdir: /repo/.git/worktrees/feature",
+        )
+        .unwrap();
         std::fs::write(worktree.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
 
         let files = walk_repo_files(root).unwrap();
         assert!(files.iter().any(|p| p.ends_with("src/lib.rs")));
         assert!(
-            !files.iter().any(|p| p.to_string_lossy().contains(".worktrees")),
+            !files
+                .iter()
+                .any(|p| p.to_string_lossy().contains(".worktrees")),
             "nested working tree must not be folded into the parent index: {files:?}"
         );
     }
@@ -2569,7 +2575,9 @@ pub extern "C" fn tubeai_version() -> *const c_char {
         // uniquely named symbol, both called from the same site.
         let mut src = String::new();
         for i in 0..40 {
-            src.push_str(&format!("pub struct T{i};\nimpl T{i} {{ pub fn new() {{}} }}\n"));
+            src.push_str(&format!(
+                "pub struct T{i};\nimpl T{i} {{ pub fn new() {{}} }}\n"
+            ));
         }
         src.push_str("pub fn uniquely_named_helper() {}\n");
         src.push_str("pub fn caller() { new(); uniquely_named_helper(); }\n");
@@ -2593,9 +2601,7 @@ pub extern "C" fn tubeai_version() -> *const c_char {
         );
 
         assert!(
-            calls
-                .iter()
-                .any(|e| e.to.contains("uniquely_named_helper")),
+            calls.iter().any(|e| e.to.contains("uniquely_named_helper")),
             "an unambiguous call must still resolve: {calls:?}"
         );
     }

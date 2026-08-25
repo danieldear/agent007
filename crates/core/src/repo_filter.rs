@@ -20,7 +20,10 @@ pub fn max_graph_file_bytes() -> u64 {
 /// places fans out to every definition. Ubiquitous method names (`new`, `get`,
 /// `build`, `toString`) then dominate the graph without carrying information.
 pub fn max_call_targets() -> usize {
-    env_u64("AGENT007_REPO_GRAPH_MAX_CALL_TARGETS", DEFAULT_MAX_CALL_TARGETS) as usize
+    env_u64(
+        "AGENT007_REPO_GRAPH_MAX_CALL_TARGETS",
+        DEFAULT_MAX_CALL_TARGETS,
+    ) as usize
 }
 
 pub fn max_prompt_file_bytes() -> u64 {

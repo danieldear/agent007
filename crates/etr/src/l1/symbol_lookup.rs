@@ -78,10 +78,9 @@ mod tests {
         // Finding `beta` at all proves the refresh ran. Freshness is now settled
         // against the index; the legacy graph is no longer on the query path.
         assert_eq!(out["count"].as_u64().unwrap_or(0), 1);
-        let index = agent007_core::RepoIndex::open(
-            &agent007_core::index_path_for_graph_path(&graph_path),
-        )
-        .unwrap();
+        let index =
+            agent007_core::RepoIndex::open(&agent007_core::index_path_for_graph_path(&graph_path))
+                .unwrap();
         assert!(!agent007_core::index_is_stale(&index).unwrap());
     }
 
@@ -97,16 +96,17 @@ mod tests {
         // Stand in for the real-world failure: a legacy graph JSON past the load
         // budget. It used to trigger a full rebuild on every single query that
         // could never bring the file back under budget.
-        let graph_path = dir
-            .path()
-            .join(".agent007/runtime/repo_graph_v1.json");
+        let graph_path = dir.path().join(".agent007/runtime/repo_graph_v1.json");
         std::fs::create_dir_all(graph_path.parent().unwrap()).unwrap();
         let oversized = "x".repeat(1024);
         std::fs::write(&graph_path, &oversized).unwrap();
 
         let out = run(&json!({"root": dir.path(), "symbol": "alpha", "exact": true})).unwrap();
         assert_eq!(out["source"], "repo_index_v2");
-        assert!(out["count"].as_u64().unwrap_or(0) >= 1, "index must still answer");
+        assert!(
+            out["count"].as_u64().unwrap_or(0) >= 1,
+            "index must still answer"
+        );
         assert_eq!(
             std::fs::read_to_string(&graph_path).unwrap(),
             oversized,
@@ -130,7 +130,8 @@ mod tests {
         )
         .unwrap();
 
-        let out = run(&json!({"root": dir.path(), "symbol": "added_later", "exact": true})).unwrap();
+        let out =
+            run(&json!({"root": dir.path(), "symbol": "added_later", "exact": true})).unwrap();
         assert!(
             out["count"].as_u64().unwrap_or(0) >= 1,
             "stale index must be refreshed without the legacy graph: {out}"
