@@ -42,7 +42,7 @@ eval_gate:
 steps:
   - id: frame-question
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -81,7 +81,7 @@ steps:
 
   - id: opportunity-analyst
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -110,7 +110,7 @@ steps:
 
   - id: pragmatist-planner
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -139,7 +139,7 @@ steps:
 
   - id: systems-architect
     agent: Architect
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -169,7 +169,7 @@ steps:
 
   - id: risk-skeptic
     agent: SecurityReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -199,7 +199,7 @@ steps:
 
   - id: evidence-analyst
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -259,7 +259,7 @@ steps:
 
   - id: opportunity-questions
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -289,7 +289,7 @@ steps:
 
   - id: pragmatist-questions
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -319,7 +319,7 @@ steps:
 
   - id: architect-questions
     agent: Architect
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -350,7 +350,7 @@ steps:
 
   - id: skeptic-questions
     agent: SecurityReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -381,7 +381,7 @@ steps:
 
   - id: evidence-questions
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -443,7 +443,7 @@ steps:
 
   - id: route-challenges
     agent: CodeReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -500,7 +500,7 @@ steps:
 
   - id: opportunity-revision
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -537,7 +537,7 @@ steps:
 
   - id: pragmatist-revision
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -574,7 +574,7 @@ steps:
 
   - id: architect-revision
     agent: Architect
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -611,7 +611,7 @@ steps:
 
   - id: skeptic-revision
     agent: SecurityReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -648,7 +648,7 @@ steps:
 
   - id: evidence-revision
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -724,7 +724,7 @@ steps:
 
   - id: option-scoring
     agent: CodeReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -766,7 +766,7 @@ steps:
 
   - id: final-synthesis
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 

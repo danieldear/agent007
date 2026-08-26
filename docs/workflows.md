@@ -257,8 +257,8 @@ Shadow data is surfaced in the **Persisted Runs** accordion under **Routing Reco
 
 ```
 step_id          current_route       recommended_route    confidence
-researcher       claude-sonnet-4-6   claude-opus-4-6      74%  (12 samples)
-implementer      claude-sonnet-4-6   claude-sonnet-4-6    91%  (12 samples)
+researcher       claude-sonnet-5   claude-opus-5      74%  (12 samples)
+implementer      claude-sonnet-5   claude-sonnet-5    91%  (12 samples)
 ```
 
 `fallback: true` means the router had insufficient data and used the default.

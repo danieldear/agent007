@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use agent007_core::{
     build_and_save_graph, build_and_save_index, default_graph_path_for_root,
-    freshen_graph_if_needed, index_path_for_graph_path, load_graph, resolve_graph_path, RepoGraph,
-    RepoIndex,
+    freshen_graph_if_needed, index_is_stale, index_path_for_graph_path, load_graph,
+    resolve_graph_path, RepoGraph, RepoIndex,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -85,34 +85,39 @@ pub fn open_index_maybe_build(input: &Value) -> Result<(PathBuf, PathBuf, RepoIn
         .unwrap_or_else(|| index_path_for_graph_path(&graph_path));
     let build_if_missing = input["build_if_missing"].as_bool().unwrap_or(false);
     let auto_refresh = input["auto_refresh"].as_bool().unwrap_or(true);
-    let max_incremental_paths = input["max_incremental_paths"].as_u64().unwrap_or(500) as usize;
 
-    if auto_refresh && graph_path.exists() {
-        let _ = freshen_graph_if_needed(&root, Some(&graph_path), max_incremental_paths)
-            .with_context(|| {
-                format!(
-                    "failed graph/index freshness preflight for {}",
-                    graph_path.display()
-                )
-            })?;
-    }
-
-    if index_path.exists() {
-        let index = RepoIndex::open(&index_path)
-            .with_context(|| format!("failed to open {}", index_path.display()))?;
-        return Ok((graph_path, index_path, index));
-    }
-
-    if graph_path.exists() || build_if_missing {
+    if !index_path.exists() {
+        if !(graph_path.exists() || build_if_missing) {
+            anyhow::bail!(
+                "repo index not found at {}; run etr.graph_build first or pass build_if_missing=true",
+                index_path.display()
+            );
+        }
         build_and_save_index(&root, Some(&index_path))
             .with_context(|| format!("failed to build repo index at {}", index_path.display()))?;
+    }
+
+    // Opened once and reused for the freshness check. Opening a large index is
+    // the dominant cost on the warm path, so a second open would roughly double
+    // the latency of every query that finds the index already up to date.
+    let index = RepoIndex::open(&index_path)
+        .with_context(|| format!("failed to open {}", index_path.display()))?;
+
+    // Freshness is settled against the index itself. The legacy graph JSON is
+    // deliberately not consulted: it carries a hard load-budget cap, and on a
+    // repo that exceeds it every query used to trigger a full rebuild that could
+    // never bring the file back under budget.
+    if auto_refresh
+        && index_is_stale(&index)
+            .with_context(|| format!("failed freshness check for {}", index_path.display()))?
+    {
+        drop(index); // release the handle before the rebuild replaces the file
+        build_and_save_index(&root, Some(&index_path))
+            .with_context(|| format!("failed to rebuild repo index at {}", index_path.display()))?;
         let index = RepoIndex::open(&index_path)
             .with_context(|| format!("failed to open {}", index_path.display()))?;
         return Ok((graph_path, index_path, index));
     }
 
-    anyhow::bail!(
-        "repo index not found at {}; run etr.graph_build first or pass build_if_missing=true",
-        index_path.display()
-    )
+    Ok((graph_path, index_path, index))
 }

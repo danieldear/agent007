@@ -1,3 +1,7 @@
+// The `agent` command operates on deprecated `AgentDef` TOML files, which stay
+// supported for backward compatibility alongside the newer `PersonaSpec` path.
+#![allow(deprecated)]
+
 use agent007_core::dispatcher::LocalDispatcher;
 use agent007_core::persona::{PersonaProvider, PersonaSpec};
 use agent007_custom_agents::{

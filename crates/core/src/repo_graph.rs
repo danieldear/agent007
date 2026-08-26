@@ -199,6 +199,7 @@ impl RepoGraphBuilder {
         let mut edges = Vec::new();
         let mut counts = RepoGraphCounts::default();
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+        let max_call_targets = repo_filter::max_call_targets();
         let mut pending_calls = Vec::new();
 
         // ── Pass 1: Source files — build symbol_index first so doc links work ──
@@ -308,7 +309,9 @@ impl RepoGraphBuilder {
                     signature: None,
                 });
                 for symbol_name in extract_doc_symbol_mentions(path)? {
-                    if let Some(matches) = symbol_index.get(&symbol_name) {
+                    if let Some(matches) =
+                        resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+                    {
                         for symbol_id in matches {
                             edges.push(RepoGraphEdge {
                                 kind: RepoGraphEdgeKind::Documents,
@@ -324,7 +327,9 @@ impl RepoGraphBuilder {
         }
 
         for pending in pending_calls {
-            if let Some(targets) = symbol_index.get(&pending.target_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+            {
                 for target in targets {
                     edges.push(RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Calls,
@@ -441,6 +446,7 @@ pub fn build_and_save_index(
     let status = crate::repo_index::write_index_with(&target, &root_string, &built_at, |sink| {
         let mut counts = RepoGraphCounts::default();
         let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
+        let max_call_targets = repo_filter::max_call_targets();
         let mut pending_calls = Vec::new();
         let mut pending_doc_links = Vec::new();
         let all_files = walk_repo_files(&root)?;
@@ -566,7 +572,9 @@ pub fn build_and_save_index(
         }
 
         for pending in pending_calls {
-            if let Some(targets) = symbol_index.get(&pending.target_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+            {
                 for target in targets {
                     let edge = RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Calls,
@@ -583,7 +591,9 @@ pub fn build_and_save_index(
         }
 
         for (doc_id, doc_path, symbol_name) in pending_doc_links {
-            if let Some(targets) = symbol_index.get(&symbol_name) {
+            if let Some(targets) =
+                resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+            {
                 for target in targets {
                     let edge = RepoGraphEdge {
                         kind: RepoGraphEdgeKind::Documents,
@@ -716,6 +726,7 @@ pub fn refresh_graph_for_paths(
     let mut edges = retained_edges;
     let mut counts = RepoGraphCounts::default();
     let mut symbol_index: HashMap<String, Vec<String>> = build_symbol_index(&nodes);
+    let max_call_targets = repo_filter::max_call_targets();
     let mut pending_calls = Vec::new();
     let mut pending_doc_links = Vec::new();
 
@@ -747,7 +758,9 @@ pub fn refresh_graph_for_paths(
     }
 
     for pending in pending_calls.into_iter().chain(rebound_calls.into_iter()) {
-        if let Some(targets) = symbol_index.get(&pending.target_name) {
+        if let Some(targets) =
+            resolve_symbol_targets(&symbol_index, &pending.target_name, max_call_targets)
+        {
             for target in targets {
                 edges.push(RepoGraphEdge {
                     kind: RepoGraphEdgeKind::Calls,
@@ -764,7 +777,8 @@ pub fn refresh_graph_for_paths(
         .into_iter()
         .chain(rebound_docs.into_iter())
     {
-        if let Some(targets) = symbol_index.get(&symbol_name) {
+        if let Some(targets) = resolve_symbol_targets(&symbol_index, &symbol_name, max_call_targets)
+        {
             for target in targets {
                 edges.push(RepoGraphEdge {
                     kind: RepoGraphEdgeKind::Documents,
@@ -1215,6 +1229,25 @@ fn recalculate_counts(nodes: &[RepoGraphNode], edges: &[RepoGraphEdge]) -> RepoG
     }
 }
 
+/// Resolve a referenced name to the symbol ids it may denote.
+///
+/// Resolution is by name only, so a name defined in many places fans out to
+/// every definition and multiplies against every reference site. On this repo
+/// `new` alone produced 144k of 192k total edges, none of them informative.
+/// Past the cap the reference is treated as unresolvable rather than emitting
+/// edges that are pure noise.
+fn resolve_symbol_targets<'a>(
+    symbol_index: &'a HashMap<String, Vec<String>>,
+    name: &str,
+    max_targets: usize,
+) -> Option<&'a Vec<String>> {
+    let targets = symbol_index.get(name)?;
+    if targets.len() > max_targets {
+        return None;
+    }
+    Some(targets)
+}
+
 fn build_symbol_index(nodes: &[RepoGraphNode]) -> HashMap<String, Vec<String>> {
     let mut symbol_index: HashMap<String, Vec<String>> = HashMap::new();
     for node in nodes {
@@ -1419,6 +1452,13 @@ fn walk_repo_files(root: &Path) -> Result<Vec<PathBuf>, CoreError> {
                 continue;
             }
             if ft.is_dir() {
+                // A nested working tree (linked worktree, submodule, vendored
+                // clone) is a separate checkout of its own history. Indexing it
+                // here would duplicate every symbol it shares with this repo, so
+                // it is left to its own root-keyed index.
+                if repo_filter::is_nested_working_tree(&path) {
+                    continue;
+                }
                 stack.push(path);
             } else if ft.is_file() {
                 out.push(path);
@@ -2493,5 +2533,96 @@ pub extern "C" fn tubeai_version() -> *const c_char {
         let graph = RepoGraphBuilder::new(dir.path()).build().unwrap();
         let matches = symbol_lookup(&graph, "tubeai_version", true);
         assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn walk_skips_nested_working_trees() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+
+        // A linked worktree: git writes `.git` as a file, not a directory.
+        let worktree = root.join(".worktrees/feature");
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+        std::fs::write(
+            &worktree.join(".git"),
+            "gitdir: /repo/.git/worktrees/feature",
+        )
+        .unwrap();
+        std::fs::write(worktree.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+
+        let files = walk_repo_files(root).unwrap();
+        assert!(files.iter().any(|p| p.ends_with("src/lib.rs")));
+        assert!(
+            !files
+                .iter()
+                .any(|p| p.to_string_lossy().contains(".worktrees")),
+            "nested working tree must not be folded into the parent index: {files:?}"
+        );
+    }
+
+    #[test]
+    fn walk_skips_submodule_style_nested_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+
+        let vendored = root.join("vendor/thirdparty");
+        std::fs::create_dir_all(vendored.join(".git")).unwrap();
+        std::fs::write(vendored.join("lib.rs"), "pub fn vendored() {}\n").unwrap();
+
+        let files = walk_repo_files(root).unwrap();
+        assert!(
+            !files.iter().any(|p| p.to_string_lossy().contains("vendor")),
+            "nested clone must not be indexed by the parent"
+        );
+    }
+
+    #[test]
+    fn ubiquitous_names_do_not_fan_out_into_call_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        // More definitions of `new` than the resolution cap allows, plus one
+        // uniquely named symbol, both called from the same site.
+        let mut src = String::new();
+        for i in 0..40 {
+            src.push_str(&format!(
+                "pub struct T{i};\nimpl T{i} {{ pub fn new() {{}} }}\n"
+            ));
+        }
+        src.push_str("pub fn uniquely_named_helper() {}\n");
+        src.push_str("pub fn caller() { new(); uniquely_named_helper(); }\n");
+        std::fs::write(root.join("src/lib.rs"), src).unwrap();
+
+        let graph = RepoGraphBuilder::new(root).build().unwrap();
+        let calls: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| e.kind == RepoGraphEdgeKind::Calls)
+            .collect();
+
+        let to_new = calls
+            .iter()
+            .filter(|e| e.to.contains("::new") || e.to.ends_with("new"))
+            .count();
+        assert_eq!(
+            to_new, 0,
+            "a name with 40 definitions is unresolvable; emitting an edge per \
+             definition is the cartesian blow-up this cap exists to prevent"
+        );
+
+        assert!(
+            calls.iter().any(|e| e.to.contains("uniquely_named_helper")),
+            "an unambiguous call must still resolve: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn call_target_cap_is_configurable() {
+        assert!(repo_filter::max_call_targets() >= 1);
     }
 }

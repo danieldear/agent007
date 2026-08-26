@@ -359,7 +359,7 @@ impl RunStore {
     }
 
     /// Update the provider field in a run's metadata so the dashboard shows
-    /// the real model name (e.g. "claude-sonnet-4-6") instead of "hosted-mcp".
+    /// the real model name (e.g. "claude-sonnet-5") instead of "hosted-mcp".
     /// Silently succeeds if the run does not exist.
     pub fn set_provider(&self, run_id: &str, provider: &str) -> Result<(), CoreError> {
         if let Ok(mut metadata) = self.load_metadata(run_id) {

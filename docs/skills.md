@@ -16,7 +16,7 @@ packs rather than appearing in every initialized project. See
 name: My Skill              # Display name (required)
 trigger: /my-skill          # Slash command trigger (required)
 description: Does X         # Short description shown in skill_list (required)
-model: claude-sonnet-4-6    # Preferred model (optional, falls back to config default)
+model: claude-sonnet-5    # Preferred model (optional, falls back to config default)
 version: "1.0.0"            # Semantic version (optional, defaults to "1.0.0")
 ---
 Your prompt template here. Use {{args}} for user-provided arguments.

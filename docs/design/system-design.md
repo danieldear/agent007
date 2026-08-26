@@ -288,7 +288,7 @@ config.toml
   │    default = "claude"
   │
   ├─ [models.claude]             ─────────► ClaudeProvider construction
-  │    default_model = "claude-sonnet-4-6"
+  │    default_model = "claude-sonnet-5"
   │
   ├─ [models.codex]              ─────────► CodexProvider construction
   │    default_model = "gpt-5.3-codex"

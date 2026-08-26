@@ -1,3 +1,7 @@
+// `AgentDef` is deprecated in favour of `PersonaSpec`, but this module is the
+// backward-compatibility path that keeps existing agent TOML files working.
+#![allow(deprecated)]
+
 use crate::{AgentDef, AgentType, AgentZoneOverrides, CustomAgentError, SubTaskResult, WorkerSpec};
 use agent007_core::dispatcher::Dispatcher;
 use agent007_core::events::AgentEvent;

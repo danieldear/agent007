@@ -609,11 +609,11 @@ mod tests {
         let mut router = ModelRouter::new("ollama");
         router.register("ollama", Arc::clone(&provider) as Arc<dyn ModelProvider>);
         router.add_rule("custom", "ollama");
-        router.alias("claude-sonnet-4-6", "claude");
+        router.alias("claude-sonnet-5", "claude");
 
         let executor =
             make_executor(dir.path(), Arc::clone(&provider)).with_router(Arc::new(router));
-        let skill = make_skill("Args: {{args}}", "claude-sonnet-4-6");
+        let skill = make_skill("Args: {{args}}", "claude-sonnet-5");
         executor.execute(&skill, "plan").await.unwrap();
         assert_eq!(provider.last_model(), Some("ollama".to_string()));
     }

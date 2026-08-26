@@ -54,7 +54,7 @@ pub struct ClaudeModelConfig {
     pub default_model: String,
 }
 fn default_claude_model() -> String {
-    "claude-sonnet-4-6".to_string()
+    "claude-sonnet-5".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -573,7 +573,7 @@ retries = 0.1
         );
         assert_eq!(
             config.models.default_model_for_provider("claude"),
-            "claude-sonnet-4-6"
+            "claude-sonnet-5"
         );
         assert_eq!(
             config.models.default_model_for_provider("codex"),
@@ -624,8 +624,8 @@ retries = 0.1
         assert_eq!(
             config
                 .models
-                .resolve_provider_and_model(Some("claude-sonnet-4-6")),
-            ("claude".to_string(), "claude-sonnet-4-6".to_string())
+                .resolve_provider_and_model(Some("claude-sonnet-5")),
+            ("claude".to_string(), "claude-sonnet-5".to_string())
         );
         assert_eq!(
             config.models.resolve_provider_and_model(Some("gpt-5.4")),

@@ -1846,7 +1846,7 @@ fast_local = "ollama"
 default_model = "gpt-5.3-codex"
 
 [models.claude]
-default_model = "claude-sonnet-4-6"
+default_model = "claude-sonnet-5"
 
 # Uncomment to enable local standalone execution via Ollama.
 # [models.ollama]
@@ -2557,7 +2557,7 @@ steps:
 
   - id: review-research
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
@@ -2597,7 +2597,7 @@ steps:
 
   - id: prd
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -2620,7 +2620,7 @@ steps:
 
   - id: architecture
     agent: Architect
-    model: claude-opus-4-6
+    model: claude-opus-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -2664,7 +2664,7 @@ steps:
 
   - id: project-plan
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -2748,7 +2748,7 @@ steps:
 
   - id: present-and-approve
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
@@ -2902,7 +2902,7 @@ steps:
 
   - id: feature-spec
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -2928,7 +2928,7 @@ steps:
 
   - id: architecture
     agent: Architect
-    model: claude-opus-4-6
+    model: claude-opus-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -2969,7 +2969,7 @@ steps:
 
   - id: review-implementation
     agent: CodeReviewer
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
@@ -3154,7 +3154,7 @@ steps:
 
   - id: release-signoff
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
@@ -3216,7 +3216,7 @@ eval_gate:
 steps:
   - id: brainstorm
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -3255,7 +3255,7 @@ steps:
 
   - id: review-direction
     agent: Researcher
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
@@ -3273,7 +3273,7 @@ steps:
 
   - id: write-prd
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}
 
@@ -3344,7 +3344,7 @@ steps:
 
   - id: present-summary
     agent: Planner
-    model: claude-sonnet-4-6
+    model: claude-sonnet-5
     requires_approval: true
     prompt: |
       {{WORKFLOW_OPERATING_PROTOCOL}}

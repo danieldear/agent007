@@ -1603,10 +1603,13 @@ mod tests {
     async fn run_command_builds_stack_without_panic() {
         let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
         // Verify stack was constructed (just check fields exist)
         assert!(stack.cancel.is_cancelled() == false);
+        std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
     }
 
@@ -1614,10 +1617,13 @@ mod tests {
     async fn build_stack_contains_persona_registry_with_builtins() {
         let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
         use agent007_core::PersonaProvider;
         assert!(stack.persona_registry.list().len() >= 15);
+        std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
     }
 
@@ -1625,8 +1631,11 @@ mod tests {
     async fn e2e_smoke_run_with_dry_run() {
         let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
         let config = Arc::new(Config::default());
         let result = execute(config, "say hello".to_string()).await;
+        std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
         assert!(result.is_ok(), "run command failed: {:?}", result.err());
     }
@@ -1635,6 +1644,8 @@ mod tests {
     async fn stack_contains_workflow_runner() {
         let _guard = env_lock();
         std::env::set_var("AGENT007_DRY_RUN", "1");
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AGENT007_HOME", tmp.path().to_str().unwrap());
         let config = Config::default();
         let stack = build_stack(&config).await.unwrap();
         // WorkflowRunner is on the stack — test that it can validate an empty-step workflow
@@ -1650,6 +1661,7 @@ mod tests {
         let result = stack.workflow_runner.validate(&def);
         // Empty workflow validates to empty batches
         assert!(result.is_ok());
+        std::env::remove_var("AGENT007_HOME");
         std::env::remove_var("AGENT007_DRY_RUN");
     }
 

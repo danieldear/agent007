@@ -2,7 +2,7 @@
 name: Project Planner
 trigger: /project-plan
 description: Break features into tasks with estimates and dependencies
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: project
 version: "1.3.0"
 tags: ["planning", "milestones", "estimation"]

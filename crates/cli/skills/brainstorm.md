@@ -2,7 +2,7 @@
 name: Brainstorm
 trigger: /brainstorm
 description: Free-form ideation — explores a problem space, generates 3–5 distinct approaches with trade-offs, and produces a structured ideation document. Use before invoking the architect or PRD workflow.
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: project
 version: "1.3.0"
 tags: ["ideation", "research", "planning"]

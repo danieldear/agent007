@@ -2,7 +2,7 @@
 name: Refactorer
 trigger: /code-refactor
 description: Identify code smells and propose targeted improvements
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: code
 version: "1.3.0"
 tags: ["refactor", "code-quality", "maintainability"]

@@ -2,7 +2,7 @@
 name: Security Auditor
 trigger: /code-security-audit
 description: Security audit covering OWASP, dependencies, and threat modeling
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: code
 version: "1.3.0"
 tags: ["security", "owasp", "audit"]

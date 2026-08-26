@@ -2,7 +2,7 @@
 name: Architect
 trigger: /dev-architect
 description: Design system architecture from requirements
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: dev
 version: "1.3.0"
 tags: ["architecture", "design", "system"]

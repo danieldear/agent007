@@ -2,7 +2,7 @@
 name: PRD Writer
 trigger: /project-prd
 description: Product requirements document with user stories and constraints
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: project
 version: "1.3.0"
 tags: ["product", "requirements", "planning"]

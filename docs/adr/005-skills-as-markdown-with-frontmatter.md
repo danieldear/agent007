@@ -26,7 +26,7 @@ Canonical skill file structure:
 name: Code Reviewer
 trigger: /code-review
 description: Full code review with actionable feedback
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 version: 1.0.0
 ---
 You are a senior engineer performing a thorough code review.

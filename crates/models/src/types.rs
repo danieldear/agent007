@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn completion_request_serializes() {
         let req = CompletionRequest {
-            model: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-5".to_string(),
             messages: vec![Message {
                 role: Role::User,
                 content: "hello".to_string(),
@@ -76,7 +76,7 @@ mod tests {
             system: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("claude-sonnet-4-6"));
+        assert!(json.contains("claude-sonnet-5"));
         assert!(json.contains("hello"));
         assert!(!json.contains("temperature")); // None fields skipped
     }
@@ -85,7 +85,7 @@ mod tests {
     fn completion_response_roundtrips() {
         let resp = CompletionResponse {
             content: "world".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
+            model: "claude-sonnet-5".to_string(),
             input_tokens: Some(5),
             output_tokens: Some(1),
             cached_tokens: Some(3),

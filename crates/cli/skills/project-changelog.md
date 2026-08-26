@@ -2,7 +2,7 @@
 name: Changelog Generator
 trigger: /project-changelog
 description: Generate changelogs grouped by type from git history
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: project
 version: "1.3.0"
 tags: ["release", "changelog", "documentation"]

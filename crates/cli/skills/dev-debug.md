@@ -2,7 +2,7 @@
 name: Debugger
 trigger: /dev-debug
 description: Systematic debugging with hypothesis-driven investigation
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: dev
 version: "1.3.0"
 tags: ["debugging", "incident", "root-cause"]

@@ -48,8 +48,9 @@ pub use repo_graph::{
 };
 pub use repo_index::{
     build_and_save_index_for_graph, context_bundle_for_query_index, default_index_path_for_root,
-    evidence_refs_for_text_index, index_path_for_graph_path, index_status, load_or_build_index,
-    open_index_for_graph_path, save_index, RepoIndex, RepoIndexStatus,
+    evidence_refs_for_text_index, freshen_index_if_needed, index_is_stale,
+    index_path_for_graph_path, index_status, load_or_build_index, open_index_for_graph_path,
+    save_index, RepoIndex, RepoIndexFreshenReport, RepoIndexStatus,
 };
 
 pub use repo_readiness::{

@@ -2,7 +2,7 @@
 name: Performance Optimizer
 trigger: /code-optimize
 description: Profile analysis and performance optimization suggestions
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 category: code
 version: "1.3.0"
 tags: ["performance", "profiling", "optimization"]
