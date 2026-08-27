@@ -1579,10 +1579,12 @@ fn register_copilot_project_files(project_dir: &Path, force: bool) -> Result<()>
 }
 
 fn register_codex_project_files(project_dir: &Path, force: bool) -> Result<()> {
-    let canonical_target = ensure_canonical_instruction_files(project_dir, force)?;
-    let codex_note_path = project_dir.join("AGENT007-CODEX.md");
-    let content = codex_project_note_md(&canonical_target);
-    write_file(&codex_note_path, &content, "AGENT007-CODEX.md", force)?;
+    // Codex reads AGENTS.md natively; this only needs to make sure the
+    // canonical AGENTS.md / AGENT007.md pair exists. A separate
+    // AGENT007-CODEX.md note used to be written here too, but nothing
+    // referenced it — Codex has no convention for reading an arbitrary
+    // sibling file, so it never took effect.
+    let _ = ensure_canonical_instruction_files(project_dir, force)?;
     Ok(())
 }
 
@@ -3430,6 +3432,12 @@ and code search, use agent007 ETR tools first; do not silently fall back to
 ad-hoc shell/Python readers in a new, resumed, or forked thread.
 ```
 
+Proportionality: this rule is about reading something meaningfully sized or
+structured, not a gate on every file touch. A quick single-file read, a small
+config lookup, or anything answerable directly from what is already in context
+does not need `agent007_etr_call` first — reach for ETR when the data is
+large, tabular, log-shaped, or the extraction itself is the hard part.
+
 ## Coordinator model
 
 Top-level coordinators:
@@ -3544,10 +3552,13 @@ Use agent007 / ETR for **interpretation and extraction**:
 - grep/glob/status tasks
 - repo graph callers/callees/context
 
-Do **not** default to custom Python or shell parsing if ETR can do the job.
-If shell or Python is used for reading/analyzing files, state why ETR was not
-sufficient. Python is acceptable for deterministic bulk edits when `apply_patch`
-would be impractical, but not as the default file reader.
+Do **not** default to custom Python or shell parsing for large, structured, or
+repeated extraction when ETR can do the job in one deterministic call. For that
+class of work, if shell or Python is used instead, state why ETR was not
+sufficient. A quick one-off read of a small or already-open file is not that
+class of work — use normal file-reading tools directly. Python is acceptable
+for deterministic bulk edits when `apply_patch` would be impractical, but not
+as the default file reader.
 
 ## ETR-first rule
 
@@ -3583,6 +3594,8 @@ agent007_etr_call(tool="etr.grep", input={"path":"<path>", "pattern":"<regex>", 
 Avoid:
 - writing throwaway Python to parse JSON/logs/tables when ETR exists
 - silently falling back to shell/Python readers after an ETR miss without saying why
+- routing a quick single-file read or a small lookup through ETR when a direct
+  read answers it just as well — proportionality applies both directions
 - broad-reading many files before trying `agent007_context_compile`
 - improvising on a task that clearly fits a skill or workflow
 - treating hosted-MCP mode as if the host should ignore agent007
@@ -3622,9 +3635,13 @@ Claude Code, Cursor, Zed, and Copilot without duplicating content.
 Critical bootstrap rules:
 - Route non-trivial or high-context work through agent007 first.
 - Use `agent007_context_compile` before broad edits on unfamiliar code.
-- Use `agent007_etr_list` and `agent007_etr_call` before custom shell/Python readers.
-- Use shell for execution/build/test; use agent007/ETR for interpretation and extraction.
-- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
+- For large or structured data, use `agent007_etr_list` and `agent007_etr_call`
+  before custom shell/Python readers. A quick single-file read or small lookup
+  does not need this.
+- Use shell for execution/build/test; use agent007/ETR for interpretation and
+  extraction of large or structured data.
+- If shell/Python is used as a reader/parser for that class of work, explain
+  why ETR was not sufficient.
 - Do not add `--no-dashboard` to `agent007 serve`; the dashboard is served by default.
 "#;
 
@@ -3879,7 +3896,7 @@ fn claude_md_wrapper(canonical_target: &str) -> String {
 - For non-trivial work, route through agent007 before broad free-form reasoning.
 - In hosted-MCP mode, Claude is still the planner, so it must deliberately choose agent007 workflows, skills, personas, and ETR tools.
 - Use shell for execution; use agent007 / ETR for interpretation and structured extraction.
-- Before custom shell/Python readers, use `agent007_etr_list` and `agent007_etr_call`; if you fall back, say why ETR was not sufficient.
+- For large or structured data, check `agent007_etr_list` / `agent007_etr_call` before custom shell/Python readers; if you fall back there, say why ETR was not sufficient. A quick single-file read or small lookup does not need this.
 "#
     )
 }
@@ -3895,8 +3912,8 @@ alwaysApply: true
 @{canonical_target}
 
 - Prefer agent007 for non-trivial work.
-- Prefer `agent007_etr_list` / `agent007_etr_call` for deterministic extraction and repo graph queries.
-- Use shell/build/test tools for execution, not ad-hoc parsing; if you fall back to shell/Python readers, say why ETR was not sufficient.
+- Prefer `agent007_etr_list` / `agent007_etr_call` for large or structured data — deterministic extraction and repo graph queries, not a quick single-file read.
+- Use shell/build/test tools for execution, not ad-hoc parsing of large/structured data; if you fall back there, say why ETR was not sufficient.
 "#
     )
 }
@@ -3909,9 +3926,9 @@ Also honor `AGENTS.md` as the Codex entrypoint and `{canonical_target}` as the p
 
 - Route non-trivial tasks through agent007 first.
 - Prefer skills and workflows before broad free-form planning.
-- Use `agent007_etr_list` / `agent007_etr_call` for deterministic extraction/query/status tasks before custom shell/Python parsing.
+- Use `agent007_etr_list` / `agent007_etr_call` for large or structured data — extraction/query/status tasks — before custom shell/Python parsing.
 - Use shell for execution of builds/tests/scripts, then synthesize results through agent007.
-- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
+- A quick single-file read or small lookup does not need ETR first. If shell/Python is used as a reader/parser for large or structured data, explain why ETR was not sufficient.
 "#
     )
 }
@@ -3923,32 +3940,12 @@ fn zed_rules_md(canonical_target: &str) -> String {
 Use `{canonical_target}` as the detailed shared agent007 operating contract for this repository. `AGENTS.md` remains the Codex entrypoint.
 
 - Prefer agent007 for non-trivial work.
-- Prefer Repo Intelligence and `agent007_etr_call` before broad file reads or ad-hoc parsing.
+- Prefer Repo Intelligence and `agent007_etr_call` before broad, repo-wide reads or ad-hoc parsing of large/structured data. A quick single-file read does not need this.
 - Use workflows for multi-step delivery and skills for repeatable specialist work.
-- If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
+- If shell/Python is used as a reader/parser for large or structured data, explain why ETR was not sufficient.
 "#
     )
 }
-
-fn codex_project_note_md(canonical_target: &str) -> String {
-    format!(
-        r#"# Codex + agent007 project note
-
-Codex reads `AGENTS.md` automatically. `AGENTS.md` points to `{canonical_target}`, the detailed shared agent007 operating contract for this repository.
-
-Use agent007 first for:
-- multi-step features
-- code review / security review
-- repo intelligence / graph interrogation
-- deterministic extraction via ETR
-
-Use `agent007_etr_list` / `agent007_etr_call` before custom shell/Python readers.
-Use shell for execution and verification, not as the default interpretation layer.
-If shell/Python is used as a reader/parser, explain why ETR was not sufficient.
-"#
-    )
-}
-
 fn claude_agent_specs() -> [(&'static str, &'static str); 7] {
     [
         ("agent007-architect.md", CLAUDE_AGENT_ARCHITECT),
@@ -3990,8 +3987,9 @@ Never:
 const CODEX_INSTRUCTIONS: &str = r#"# agent007 — AI Orchestration Agents
 
 You have access to the **agent007** MCP server. Use `mcp__agent007__*` tools for complex,
-multi-step, or analytical tasks. Always prefer agent007 tools over ad-hoc generation.
-For any non-trivial coding task, route through `agent007_dispatch` first.
+multi-step, or analytical tasks — not for a quick read, a small lookup, or anything
+answerable directly from context. For any non-trivial coding task, route through
+`agent007_dispatch` first.
 
 Top-level coordinators:
 - `Architect` — design, decomposition, delivery planning
@@ -4008,8 +4006,9 @@ Specialist workers exist underneath them:
 - `DebugAgent`
 - `Researcher`
 
-Use shell/build/test tools for **execution**.  
-Use agent007 / ETR for **interpretation, extraction, status, and repo graph queries**.
+Use shell/build/test tools for **execution**.
+Use agent007 / ETR for **interpretation, extraction, status, and repo graph queries**
+on large or structured data — not as the default way to read one small file.
 
 ## Simple Command Mode (Recommended in Codex)
 
@@ -4276,7 +4275,8 @@ name = "night"
         assert!(shared.contains("agent007_context_compile"));
         assert!(shared.contains("The durable file/log inspection rule"));
         assert!(shared.contains("agent007_etr_call"));
-        assert!(shared.contains("If shell or Python is used for reading/analyzing files"));
+        assert!(shared.contains("state why ETR was not"));
+        assert!(shared.contains("Proportionality"));
         assert!(shared.contains("etr.artifact_read"));
         assert!(shared.contains("etr.workflow_status_summary"));
     }
@@ -4346,18 +4346,25 @@ name = "night"
     }
 
     #[test]
-    fn codex_project_note_reinforces_etr_first_fallback_rule() {
+    fn codex_project_files_write_canonical_pair_without_an_unreferenced_note() {
         let temp = tempfile::tempdir().unwrap();
         let project_dir = temp.path();
 
         register_codex_project_files(project_dir, false).unwrap();
 
-        let codex_note = std::fs::read_to_string(project_dir.join("AGENT007-CODEX.md")).unwrap();
-        assert!(codex_note.contains("AGENTS.md"));
-        assert!(codex_note.contains("AGENT007.md"));
-        assert!(codex_note.contains("agent007_etr_call"));
-        assert!(codex_note.contains("If shell/Python is used as a reader/parser"));
-        assert!(codex_note.contains("why ETR was not sufficient"));
+        // Codex reads AGENTS.md natively, so the canonical pair must exist.
+        assert!(project_dir.join("AGENTS.md").exists());
+        assert!(project_dir.join("AGENT007.md").exists());
+
+        // AGENT007-CODEX.md used to be written here but nothing referenced
+        // it — Codex has no convention for reading an arbitrary sibling
+        // file, so it never took effect. It must not come back as dead
+        // weight in a project's root.
+        assert!(!project_dir.join("AGENT007-CODEX.md").exists());
+
+        let agents_md = std::fs::read_to_string(project_dir.join("AGENTS.md")).unwrap();
+        assert!(agents_md.contains("agent007_etr_call"));
+        assert!(agents_md.contains("does not need this"));
     }
 
     #[test]
