@@ -29,8 +29,7 @@ impl Compactor {
                 return (sub.clone(), false);
             }
         }
-        let serialized_len = serde_json::to_string(&value).map(|s| s.len()).unwrap_or(0);
-        if serialized_len <= JSON_COMPACT_THRESHOLD {
+        if !exceeds_byte_threshold(&value, JSON_COMPACT_THRESHOLD) {
             return (value, false);
         }
         let mut truncated = false;
@@ -47,10 +46,22 @@ impl Compactor {
         if text.len() <= max_bytes {
             return (text.to_string(), false);
         }
+        let half = max_bytes / 2;
         let lines: Vec<&str> = text.lines().collect();
         if lines.len() > LOG_HEAD_TAIL_LINES * 2 {
-            let head = lines[..LOG_HEAD_TAIL_LINES].join("\n");
-            let tail = lines[lines.len() - LOG_HEAD_TAIL_LINES..].join("\n");
+            let mut head = lines[..LOG_HEAD_TAIL_LINES].join("\n");
+            let mut tail = lines[lines.len() - LOG_HEAD_TAIL_LINES..].join("\n");
+            // Bounding the line COUNT does not bound the byte size: a kept
+            // line can itself be arbitrarily long (minified content, a huge
+            // single log entry). Clamp each side to the byte budget too, so
+            // the result can never come back larger than intended.
+            if head.len() > half {
+                head = truncate_str_boundary(&head, half).to_string();
+            }
+            if tail.len() > half {
+                let start = tail_boundary(&tail, tail.len() - half);
+                tail = tail[start..].to_string();
+            }
             return (
                 format!(
                     "{head}\n... [{} lines omitted] ...\n{tail}",
@@ -59,7 +70,6 @@ impl Compactor {
                 true,
             );
         }
-        let half = max_bytes / 2;
         let head = truncate_str_boundary(text, half);
         let tail_start = tail_boundary(text, text.len().saturating_sub(half));
         let tail = &text[tail_start..];
@@ -112,6 +122,36 @@ fn compact_value(value: Value, truncated: &mut bool) -> Value {
 
 /// Largest byte index `<= max_bytes` that lands on a UTF-8 char boundary.
 /// Slicing a `str` at a non-boundary index panics; this can never produce one.
+/// True if `value` would serialize to more than `limit` bytes.
+///
+/// Serializes into a byte counter rather than `serde_json::to_string`, so a
+/// large value (e.g. a large file's text) is never fully allocated just to
+/// measure it. The counter also aborts serialization as soon as `limit` is
+/// crossed, so a genuinely huge payload does not get fully walked either.
+fn exceeds_byte_threshold(value: &Value, limit: usize) -> bool {
+    let mut counter = ByteCountBudget { count: 0, limit };
+    serde_json::to_writer(&mut counter, value).is_err()
+}
+
+struct ByteCountBudget {
+    count: usize,
+    limit: usize,
+}
+
+impl std::io::Write for ByteCountBudget {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.count += buf.len();
+        if self.count > self.limit {
+            return Err(std::io::Error::other("compactor byte budget exceeded"));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn truncate_str_boundary(s: &str, max_bytes: usize) -> &str {
     let mut end = max_bytes.min(s.len());
     while end > 0 && !s.is_char_boundary(end) {
@@ -217,6 +257,25 @@ mod tests {
     }
 
     #[test]
+    fn compact_text_line_branch_still_enforces_the_byte_budget() {
+        // 50 lines clears the "enough lines" branch, but each line is itself
+        // 5,000 bytes — bounding line COUNT alone would let 20 of them through
+        // per side, ~100,000 bytes, far past a small max_bytes budget.
+        let long_line = "x".repeat(5_000);
+        let text = std::iter::repeat(long_line)
+            .take(50)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (out, truncated) = Compactor::compact_text(&text, 2_000);
+        assert!(truncated);
+        assert!(
+            out.len() < 5_000,
+            "line-based branch must still respect max_bytes, got {} bytes",
+            out.len()
+        );
+    }
+
+    #[test]
     fn compact_text_falls_back_to_byte_truncation_for_one_giant_line() {
         // A single unbroken line (e.g. minified JSON) has no useful line
         // boundaries; `lines()` reports exactly one line no matter how long.
@@ -241,5 +300,17 @@ mod tests {
         let (kept, truncated) = Compactor::compact_rows(&rows, 50);
         assert!(!truncated);
         assert_eq!(kept, rows);
+    }
+
+    #[test]
+    fn byte_threshold_check_matches_the_actual_serialized_size() {
+        // Cross-check the bounded-writer size check against the true
+        // serialized length it replaces, at and around the boundary.
+        let value = json!({"text": "x".repeat(1_000)});
+        let actual_len = serde_json::to_string(&value).unwrap().len();
+
+        assert!(!exceeds_byte_threshold(&value, actual_len));
+        assert!(!exceeds_byte_threshold(&value, actual_len + 1));
+        assert!(exceeds_byte_threshold(&value, actual_len - 1));
     }
 }
