@@ -1,21 +1,32 @@
 pub mod artifact_read;
+#[cfg(feature = "graph")]
 pub mod callees;
+#[cfg(feature = "graph")]
 pub mod callers;
+#[cfg(feature = "graph")]
 pub mod context_bundle;
 pub mod csv_slice;
 pub mod delta_compare;
+#[cfg(feature = "graph")]
 pub mod dep_path;
 pub mod diff;
+#[cfg(feature = "graph")]
 pub mod doc_links;
 pub mod file_stat;
 pub mod glob;
+#[cfg(feature = "graph")]
 pub mod graph_build;
+#[cfg(feature = "graph")]
 pub mod graph_common;
+#[cfg(feature = "graph")]
 pub mod graph_refresh;
+#[cfg(feature = "graph")]
 pub mod graph_refresh_paths;
+#[cfg(feature = "graph")]
 pub mod graph_status;
 pub mod grep;
 pub mod group_count;
+#[cfg(feature = "graph")]
 pub mod impact_radius;
 pub mod join_on_key;
 pub mod json_extract;
@@ -26,11 +37,13 @@ pub mod logs_slice;
 pub mod math;
 pub mod metrics_summary;
 pub mod semantic_search_local;
+#[cfg(feature = "graph")]
 pub mod symbol_lookup;
 pub mod table_select;
 pub mod table_stats;
 pub mod text_extract;
 pub mod time_window_filter;
+#[cfg(feature = "graph")]
 pub mod usage_graph;
 pub mod workflow_outputs_index;
 pub mod workflow_status_summary;
@@ -44,9 +57,13 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.delta_compare" => delta_compare::run(input),
         "etr.grep" => grep::run(input),
         "etr.artifact_read" => artifact_read::run(input),
+        #[cfg(feature = "graph")]
         "etr.graph_build" => graph_build::run(input),
+        #[cfg(feature = "graph")]
         "etr.graph_refresh" => graph_refresh::run(input),
+        #[cfg(feature = "graph")]
         "etr.graph_refresh_paths" => graph_refresh_paths::run(input),
+        #[cfg(feature = "graph")]
         "etr.graph_status" => graph_status::run(input),
         "etr.group_count" => group_count::run(input),
         "etr.join_on_key" => join_on_key::run(input),
@@ -60,13 +77,21 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
         "etr.file_stat" => file_stat::run(input),
         "etr.math" => math::run(input),
         "etr.metrics_summary" => metrics_summary::run(input),
+        #[cfg(feature = "graph")]
         "etr.symbol_lookup" => symbol_lookup::run(input),
+        #[cfg(feature = "graph")]
         "etr.callers" => callers::run(input),
+        #[cfg(feature = "graph")]
         "etr.callees" => callees::run(input),
+        #[cfg(feature = "graph")]
         "etr.doc_links" => doc_links::run(input),
+        #[cfg(feature = "graph")]
         "etr.dep_path" => dep_path::run(input),
+        #[cfg(feature = "graph")]
         "etr.impact_radius" => impact_radius::run(input),
+        #[cfg(feature = "graph")]
         "etr.usage_graph" => usage_graph::run(input),
+        #[cfg(feature = "graph")]
         "etr.context_bundle" => context_bundle::run(input),
         "etr.semantic_search_local" => semantic_search_local::run(input),
         "etr.table_select" => table_select::run(input),
@@ -82,7 +107,8 @@ pub fn dispatch(tool: &str, input: &Value) -> Result<Value> {
 }
 
 pub fn list() -> Vec<crate::types::ToolManifest> {
-    vec![
+    #[allow(unused_mut)]
+    let mut tools = vec![
         crate::types::ToolManifest {
             name: "etr.delta_compare".into(),
             layer: crate::types::ToolLayer::L1,
@@ -100,66 +126,6 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
                 "context_lines": "integer (optional, default 0)"
             }),
             output_schema: serde_json::json!({"matches": "array", "count": "integer"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.graph_build".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Build and persist a structural repo graph for the project root".into(),
-            input_schema: serde_json::json!({
-                "root":"string (optional, default .)",
-                "graph_path":"string (optional explicit output path)"
-            }),
-            output_schema: serde_json::json!({"built":"boolean","root":"string","graph_path":"string","version":"integer","counts":"object"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.graph_refresh".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Rebuild the structural repo graph and report before/after freshness".into(),
-            input_schema: serde_json::json!({
-                "root":"string (optional, default .)",
-                "graph_path":"string (optional explicit output path)"
-            }),
-            output_schema: serde_json::json!({
-                "refreshed":"boolean",
-                "strategy":"string",
-                "graph_path":"string",
-                "root":"string",
-                "version":"integer",
-                "counts":"object",
-                "before":"object",
-                "after":"object"
-            }),
-        },
-        crate::types::ToolManifest {
-            name: "etr.graph_refresh_paths".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Refresh the structural repo graph for specific changed paths (currently full rebuild with path provenance)".into(),
-            input_schema: serde_json::json!({
-                "root":"string (optional, default .)",
-                "graph_path":"string (optional explicit output path)",
-                "paths":"array of string"
-            }),
-            output_schema: serde_json::json!({
-                "refreshed":"boolean",
-                "strategy":"string",
-                "requested_paths":"array",
-                "graph_path":"string",
-                "root":"string",
-                "version":"integer",
-                "counts":"object",
-                "before":"object",
-                "after":"object"
-            }),
-        },
-        crate::types::ToolManifest {
-            name: "etr.graph_status".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Inspect whether a persisted structural repo graph exists and whether it is stale".into(),
-            input_schema: serde_json::json!({
-                "root":"string (optional, default .)",
-                "graph_path":"string (optional explicit graph path)"
-            }),
-            output_schema: serde_json::json!({"exists":"boolean","graph_path":"string","root":"string?","built_at":"string?","version":"integer?","counts":"object?","stale":"boolean","stale_files":"integer","missing_files":"integer"}),
         },
         crate::types::ToolManifest {
             name: "etr.artifact_read".into(),
@@ -286,6 +252,162 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
             output_schema: serde_json::json!({"metrics":"object"}),
         },
         crate::types::ToolManifest {
+            name: "etr.semantic_search_local".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Token-overlap semantic-like search over local text files".into(),
+            input_schema: serde_json::json!({
+                "query":"string",
+                "root":"string (optional, default '.')",
+                "pattern":"string (optional glob, default **/*.{md,rs,toml,txt,json,yaml,yml})",
+                "limit":"integer (optional, default 10)"
+            }),
+            output_schema: serde_json::json!({"count":"integer","results":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.table_select".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Select/filter/order/limit rows from CSV/JSONL".into(),
+            input_schema: serde_json::json!({"path":"string","format":"string?","columns":"array?","where":"object?","order_by":"string?","order_desc":"boolean?","limit":"integer?"}),
+            output_schema: serde_json::json!({"rows":"array","count":"integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.table_stats".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Compute compact table statistics for CSV/JSONL files".into(),
+            input_schema: serde_json::json!({
+                "path": "string",
+                "format": "string (optional: auto|csv|jsonl, default auto)",
+                "max_distinct": "integer (optional, default 20)"
+            }),
+            output_schema: serde_json::json!({"format":"string","rows":"integer","column_count":"integer","columns":"array"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.text_extract".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Extract regex matches from text or file with optional capture group".into(),
+            input_schema: serde_json::json!({
+                "pattern": "string (regex)",
+                "path": "string (optional; file path)",
+                "text": "string (optional; inline text)",
+                "group": "integer (optional, default 0)",
+                "max_matches": "integer (optional, default 100)"
+            }),
+            output_schema: serde_json::json!({"matches": "array", "count": "integer", "truncated": "boolean"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.time_window_filter".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Filter rows by RFC3339 timestamp window".into(),
+            input_schema: serde_json::json!({"rows":"array?","path":"string?","format":"string?","timestamp_field":"string?","start":"string","end":"string"}),
+            output_schema: serde_json::json!({"rows":"array","count":"integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.workflow_status_summary".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Summarize hosted workflow progress JSON into compact status fields".into(),
+            input_schema: serde_json::json!({
+                "path": "string (JSON file path)"
+            }),
+            output_schema: serde_json::json!({
+                "completed_steps":"integer",
+                "total_steps":"integer",
+                "running_steps":"array of string",
+                "ready_steps":"array of string",
+                "pending_approval":"string|null",
+                "last_error":"any",
+                "outputs_available":"array of string"
+            }),
+        },
+        crate::types::ToolManifest {
+            name: "etr.workflow_outputs_index".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Index available workflow outputs from state JSON".into(),
+            input_schema: serde_json::json!({"path":"string"}),
+            output_schema: serde_json::json!({"outputs":"array","count":"integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.workflow_step_health".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Summarize workflow step failures and running counts".into(),
+            input_schema: serde_json::json!({"path":"string"}),
+            output_schema: serde_json::json!({"running_steps":"integer","failed_steps":"array","failed_count":"integer"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.diff".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Compute a unified diff between two text files".into(),
+            input_schema: serde_json::json!({
+                "path_a": "string",
+                "path_b": "string"
+            }),
+            output_schema: serde_json::json!({"unified_diff": "string", "changed_lines": "integer"}),
+        },
+    ];
+    // The code-graph tools need agent007-core; without the `graph` feature
+    // ETR stands alone.
+    #[cfg(feature = "graph")]
+    tools.extend([
+        crate::types::ToolManifest {
+            name: "etr.graph_build".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Build and persist a structural repo graph for the project root".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)"
+            }),
+            output_schema: serde_json::json!({"built":"boolean","root":"string","graph_path":"string","version":"integer","counts":"object"}),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_refresh".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Rebuild the structural repo graph and report before/after freshness".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)"
+            }),
+            output_schema: serde_json::json!({
+                "refreshed":"boolean",
+                "strategy":"string",
+                "graph_path":"string",
+                "root":"string",
+                "version":"integer",
+                "counts":"object",
+                "before":"object",
+                "after":"object"
+            }),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_refresh_paths".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Refresh the structural repo graph for specific changed paths (currently full rebuild with path provenance)".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit output path)",
+                "paths":"array of string"
+            }),
+            output_schema: serde_json::json!({
+                "refreshed":"boolean",
+                "strategy":"string",
+                "requested_paths":"array",
+                "graph_path":"string",
+                "root":"string",
+                "version":"integer",
+                "counts":"object",
+                "before":"object",
+                "after":"object"
+            }),
+        },
+        crate::types::ToolManifest {
+            name: "etr.graph_status".into(),
+            layer: crate::types::ToolLayer::L1,
+            description: "Inspect whether a persisted structural repo graph exists and whether it is stale".into(),
+            input_schema: serde_json::json!({
+                "root":"string (optional, default .)",
+                "graph_path":"string (optional explicit graph path)"
+            }),
+            output_schema: serde_json::json!({"exists":"boolean","graph_path":"string","root":"string?","built_at":"string?","version":"integer?","counts":"object?","stale":"boolean","stale_files":"integer","missing_files":"integer"}),
+        },
+        crate::types::ToolManifest {
             name: "etr.symbol_lookup".into(),
             layer: crate::types::ToolLayer::L1,
             description: "Look up symbols or modules in the persisted structural repo graph".into(),
@@ -393,96 +515,6 @@ pub fn list() -> Vec<crate::types::ToolManifest> {
             }),
             output_schema: serde_json::json!({"query":"string","symbol_count":"integer","doc_count":"integer","file_count":"integer","matched_symbols":"array","related_docs":"array","files":"array","text":"string"}),
         },
-        crate::types::ToolManifest {
-            name: "etr.semantic_search_local".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Token-overlap semantic-like search over local text files".into(),
-            input_schema: serde_json::json!({
-                "query":"string",
-                "root":"string (optional, default '.')",
-                "pattern":"string (optional glob, default **/*.{md,rs,toml,txt,json,yaml,yml})",
-                "limit":"integer (optional, default 10)"
-            }),
-            output_schema: serde_json::json!({"count":"integer","results":"array"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.table_select".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Select/filter/order/limit rows from CSV/JSONL".into(),
-            input_schema: serde_json::json!({"path":"string","format":"string?","columns":"array?","where":"object?","order_by":"string?","order_desc":"boolean?","limit":"integer?"}),
-            output_schema: serde_json::json!({"rows":"array","count":"integer"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.table_stats".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Compute compact table statistics for CSV/JSONL files".into(),
-            input_schema: serde_json::json!({
-                "path": "string",
-                "format": "string (optional: auto|csv|jsonl, default auto)",
-                "max_distinct": "integer (optional, default 20)"
-            }),
-            output_schema: serde_json::json!({"format":"string","rows":"integer","column_count":"integer","columns":"array"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.text_extract".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Extract regex matches from text or file with optional capture group".into(),
-            input_schema: serde_json::json!({
-                "pattern": "string (regex)",
-                "path": "string (optional; file path)",
-                "text": "string (optional; inline text)",
-                "group": "integer (optional, default 0)",
-                "max_matches": "integer (optional, default 100)"
-            }),
-            output_schema: serde_json::json!({"matches": "array", "count": "integer", "truncated": "boolean"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.time_window_filter".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Filter rows by RFC3339 timestamp window".into(),
-            input_schema: serde_json::json!({"rows":"array?","path":"string?","format":"string?","timestamp_field":"string?","start":"string","end":"string"}),
-            output_schema: serde_json::json!({"rows":"array","count":"integer"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.workflow_status_summary".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Summarize hosted workflow progress JSON into compact status fields".into(),
-            input_schema: serde_json::json!({
-                "path": "string (JSON file path)"
-            }),
-            output_schema: serde_json::json!({
-                "completed_steps":"integer",
-                "total_steps":"integer",
-                "running_steps":"array of string",
-                "ready_steps":"array of string",
-                "pending_approval":"string|null",
-                "last_error":"any",
-                "outputs_available":"array of string"
-            }),
-        },
-        crate::types::ToolManifest {
-            name: "etr.workflow_outputs_index".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Index available workflow outputs from state JSON".into(),
-            input_schema: serde_json::json!({"path":"string"}),
-            output_schema: serde_json::json!({"outputs":"array","count":"integer"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.workflow_step_health".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Summarize workflow step failures and running counts".into(),
-            input_schema: serde_json::json!({"path":"string"}),
-            output_schema: serde_json::json!({"running_steps":"integer","failed_steps":"array","failed_count":"integer"}),
-        },
-        crate::types::ToolManifest {
-            name: "etr.diff".into(),
-            layer: crate::types::ToolLayer::L1,
-            description: "Compute a unified diff between two text files".into(),
-            input_schema: serde_json::json!({
-                "path_a": "string",
-                "path_b": "string"
-            }),
-            output_schema: serde_json::json!({"unified_diff": "string", "changed_lines": "integer"}),
-        },
-    ]
+    ]);
+    tools
 }
