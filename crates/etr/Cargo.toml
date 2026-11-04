@@ -3,8 +3,14 @@ name = "agent007-etr"
 version = "0.7.0"
 edition = "2021"
 
+[features]
+# The code-graph tools (graph build, symbol lookup, callers, dependency paths)
+# use agent007-core; without them ETR is a small standalone tool runtime.
+default = ["graph"]
+graph = ["dep:agent007-core"]
+
 [dependencies]
-agent007-core = { path = "../core" }
+agent007-core = { path = "../core", optional = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 anyhow      = { workspace = true }
