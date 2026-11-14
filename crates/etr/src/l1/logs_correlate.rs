@@ -23,7 +23,7 @@ pub fn run(input: &Value) -> Result<Value> {
 }
 
 fn collect(path: &str, re: &Regex, group: usize) -> Result<HashMap<String, Vec<usize>>> {
-    let text = std::fs::read_to_string(path)?;
+    let text = crate::budget::read_to_string(path)?;
     let mut out: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, line) in text.lines().enumerate() {
         for cap in re.captures_iter(line) {

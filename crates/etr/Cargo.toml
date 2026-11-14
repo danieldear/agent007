@@ -21,6 +21,7 @@ globset     = { workspace = true }
 uuid        = { workspace = true }
 # L1 tool deps
 regex       = "1"
+ignore      = "0.4"
 csv         = "1"
 evalexpr    = "12"
 similar     = { version = "2", features = ["text"] }

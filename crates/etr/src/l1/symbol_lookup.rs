@@ -108,7 +108,7 @@ mod tests {
             "index must still answer"
         );
         assert_eq!(
-            std::fs::read_to_string(&graph_path).unwrap(),
+            crate::budget::read_to_string(&graph_path).unwrap(),
             oversized,
             "query path must not rewrite the legacy graph JSON"
         );
