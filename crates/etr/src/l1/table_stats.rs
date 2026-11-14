@@ -69,7 +69,7 @@ fn stats_csv(path: &str, max_distinct: usize) -> Result<Value> {
 }
 
 fn stats_jsonl(path: &str, max_distinct: usize) -> Result<Value> {
-    let content = std::fs::read_to_string(path).context(format!("cannot read {path}"))?;
+    let content = crate::budget::read_to_string(path).context(format!("cannot read {path}"))?;
     let mut rows = 0usize;
     let mut columns: HashMap<String, (usize, HashMap<String, usize>)> = HashMap::new();
 

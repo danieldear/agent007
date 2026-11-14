@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
-    let content = std::fs::read_to_string(path).context(format!("cannot read {path}"))?;
+    let content = crate::budget::read_to_string(path).context(format!("cannot read {path}"))?;
     let root: Value = serde_json::from_str(&content).context("invalid JSON")?;
 
     let progress = root.get("progress").unwrap_or(&root);

@@ -6,7 +6,7 @@ pub fn run(input: &Value) -> Result<Value> {
     let mode = input["mode"].as_str().unwrap_or("text");
     let max_bytes = input["max_bytes"].as_u64().unwrap_or(100_000) as usize;
 
-    let bytes = std::fs::read(path).context(format!("cannot read {path}"))?;
+    let bytes = crate::budget::read(path).context(format!("cannot read {path}"))?;
     let truncated = bytes.len() > max_bytes;
     let slice = if truncated {
         &bytes[..max_bytes]

@@ -12,29 +12,16 @@ pub fn run(input: &Value) -> Result<Value> {
     builder.add(glob);
     let set = builder.build().context("failed to build glob set")?;
 
-    let mut paths: Vec<String> = Vec::new();
-    collect_paths(Path::new(root), root, &set, &mut paths);
-
-    Ok(json!({ "paths": paths, "count": paths.len() }))
-}
-
-fn collect_paths(dir: &Path, root: &str, set: &globset::GlobSet, out: &mut Vec<String>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for entry in rd.flatten() {
-            let p = entry.path();
-            let rel = p.strip_prefix(root).unwrap_or(&p);
-            if set.is_match(rel) {
-                if let Some(s) = p.to_str() {
-                    out.push(s.to_string());
-                }
+    let (files, mut truncated) = crate::budget::files(Path::new(root));
+    let mut paths = Vec::new();
+    for p in files {
+        if set.is_match(p.strip_prefix(root).unwrap_or(&p)) {
+            if paths.len() >= crate::budget::RESULTS {
+                truncated = true;
+                break;
             }
-            if p.is_dir()
-                && p.file_name()
-                    .map(|n| !n.to_string_lossy().starts_with('.'))
-                    .unwrap_or(false)
-            {
-                collect_paths(&p, root, set, out);
-            }
+            paths.push(p.to_string_lossy().into_owned());
         }
     }
+    Ok(json!({"count":paths.len(),"paths":paths,"truncated":truncated}))
 }

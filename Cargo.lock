@@ -130,6 +130,7 @@ dependencies = [
  "evalexpr",
  "globset",
  "hex",
+ "ignore",
  "regex",
  "serde",
  "serde_json",

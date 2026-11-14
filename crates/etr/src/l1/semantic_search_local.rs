@@ -10,7 +10,10 @@ pub fn run(input: &Value) -> Result<Value> {
     let pattern = input["pattern"]
         .as_str()
         .unwrap_or("**/*.{md,rs,toml,txt,json,yaml,yml}");
-    let limit = input["limit"].as_u64().unwrap_or(10) as usize;
+    let limit = input["limit"]
+        .as_u64()
+        .unwrap_or(10)
+        .min(crate::budget::RESULTS as u64) as usize;
 
     let mut b = GlobSetBuilder::new();
     b.add(Glob::new(pattern)?);
@@ -18,7 +21,35 @@ pub fn run(input: &Value) -> Result<Value> {
 
     let q_tokens = tokens(query);
     let mut results = Vec::new();
-    walk(Path::new(root), &set, &q_tokens, limit, &mut results)?;
+    let (files, mut truncated) = crate::budget::files(Path::new(root));
+    let started = std::time::Instant::now();
+    let mut bytes = 0;
+    for p in files {
+        if started.elapsed() > std::time::Duration::from_secs(2) {
+            truncated = true;
+            break;
+        }
+        if !set.is_match(p.strip_prefix(root).unwrap_or(&p)) {
+            continue;
+        }
+        let Ok(content) = crate::budget::read_to_string(&p) else {
+            continue;
+        };
+        bytes += content.len();
+        if bytes > crate::budget::TOTAL_BYTES as usize {
+            truncated = true;
+            break;
+        }
+        let overlap = q_tokens.intersection(&tokens(&content)).count();
+        if overlap == 0 {
+            continue;
+        }
+        results.push(json!({"path":p.to_string_lossy(),"score":overlap as f64/q_tokens.len().max(1) as f64,"overlap_tokens":overlap}));
+        if results.len() >= crate::budget::RESULTS {
+            truncated = true;
+            break;
+        }
+    }
     results.sort_by(|a, b| {
         b["score"]
             .as_f64()
@@ -33,60 +64,9 @@ pub fn run(input: &Value) -> Result<Value> {
         "query": query,
         "root": root,
         "count": results.len(),
+        "truncated": truncated,
         "results": results
     }))
-}
-
-fn walk(
-    dir: &Path,
-    set: &globset::GlobSet,
-    q_tokens: &HashSet<String>,
-    limit: usize,
-    out: &mut Vec<Value>,
-) -> Result<()> {
-    if out.len() >= limit * 5 {
-        return Ok(());
-    }
-    for ent in std::fs::read_dir(dir).context(format!("cannot read {}", dir.display()))? {
-        let ent = ent?;
-        let p = ent.path();
-        let ft = match ent.file_type() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        if p.file_name().and_then(|s| s.to_str()) == Some(".git")
-            || p.file_name().and_then(|s| s.to_str()) == Some("target")
-        {
-            continue;
-        }
-        if ft.is_symlink() {
-            continue;
-        }
-        if ft.is_dir() {
-            walk(&p, set, q_tokens, limit, out)?;
-            continue;
-        }
-        if !set.is_match(&p) {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&p) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let c_tokens = tokens(&content);
-        let overlap = q_tokens.intersection(&c_tokens).count();
-        if overlap == 0 {
-            continue;
-        }
-        let denom = q_tokens.len().max(1) as f64;
-        let score = overlap as f64 / denom;
-        out.push(json!({
-            "path": p.to_string_lossy().to_string(),
-            "score": score,
-            "overlap_tokens": overlap
-        }));
-    }
-    Ok(())
 }
 
 fn tokens(s: &str) -> HashSet<String> {

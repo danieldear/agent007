@@ -10,7 +10,7 @@ pub fn run(input: &Value) -> Result<Value> {
         s.to_string()
     } else {
         let path = input["path"].as_str().context("path or text required")?;
-        std::fs::read_to_string(path).context(format!("cannot read {path}"))?
+        crate::budget::read_to_string(path).context(format!("cannot read {path}"))?
     };
 
     let re = Regex::new(pattern).context("invalid regex pattern")?;

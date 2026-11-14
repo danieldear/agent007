@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
-    let text = std::fs::read_to_string(path)?;
+    let text = crate::budget::read_to_string(path)?;
     let root: Value = serde_json::from_str(&text)?;
 
     let steps = root

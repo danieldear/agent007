@@ -5,7 +5,7 @@ pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
     let query = input["query"].as_str().context("query required")?;
 
-    let content = std::fs::read_to_string(path).context(format!("cannot read {path}"))?;
+    let content = crate::budget::read_to_string(path).context(format!("cannot read {path}"))?;
     let doc: Value = serde_json::from_str(&content).context("invalid JSON")?;
 
     let matches = run_query(&doc, query)?;

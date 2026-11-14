@@ -30,6 +30,20 @@ impl EtrDispatcher {
             .map(|s| s.len())
             .unwrap_or(0);
 
+        if input_size > 1024 * 1024 || (!req.input.is_object() && req.tool != "etr.list") {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            self.audit
+                .write(&req.tool, &audit_id, "denied", latency_ms, input_size, 0);
+            return EtrCallResult {
+                tool: req.tool,
+                status: EtrStatus::Denied,
+                output: serde_json::json!({}),
+                audit_id,
+                error: Some("Tool input must be an object within the 1 MiB budget".into()),
+                truncated: None,
+                latency_ms,
+            };
+        }
         if req.tool == "etr.policy_check" {
             let tool = req.input["tool"].as_str().unwrap_or("");
             let input = req
@@ -93,16 +107,43 @@ impl EtrDispatcher {
             };
         }
 
-        match l1::dispatch(&req.tool, &req.input) {
+        let input = match self.policy.prepare(&req.input) {
+            Ok(mut v) => {
+                if l1::list()
+                    .iter()
+                    .any(|m| m.name == req.tool && m.input_schema.get("root").is_some())
+                    && v.get("root").is_none()
+                {
+                    v["root"] = self.workspace_root.to_string_lossy().to_string().into();
+                }
+                v
+            }
+            Err(e) => {
+                return EtrCallResult {
+                    tool: req.tool,
+                    status: EtrStatus::Denied,
+                    output: serde_json::json!({}),
+                    audit_id,
+                    error: Some(e),
+                    truncated: None,
+                    latency_ms: 0,
+                }
+            }
+        };
+        match l1::dispatch(&req.tool, &input) {
             Ok(raw_output) => {
                 let output_size = serde_json::to_string(&raw_output)
                     .map(|s| s.len())
                     .unwrap_or(0);
+                let work_truncated = raw_output
+                    .get("truncated")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
                 let (output, truncated) = if req.compact {
                     let (v, t) = Compactor::compact_json(raw_output, None);
-                    (v, Some(t))
+                    (v, Some(t || work_truncated))
                 } else {
-                    (raw_output, None)
+                    (raw_output, Some(work_truncated))
                 };
                 let latency_ms = start.elapsed().as_millis() as u64;
                 self.audit.write(
@@ -172,6 +213,43 @@ impl EtrDispatcher {
 mod tests {
     use super::*;
 
+    #[test]
+    fn existing_relative_files_and_default_root_remain_usable() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("note.txt"), "needle").unwrap();
+        let dispatcher = EtrDispatcher::new(d.path().to_path_buf());
+        for (tool, input) in [
+            (
+                "etr.grep",
+                serde_json::json!({"path":"note.txt","pattern":"needle"}),
+            ),
+            ("etr.glob", serde_json::json!({"pattern":"*.txt"})),
+        ] {
+            let r = dispatcher.call(EtrCallRequest {
+                tool: tool.into(),
+                input,
+                compact: true,
+            });
+            assert!(matches!(r.status, EtrStatus::Ok), "{:?}", r.error);
+        }
+    }
+    #[test]
+    fn malformed_and_oversized_inputs_are_denied_and_audited() {
+        let d = tempfile::tempdir().unwrap();
+        let dispatcher = EtrDispatcher::new(d.path().to_path_buf());
+        for input in [
+            serde_json::json!([]),
+            serde_json::json!(null),
+            serde_json::json!({"text":"x".repeat(1024*1024+1)}),
+        ] {
+            let r = dispatcher.call(EtrCallRequest {
+                tool: "etr.glob".into(),
+                input,
+                compact: true,
+            });
+            assert!(matches!(r.status, EtrStatus::Denied));
+        }
+    }
     #[test]
     fn policy_check_reports_denied_for_path_traversal() {
         let base = std::env::temp_dir().join(format!("etr-policy-{}", uuid::Uuid::new_v4()));

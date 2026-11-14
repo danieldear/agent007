@@ -6,6 +6,7 @@
 //! L3: Gated shell execution (future, opt-in).
 
 pub mod audit;
+pub mod budget;
 pub mod compactor;
 pub mod dispatcher;
 pub mod l1;

@@ -93,7 +93,7 @@ fn load_rows(path: &str, format: &str) -> Result<Vec<Map<String, Value>>> {
             Ok(rows)
         }
         "jsonl" => {
-            let text = std::fs::read_to_string(path)?;
+            let text = crate::budget::read_to_string(path)?;
             let mut rows = Vec::new();
             for line in text.lines().filter(|l| !l.trim().is_empty()) {
                 let v: Value = serde_json::from_str(line)?;

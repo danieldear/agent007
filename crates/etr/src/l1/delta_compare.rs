@@ -33,7 +33,7 @@ fn load_obj(inline: Option<&Value>, path: Option<&Value>) -> Result<Map<String, 
     let p = path
         .and_then(Value::as_str)
         .context("baseline/candidate object or path required")?;
-    let txt = std::fs::read_to_string(p)?;
+    let txt = crate::budget::read_to_string(p)?;
     let v: Value = serde_json::from_str(&txt)?;
     Ok(v.as_object().cloned().unwrap_or_default())
 }
