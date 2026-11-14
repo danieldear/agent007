@@ -17,6 +17,7 @@ pub fn run(input: &Value) -> Result<Value> {
     }
 
     let mut out = Vec::new();
+    let mut output_bytes = 0;
     for l in left {
         let key = l.get(left_key).cloned().unwrap_or(Value::Null).to_string();
         if let Some(rr) = right_index.get(&key) {
@@ -25,10 +26,10 @@ pub fn run(input: &Value) -> Result<Value> {
                 for (k, v) in r {
                     merged.insert(format!("right.{k}"), v.clone());
                 }
-                out.push(Value::Object(merged));
+                crate::budget::push(&mut out, Value::Object(merged), &mut output_bytes)?;
             }
         } else if how == "left" {
-            out.push(Value::Object(l.clone()));
+            crate::budget::push(&mut out, Value::Object(l.clone()), &mut output_bytes)?;
         }
     }
     Ok(json!({"rows": out, "count": out.len()}))

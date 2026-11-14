@@ -86,3 +86,73 @@ mod tests {
         assert_eq!(f.len(), 1);
     }
 }
+pub fn csv(path: &str) -> anyhow::Result<csv::Reader<std::io::Cursor<Vec<u8>>>> {
+    let bytes = read(path)?;
+    let mut reader = csv::Reader::from_reader(std::io::Cursor::new(bytes));
+    if reader.headers()?.len() > 256 {
+        anyhow::bail!("CSV exceeds column budget");
+    }
+    Ok(reader)
+}
+pub fn cells(total: &mut usize, n: usize) -> anyhow::Result<()> {
+    *total = total.saturating_add(n);
+    if *total > 100_000 {
+        anyhow::bail!("Table exceeds 100000-cell work budget");
+    }
+    Ok(())
+}
+pub fn push(
+    out: &mut Vec<serde_json::Value>,
+    value: serde_json::Value,
+    bytes: &mut usize,
+) -> anyhow::Result<()> {
+    let n = serde_json::to_vec(&value)?.len();
+    if out.len() >= RESULTS || bytes.saturating_add(n) > OUTPUT_BYTES {
+        anyhow::bail!("Join exceeds result budget; narrow the inputs");
+    }
+    *bytes += n;
+    out.push(value);
+    Ok(())
+}
+#[cfg(test)]
+mod additional_regressions {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn csv_entry_points_cannot_bypass_file_limits() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("big.csv");
+        std::fs::File::create(&p)
+            .unwrap()
+            .set_len(FILE_BYTES + 1)
+            .unwrap();
+        for tool in ["etr.csv_slice", "etr.table_select", "etr.table_stats"] {
+            assert!(crate::l1::dispatch(tool, &json!({"path":p})).is_err());
+        }
+    }
+    #[test]
+    fn cartesian_joins_stop_before_unbounded_accumulation() {
+        let rows = vec![json!({"id":1}); 100];
+        let r = crate::l1::join_on_key::run(
+            &json!({"left_key":"id","right_key":"id","left_rows":rows,"right_rows":rows}),
+        );
+        assert!(r.unwrap_err().to_string().contains("budget"));
+    }
+    #[test]
+    fn json_selectors_and_inline_path_fields_are_data_not_files() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("data.json"), r#"{"a":{"path":"/data"}}"#).unwrap();
+        let dispatcher = crate::EtrDispatcher::new(d.path().to_path_buf());
+        let r = dispatcher.call(crate::EtrCallRequest {
+            tool: "etr.json_extract".into(),
+            input: json!({"path":"data.json","jq_path":".a.path"}),
+            compact: false,
+        });
+        assert!(matches!(r.status, crate::EtrStatus::Ok), "{:?}", r.error);
+        assert_eq!(r.output["value"], "/data");
+        let policy = crate::policy::PolicyEngine::new(d.path().to_path_buf());
+        assert!(policy
+            .prepare(&json!({"baseline":{"path":42},"candidate":{"path":43}}))
+            .is_ok());
+    }
+}

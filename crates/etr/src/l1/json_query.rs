@@ -21,8 +21,12 @@ fn run_query(doc: &Value, query: &str) -> Result<Vec<Value>> {
         return Ok(vec![doc.clone()]);
     }
 
+    let segments = split_segments(query);
+    if query.len() > 4096 || segments.len() > 32 {
+        anyhow::bail!("JSON query exceeds work budget");
+    }
     let mut current = vec![doc.clone()];
-    for segment in split_segments(query) {
+    for segment in segments {
         current = apply_segment(&current, segment.as_str())?;
     }
     Ok(current)
@@ -61,6 +65,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
     let mut out = Vec::new();
 
     for value in values {
+        if out.len() >= crate::budget::ENTRIES {
+            anyhow::bail!("JSON query exceeds result budget");
+        }
         let base_value = if base.is_empty() {
             value.clone()
         } else if let Some(v) = value.get(&base) {
@@ -78,6 +85,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
             }
             Selector::Wildcard => {
                 if let Some(arr) = base_value.as_array() {
+                    if out.len() + arr.len() > crate::budget::ENTRIES {
+                        anyhow::bail!("JSON query exceeds result budget");
+                    }
                     out.extend(arr.iter().cloned());
                 }
             }
@@ -88,6 +98,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
                             continue;
                         };
                         if value_eq_expected(actual, expected) {
+                            if out.len() >= crate::budget::ENTRIES {
+                                anyhow::bail!("JSON query exceeds result budget");
+                            }
                             out.push(item.clone());
                         }
                     }

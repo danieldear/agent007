@@ -9,7 +9,9 @@ pub fn run(input: &Value) -> Result<Value> {
     let text_a = crate::budget::read_to_string(path_a).context(format!("cannot read {path_a}"))?;
     let text_b = crate::budget::read_to_string(path_b).context(format!("cannot read {path_b}"))?;
 
-    let diff = TextDiff::from_lines(&text_a, &text_b);
+    let diff = TextDiff::configure()
+        .timeout(std::time::Duration::from_secs(2))
+        .diff_lines(&text_a, &text_b);
 
     let mut unified = String::new();
     let mut changed_lines = 0usize;

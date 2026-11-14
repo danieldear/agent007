@@ -13,6 +13,9 @@ pub enum PolicyResult {
 /// The same path vocabulary is used for normalization and validation, including
 /// nested objects/arrays. Values that are inline data are not treated as paths.
 pub fn path_key(k: &str) -> bool {
+    if k == "jq_path" {
+        return false;
+    } // JSON selector, not a filesystem path.
     matches!(
         k,
         "path" | "file" | "dir" | "directory" | "root" | "paths" | "files"
@@ -88,6 +91,9 @@ impl PolicyEngine {
                 Value::String(s) if pathy => Ok(Value::String(
                     policy.resolve(s)?.to_string_lossy().into_owned(),
                 )),
+                Value::Array(a) if a.len() > crate::budget::ENTRIES => {
+                    Err("Tool input exceeds item budget".into())
+                }
                 Value::Array(a) => a
                     .iter()
                     .map(|v| visit(policy, v, pathy, depth + 1))
@@ -98,7 +104,16 @@ impl PolicyEngine {
                     .map(|(k, v)| {
                         Ok((
                             k.clone(),
-                            visit(policy, v, pathy || path_key(k), depth + 1)?,
+                            if !pathy
+                                && matches!(
+                                    k.as_str(),
+                                    "baseline" | "candidate" | "rows" | "left_rows" | "right_rows"
+                                )
+                            {
+                                v.clone()
+                            } else {
+                                visit(policy, v, pathy || path_key(k), depth + 1)?
+                            },
                         ))
                     })
                     .collect::<Result<serde_json::Map<_, _>, String>>()

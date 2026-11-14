@@ -6,7 +6,10 @@ pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
     let level = input["level"].as_str().map(|s| s.to_ascii_lowercase());
     let contains = input["contains"].as_str();
-    let max_lines = input["max_lines"].as_u64().unwrap_or(200) as usize;
+    let max_lines = input["max_lines"]
+        .as_u64()
+        .unwrap_or(200)
+        .clamp(1, crate::budget::RESULTS as u64) as usize;
 
     let content = crate::budget::read_to_string(path).context(format!("cannot read {path}"))?;
     let level_re = Regex::new(r"\b(trace|debug|info|warn|error|fatal)\b").unwrap();

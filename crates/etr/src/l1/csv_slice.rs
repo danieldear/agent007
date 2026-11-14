@@ -3,13 +3,17 @@ use serde_json::{json, Value};
 
 pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
-    let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50)
+        .min(crate::budget::RESULTS as u64) as usize;
     let columns: Option<Vec<&str>> = input
         .get("columns")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect());
 
-    let mut rdr = csv::Reader::from_path(path).context(format!("cannot read CSV: {path}"))?;
+    let mut rdr = crate::budget::csv(path)?;
     let headers: Vec<String> = rdr.headers()?.iter().map(|s| s.to_string()).collect();
 
     let col_indices: Option<Vec<usize>> = columns.as_ref().map(|cols| {
@@ -21,8 +25,10 @@ pub fn run(input: &Value) -> Result<Value> {
     let mut rows: Vec<Value> = Vec::new();
     let mut total = 0usize;
 
+    let mut cells = 0;
     for result in rdr.records() {
         let record = result?;
+        crate::budget::cells(&mut cells, record.len())?;
         total += 1;
         if rows.len() < limit {
             let row: serde_json::Map<String, Value> = if let Some(ref idxs) = col_indices {
