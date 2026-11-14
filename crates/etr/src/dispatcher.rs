@@ -30,6 +30,20 @@ impl EtrDispatcher {
             .map(|s| s.len())
             .unwrap_or(0);
 
+        if input_size > 1024 * 1024 || (!req.input.is_object() && req.tool != "etr.list") {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            self.audit
+                .write(&req.tool, &audit_id, "denied", latency_ms, input_size, 0);
+            return EtrCallResult {
+                tool: req.tool,
+                status: EtrStatus::Denied,
+                output: serde_json::json!({}),
+                audit_id,
+                error: Some("Tool input must be an object within the 1 MiB budget".into()),
+                truncated: None,
+                latency_ms,
+            };
+        }
         if req.tool == "etr.policy_check" {
             let tool = req.input["tool"].as_str().unwrap_or("");
             let input = req
@@ -93,17 +107,6 @@ impl EtrDispatcher {
             };
         }
 
-        if input_size > 1024 * 1024 {
-            return EtrCallResult {
-                tool: req.tool,
-                status: EtrStatus::Denied,
-                output: serde_json::json!({}),
-                audit_id,
-                error: Some("Tool input exceeds 1 MiB budget".into()),
-                truncated: None,
-                latency_ms: 0,
-            };
-        }
         let input = match self.policy.prepare(&req.input) {
             Ok(mut v) => {
                 if l1::list()
@@ -210,6 +213,23 @@ impl EtrDispatcher {
 mod tests {
     use super::*;
 
+    #[test]
+    fn malformed_and_oversized_inputs_are_denied_and_audited() {
+        let d = tempfile::tempdir().unwrap();
+        let dispatcher = EtrDispatcher::new(d.path().to_path_buf());
+        for input in [
+            serde_json::json!([]),
+            serde_json::json!(null),
+            serde_json::json!({"text":"x".repeat(1024*1024+1)}),
+        ] {
+            let r = dispatcher.call(EtrCallRequest {
+                tool: "etr.glob".into(),
+                input,
+                compact: true,
+            });
+            assert!(matches!(r.status, EtrStatus::Denied));
+        }
+    }
     #[test]
     fn policy_check_reports_denied_for_path_traversal() {
         let base = std::env::temp_dir().join(format!("etr-policy-{}", uuid::Uuid::new_v4()));

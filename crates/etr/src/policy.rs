@@ -92,7 +92,12 @@ impl PolicyEngine {
                     .map(Value::Array),
                 Value::Object(o) => o
                     .iter()
-                    .map(|(k, v)| Ok((k.clone(), visit(policy, v, path_key(k), depth + 1)?)))
+                    .map(|(k, v)| {
+                        Ok((
+                            k.clone(),
+                            visit(policy, v, pathy || path_key(k), depth + 1)?,
+                        ))
+                    })
                     .collect::<Result<serde_json::Map<_, _>, String>>()
                     .map(Value::Object),
                 _ => Ok(v.clone()),
@@ -122,6 +127,7 @@ mod confinement_regressions {
         for input in [
             serde_json::json!({"path":outside}),
             serde_json::json!({"files":[outside]}),
+            serde_json::json!({"paths":{"a":outside}}),
             serde_json::json!({"nested":{"file":outside}}),
             serde_json::json!({"path":d.path().join("missing/file")}),
         ] {
