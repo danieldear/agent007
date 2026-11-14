@@ -214,6 +214,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn existing_relative_files_and_default_root_remain_usable() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("note.txt"), "needle").unwrap();
+        let dispatcher = EtrDispatcher::new(d.path().to_path_buf());
+        for (tool, input) in [
+            (
+                "etr.grep",
+                serde_json::json!({"path":"note.txt","pattern":"needle"}),
+            ),
+            ("etr.glob", serde_json::json!({"pattern":"*.txt"})),
+        ] {
+            let r = dispatcher.call(EtrCallRequest {
+                tool: tool.into(),
+                input,
+                compact: true,
+            });
+            assert!(matches!(r.status, EtrStatus::Ok), "{:?}", r.error);
+        }
+    }
+    #[test]
     fn malformed_and_oversized_inputs_are_denied_and_audited() {
         let d = tempfile::tempdir().unwrap();
         let dispatcher = EtrDispatcher::new(d.path().to_path_buf());

@@ -54,9 +54,12 @@ impl PolicyEngine {
                         return Err("Path is outside the workspace".into());
                     }
                     // Keep the canonical existing ancestor, not a lexical prefix.
-                    return Ok(
-                        canonical.join(p.strip_prefix(ancestor).map_err(|_| "Invalid path")?)
-                    );
+                    let suffix = p.strip_prefix(ancestor).map_err(|_| "Invalid path")?;
+                    return Ok(if suffix.as_os_str().is_empty() {
+                        canonical
+                    } else {
+                        canonical.join(suffix)
+                    });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     ancestor = ancestor.parent().ok_or("No existing path ancestor")?;
