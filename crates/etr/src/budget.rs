@@ -1,5 +1,6 @@
 //! Work limits are applied before compaction. Cooperative deadlines cannot
 //! interrupt a blocked OS filesystem syscall and are not an OS sandbox.
+use anyhow::Context;
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
@@ -87,7 +88,7 @@ mod tests {
     }
 }
 pub fn csv(path: &str) -> anyhow::Result<csv::Reader<std::io::Cursor<Vec<u8>>>> {
-    let bytes = read(path)?;
+    let bytes = read(path).with_context(|| format!("cannot read CSV: {path}"))?;
     let mut reader = csv::Reader::from_reader(std::io::Cursor::new(bytes));
     if reader.headers()?.len() > 256 {
         anyhow::bail!("CSV exceeds column budget");
@@ -118,6 +119,13 @@ pub fn push(
 mod additional_regressions {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn csv_read_errors_include_the_source_path() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("missing.csv");
+        let e = csv(p.to_str().unwrap()).err().unwrap();
+        assert!(e.to_string().contains(p.to_str().unwrap()));
+    }
     #[test]
     fn csv_entry_points_cannot_bypass_file_limits() {
         let d = tempfile::tempdir().unwrap();
