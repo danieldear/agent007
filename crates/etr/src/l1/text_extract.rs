@@ -5,7 +5,10 @@ use serde_json::{json, Value};
 pub fn run(input: &Value) -> Result<Value> {
     let pattern = input["pattern"].as_str().context("pattern required")?;
     let group = input["group"].as_u64().unwrap_or(0) as usize;
-    let max_matches = input["max_matches"].as_u64().unwrap_or(100) as usize;
+    let max_matches = input["max_matches"]
+        .as_u64()
+        .unwrap_or(100)
+        .clamp(1, crate::budget::RESULTS as u64) as usize;
     let text = if let Some(s) = input["text"].as_str() {
         s.to_string()
     } else {

@@ -79,11 +79,13 @@ fn load_rows(path: &str, format: &str) -> Result<Vec<Map<String, Value>>> {
     };
     match fmt {
         "csv" => {
-            let mut rdr = csv::Reader::from_path(path).context(format!("cannot read {path}"))?;
+            let mut rdr = crate::budget::csv(path)?;
             let headers = rdr.headers()?.clone();
             let mut rows = Vec::new();
+            let mut cells = 0;
             for rec in rdr.records() {
                 let rec = rec?;
+                crate::budget::cells(&mut cells, rec.len())?;
                 let mut m = Map::new();
                 for (i, val) in rec.iter().enumerate() {
                     m.insert(headers[i].to_string(), Value::String(val.to_string()));
@@ -98,6 +100,9 @@ fn load_rows(path: &str, format: &str) -> Result<Vec<Map<String, Value>>> {
             for line in text.lines().filter(|l| !l.trim().is_empty()) {
                 let v: Value = serde_json::from_str(line)?;
                 if let Some(obj) = v.as_object() {
+                    if rows.len() >= crate::budget::ENTRIES {
+                        anyhow::bail!("Table exceeds row budget");
+                    }
                     rows.push(obj.clone());
                 }
             }

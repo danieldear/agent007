@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, HashMap};
 pub fn run(input: &Value) -> Result<Value> {
     let path = input["path"].as_str().context("path required")?;
     let format = input["format"].as_str().unwrap_or("auto");
-    let max_distinct = input["max_distinct"].as_u64().unwrap_or(20) as usize;
+    let max_distinct = input["max_distinct"]
+        .as_u64()
+        .unwrap_or(20)
+        .min(crate::budget::RESULTS as u64) as usize;
 
     let format = detect_format(path, format);
     match format.as_str() {
@@ -27,14 +30,16 @@ fn detect_format(path: &str, explicit: &str) -> String {
 }
 
 fn stats_csv(path: &str, max_distinct: usize) -> Result<Value> {
-    let mut rdr = csv::Reader::from_path(path).context(format!("cannot read {path}"))?;
+    let mut rdr = crate::budget::csv(path)?;
     let headers = rdr.headers()?.clone();
     let mut rows = 0usize;
     let mut null_counts = vec![0usize; headers.len()];
     let mut distinct: Vec<HashMap<String, usize>> = vec![HashMap::new(); headers.len()];
 
+    let mut cells = 0;
     for rec in rdr.records() {
         let rec = rec?;
+        crate::budget::cells(&mut cells, rec.len())?;
         rows += 1;
         for (i, field) in rec.iter().enumerate() {
             if field.trim().is_empty() {

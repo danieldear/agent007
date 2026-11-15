@@ -16,13 +16,20 @@ pub fn run(input: &Value) -> Result<Value> {
 }
 
 fn run_query(doc: &Value, query: &str) -> Result<Vec<Value>> {
+    if query.len() > 4096 {
+        anyhow::bail!("JSON query exceeds work budget");
+    }
     let query = query.trim().trim_start_matches('.');
     if query.is_empty() {
         return Ok(vec![doc.clone()]);
     }
 
+    let segments = split_segments(query);
+    if segments.len() > 32 {
+        anyhow::bail!("JSON query exceeds work budget");
+    }
     let mut current = vec![doc.clone()];
-    for segment in split_segments(query) {
+    for segment in segments {
         current = apply_segment(&current, segment.as_str())?;
     }
     Ok(current)
@@ -61,6 +68,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
     let mut out = Vec::new();
 
     for value in values {
+        if out.len() >= crate::budget::ENTRIES {
+            anyhow::bail!("JSON query exceeds result budget");
+        }
         let base_value = if base.is_empty() {
             value.clone()
         } else if let Some(v) = value.get(&base) {
@@ -78,6 +88,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
             }
             Selector::Wildcard => {
                 if let Some(arr) = base_value.as_array() {
+                    if out.len() + arr.len() > crate::budget::ENTRIES {
+                        anyhow::bail!("JSON query exceeds result budget");
+                    }
                     out.extend(arr.iter().cloned());
                 }
             }
@@ -88,6 +101,9 @@ fn apply_segment(values: &[Value], segment: &str) -> Result<Vec<Value>> {
                             continue;
                         };
                         if value_eq_expected(actual, expected) {
+                            if out.len() >= crate::budget::ENTRIES {
+                                anyhow::bail!("JSON query exceeds result budget");
+                            }
                             out.push(item.clone());
                         }
                     }
@@ -146,6 +162,13 @@ fn parse_segment(segment: &str) -> Result<(String, Selector)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn oversized_query_is_rejected_before_scanning_or_splitting() {
+        assert!(run_query(&serde_json::json!({}), &"a.".repeat(3000))
+            .unwrap_err()
+            .to_string()
+            .contains("work budget"));
+    }
     #[test]
     fn query_with_wildcard_and_projection() {
         let doc = json!({"results":[{"score":10},{"score":20}]});

@@ -25,9 +25,14 @@ pub fn run(input: &Value) -> Result<Value> {
 fn collect(path: &str, re: &Regex, group: usize) -> Result<HashMap<String, Vec<usize>>> {
     let text = crate::budget::read_to_string(path)?;
     let mut out: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut captured = 0;
     for (i, line) in text.lines().enumerate() {
         for cap in re.captures_iter(line) {
             if let Some(m) = cap.get(group) {
+                captured += 1;
+                if captured > crate::budget::ENTRIES {
+                    anyhow::bail!("Correlation exceeds capture budget; narrow the pattern");
+                }
                 out.entry(m.as_str().to_string()).or_default().push(i + 1);
             }
         }
